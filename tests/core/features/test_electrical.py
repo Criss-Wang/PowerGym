@@ -2,7 +2,7 @@ import json
 import numpy as np
 import pytest
 
-from powergrid.core.features import ElectricalBasePh
+from powergrid.features.electrical import ElectricalBasePh
 from powergrid.core.state import PhaseModel, PhaseSpec
 
 

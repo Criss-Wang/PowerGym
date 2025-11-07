@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from powergrid.utils.phase import PhaseModel, PhaseSpec
-from powergrid.core.features import InverterBasedSource
+from powergrid.features.inverter import InverterBasedSource
 
 
 def _val(names, vec, key):
@@ -137,8 +137,10 @@ def test_volt_var_interpolates_and_no_clip():
         s_rated_MVA=3.0,
         p_set_MW=2.2,
         ctrl_mode="volt_var",
-        vv_v1_pu=0.97, vv_v2_pu=1.03,
-        vv_q1_MVAr=+0.5, vv_q2_MVAr=-0.5,
+        vv_v1_pu=0.97,
+        vv_v2_pu=1.03,
+        vv_q1_MVAr=+0.5,
+        vv_q2_MVAr=-0.5,
         expand_phases=False,
     )
     names, vec = inv.names(), inv.vector(V_pu_for_vv=1.02)

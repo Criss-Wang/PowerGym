@@ -68,7 +68,8 @@ class Action:
         # range validation
         if self.range is not None:
             lb, ub = self.range
-            lb = np.asarray(lb, dtype=np.float32); ub = np.asarray(ub, dtype=np.float32)
+            lb = np.asarray(lb, dtype=np.float32)
+            ub = np.asarray(ub, dtype=np.float32)
             if lb.shape != ub.shape:
                 raise ValueError("range must be a tuple of (lb, ub) with identical shapes.")
             if lb.ndim != 1 or (self.dim_c and lb.shape[0] != self.dim_c):
@@ -130,6 +131,7 @@ class Action:
                 lb, ub = self.range
                 self.c = rng.uniform(lb, ub).astype(np.float32)
             else:
+                self.range = np.array([[-np.inf, np.inf]]*self.dim_c, dtype=np.float32)
                 self.c = rng.standard_normal(self.dim_c).astype(np.float32)
 
         # multi-discrete

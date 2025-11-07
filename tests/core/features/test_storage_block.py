@@ -2,7 +2,7 @@ import json
 import numpy as np
 import pytest
 
-from powergrid.core.features import StorageBlock
+from powergrid.features.storage import StorageBlock
 from powergrid.core.state import PhaseModel, PhaseSpec
 
 

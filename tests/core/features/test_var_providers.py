@@ -1,7 +1,7 @@
 import pytest, json
 import numpy as np
 
-from powergrid.core.features import ShuntCapacitorBlock
+from powergrid.features.var import ShuntCapacitorBlock
 from powergrid.utils.phase import PhaseModel, PhaseSpec
 
 

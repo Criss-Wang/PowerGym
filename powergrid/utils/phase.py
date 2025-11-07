@@ -17,7 +17,7 @@ class PhaseModel(Enum):
 
 @dataclass(slots=True)
 class PhaseSpec:
-    phases: str = "ABC"  # e.g. "A", "AB", "ABC" (order matters in names/arrays)
+    phases: str = ""  # e.g. "A", "AB", "ABC" (order matters in names/arrays)
     has_neutral: bool = True
     earth_bond: bool = True
 
