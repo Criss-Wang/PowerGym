@@ -100,7 +100,7 @@ class Action:
         ncats: Union[int, Sequence[int]] = 0,
         range: Optional[Tuple[Array, Array]] = None,
         masks: Optional[Sequence[Array]] = None,
-    ) -> "Action":
+    ) -> None:
         self.dim_c, self.dim_d = int(dim_c), int(dim_d)
         self.ncats = ncats
         self.c = np.zeros(self.dim_c, dtype=np.float32)
@@ -113,7 +113,6 @@ class Action:
         )
         self.masks = None if masks is None else [np.asarray(m, dtype=bool) for m in masks]
         self._validate_and_prepare()
-        return self
 
     def sample(self, rng: object | None = None) -> None:
         """Sample random action (continuous in physical units, discrete honoring masks)."""

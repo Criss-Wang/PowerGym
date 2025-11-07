@@ -6,6 +6,7 @@ new Agent abstraction, enabling devices to participate in multi-agent control.
 
 from typing import Any, Dict, Optional
 
+from dataclasses import dataclass
 import gymnasium as gym
 import numpy as np
 from gymnasium.spaces import Box, Discrete, MultiDiscrete
@@ -15,6 +16,19 @@ from powergrid.core.action import Action
 from powergrid.core.policies import Policy
 from powergrid.core.protocols import NoProtocol, Protocol
 from powergrid.core.state import DeviceState
+
+
+DEVICE_LEVEL = 1  # Level identifier for device-level agents
+
+@dataclass
+class DeviceConfig:
+    """Configuration for DeviceAgent initialization."""
+    name: str
+    device_state_config: Dict[str, Any]
+    discrete_action: bool
+    discrete_action_cats: int  # Number of categories for discrete action if applicable
+
+    
 
 
 class DeviceAgent(Agent):
@@ -52,19 +66,22 @@ class DeviceAgent(Agent):
         self.cost: float = 0.0
         self.safety: float = 0.0
         self.adversarial: bool = False
-        self.config: Dict[str, Any] = device_config
         self.policy: Optional[Policy] = policy
         self.protocol: Protocol = protocol
 
+        self.config = DeviceConfig(
+            name=device_config.get("name", "device_agent"),
+            device_state_config=device_config.get("device_state_config", {}),
+            discrete_action=device_config.get("discrete_action", False),
+            discrete_action_cats=device_config.get("discrete_action_cats", 2),
+        )
+        
         self.set_action_space()
-        self.set_device_state(device_config['device_state_config'])
-
-        assert agent_id or "name" in device_config, "DeviceAgent requires agent_id or device_config['name']"
-        agent_id = agent_id or device_config["name"]
+        self.set_device_state()
 
         super().__init__(
-            agent_id=agent_id,
-            level=1,  # Device level
+            agent_id=agent_id or self.config.name,
+            level=DEVICE_LEVEL,  # Device level
             action_space=self._get_action_space(),
             observation_space=self._get_observation_space(),
         )
@@ -77,7 +94,7 @@ class DeviceAgent(Agent):
         """
         pass
 
-    def set_device_state(self, config: Dict[str, Any]) -> None:
+    def set_device_state(self) -> None:
         """Initialize device-specific state attributes.
 
         This method can be overridden by subclasses to initialize device-specific state.
@@ -101,8 +118,8 @@ class DeviceAgent(Agent):
             if action.range is None:
                 raise ValueError("Device action.range must be set for continuous actions.")
             low, high = action.range
-            if self.config.get('discrete_action'):
-                cats = self.config.get('discrete_action_cats')
+            if self.config.discrete_action:
+                cats = self.config.discrete_action_cats
                 if low.size == 1:
                     return Discrete(cats)
                 else:
@@ -200,8 +217,8 @@ class DeviceAgent(Agent):
         # TODO: verify action format matches policy forward output
         assert action.size == self.action.dim_c + self.action.dim_d
         self.action.c[:] = action[:self.action.c.size]
-        if self.config.get('discrete_action'):
-            cats = self.config.get('discrete_action_cats')
+        if self.config.discrete_action:
+            cats = self.config.discrete_action_cats
             low, high = self.action.range
             acts = np.linspace(low, high, cats).transpose()
             self.action.c[:] = [a[action[i]] for i, a in enumerate(acts)]
@@ -258,4 +275,4 @@ class DeviceAgent(Agent):
         Returns:
             String representation
         """
-        raise NotImplementedError
+        return f"DeviceAgent(id={self.agent_id}, policy={self.policy}, protocol={self.protocol})"
