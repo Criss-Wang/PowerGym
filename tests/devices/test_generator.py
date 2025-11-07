@@ -1,444 +1,201 @@
-"""Tests for devices.generator module (DG and RES)."""
-
+import math
 import numpy as np
 import pytest
 
-from powergrid.devices.generator import DG, RES
-from powergrid.core.policies import Policy
-from powergrid.agents.base import Observation
-
-
-class MockPolicy(Policy):
-    """Mock policy for testing."""
-
-    def __init__(self, action_value=0.5):
-        self.action_value = action_value
-
-    def forward(self, observation):
-        """Return fixed action."""
-        if isinstance(self.action_value, (list, np.ndarray)):
-            return np.array(self.action_value, dtype=np.float32)
-        return np.array([self.action_value], dtype=np.float32)
-
-
-class TestDG:
-    """Test DG (Distributed Generator) device."""
-
-    def test_dg_initialization(self):
-        """Test DG initialization."""
-        dg = DG(
-            name="DG1",
-            bus="bus1",
-            min_p_mw=0.0,
-            max_p_mw=2.0,
-            policy=MockPolicy()
-        )
-
-        assert dg.name == "DG1"
-        assert dg.bus == "bus1"
-        assert dg.min_p_mw == 0.0
-        assert dg.max_p_mw == 2.0
-        assert dg.type == "fossil"
-
-    def test_dg_with_custom_type(self):
-        """Test DG with custom generator type."""
-        dg = DG(
-            name="DG1",
-            bus="bus1",
-            min_p_mw=0.0,
-            max_p_mw=2.0,
-            type="hydro",
-            policy=MockPolicy()
-        )
-
-        assert dg.type == "hydro"
-
-    def test_dg_with_q_control(self):
-        """Test DG with reactive power control."""
-        dg = DG(
-            name="DG1",
-            bus="bus1",
-            min_p_mw=0.0,
-            max_p_mw=2.0,
-            sn_mva=3.0,
-            policy=MockPolicy()
-        )
-
-        # Should compute Q limits from sn_mva
-        assert not np.isnan(dg.min_q_mvar)
-        assert not np.isnan(dg.max_q_mvar)
-        assert dg.action.dim_c == 2  # P and Q
-
-    def test_dg_with_unit_commitment(self):
-        """Test DG with unit commitment enabled."""
-        dg = DG(
-            name="DG1",
-            bus="bus1",
-            min_p_mw=0.0,
-            max_p_mw=2.0,
-            startup_time=2,
-            shutdown_time=1,
-            startup_cost=100.0,
-            shutdown_cost=50.0,
-            policy=MockPolicy()
-        )
-
-        assert dg.startup_time == 2
-        assert dg.shutdown_time == 1
-        assert dg.startup_cost == 100.0
-        assert dg.shutdown_cost == 50.0
-        assert hasattr(dg.state, "shutting")
-        assert hasattr(dg.state, "starting")
-
-    def test_dg_action_space_p_only(self):
-        """Test action space with P control only."""
-        dg = DG(
-            name="DG1",
-            bus="bus1",
-            min_p_mw=0.0,
-            max_p_mw=2.0,
-            policy=MockPolicy()
-        )
-
-        assert dg.action.dim_c == 1
-        assert dg.action.dim_d == 0  # No UC
-
-    def test_dg_action_space_with_uc(self):
-        """Test action space with unit commitment."""
-        dg = DG(
-            name="DG1",
-            bus="bus1",
-            min_p_mw=0.0,
-            max_p_mw=2.0,
-            startup_time=2,
-            policy=MockPolicy()
-        )
-
-        assert dg.action.dim_c == 1  # P
-        assert dg.action.dim_d == 1  # UC
-        assert dg.action.ncats == 2  # On/off
-
-    def test_dg_update_state_simple(self):
-        """Test simple state update without UC."""
-        dg = DG(
-            name="DG1",
-            bus="bus1",
-            min_p_mw=0.0,
-            max_p_mw=2.0,
-            policy=MockPolicy()
-        )
-
-        dg.action.c = np.array([1.5], dtype=np.float32)
-        dg.update_state()
-
-        assert dg.state.P == 1.5
-
-    def test_dg_update_state_with_pq(self):
-        """Test state update with P and Q."""
-        dg = DG(
-            name="DG1",
-            bus="bus1",
-            min_p_mw=0.0,
-            max_p_mw=2.0,
-            sn_mva=3.0,
-            policy=MockPolicy([1.5, 0.5])
-        )
-
-        dg.action.c = np.array([1.5, 0.5], dtype=np.float32)
-        dg.update_state()
-
-        assert dg.state.P == 1.5
-        assert dg.state.Q == 0.5
-
-    def test_dg_uc_startup(self):
-        """Test unit commitment startup sequence."""
-        dg = DG(
-            name="DG1",
-            bus="bus1",
-            min_p_mw=0.0,
-            max_p_mw=2.0,
-            startup_time=2,
-            startup_cost=100.0,
-            policy=MockPolicy()
-        )
-
-        # Initialize off
-        dg.reset_device()
-        dg.state.on = 0
-        dg.state.starting = 0
-
-        # Command to start
-        dg.action.d = np.array([1], dtype=np.int32)  # Start command
-
-        # First update - starting
-        dg.update_state()
-        assert dg.state.on == 0
-        assert dg.state.starting == 1
-
-        # Second update - still starting
-        dg.update_state()
-        assert dg.state.on == 0
-        assert dg.state.starting == 2
-
-        # Third update - should be on
-        dg.update_state()
-        assert dg.state.on == 1
-        assert dg.state.starting == 0
-        assert dg.uc_cost == 100.0
-
-    def test_dg_uc_shutdown(self):
-        """Test unit commitment shutdown sequence."""
-        dg = DG(
-            name="DG1",
-            bus="bus1",
-            min_p_mw=0.0,
-            max_p_mw=2.0,
-            startup_time=2,
-            shutdown_time=1,
-            shutdown_cost=50.0,
-            policy=MockPolicy()
-        )
-
-        # Initialize on
-        dg.reset_device()
-        assert dg.state.on == 1
-
-        # Command to shutdown
-        dg.action.d = np.array([0], dtype=np.int32)
-
-        # First update - shutting
-        dg.update_state()
-        assert dg.state.on == 1
-        assert dg.state.shutting == 1
-
-        # Second update - should be off
-        dg.update_state()
-        assert dg.state.on == 0
-        assert dg.state.shutting == 0
-        assert dg.uc_cost == 50.0
-
-    def test_dg_update_cost_safety(self):
-        """Test cost and safety calculations."""
-        dg = DG(
-            name="DG1",
-            bus="bus1",
-            min_p_mw=0.0,
-            max_p_mw=2.0,
-            cost_curve_coefs=(1.0, 2.0, 3.0),
-            dt=1.0,
-            policy=MockPolicy()
-        )
-
-        dg.state.P = 1.0
-        dg.state.on = 1
-        dg.update_cost_safety()
-
-        # Cost should be positive
-        assert dg.cost > 0
-        assert dg.safety >= 0
-
-    def test_dg_reset(self):
-        """Test DG reset."""
-        dg = DG(
-            name="DG1",
-            bus="bus1",
-            min_p_mw=0.0,
-            max_p_mw=2.0,
-            startup_time=2,
-            policy=MockPolicy()
-        )
-
-        # Modify state
-        dg.state.P = 1.5
-        dg.state.on = 0
-        dg.cost = 100.0
-
-        # Reset
-        dg.reset_device()
-
-        assert dg.state.P == 0.0
-        assert dg.state.on == 1  # Should reset to on
-        assert dg.state.shutting == 0
-        assert dg.state.starting == 0
-        assert dg.cost == 0.0
-
-
-class TestRES:
-    """Test RES (Renewable Energy Source) device."""
-
-    def test_res_initialization_solar(self):
-        """Test RES initialization for solar."""
-        res = RES(
-            name="Solar1",
-            bus="bus1",
-            sn_mva=2.0,
-            source="solar",
-            policy=MockPolicy()
-        )
-
-        assert res.name == "Solar1"
-        assert res.bus == "bus1"
-        assert res.type == "solar"
-        assert res.sn_mva == 2.0
-        assert res.max_p_mw == 2.0
-
-    def test_res_initialization_wind(self):
-        """Test RES initialization for wind."""
-        res = RES(
-            name="Wind1",
-            bus="bus1",
-            sn_mva=3.0,
-            source="wind",
-            policy=MockPolicy()
-        )
-
-        assert res.type == "wind"
-
-    def test_res_invalid_source(self):
-        """Test RES rejects invalid source type."""
-        with pytest.raises(AssertionError):
-            RES(
-                name="Invalid",
-                bus="bus1",
-                sn_mva=2.0,
-                source="nuclear",
-                policy=MockPolicy()
-            )
-
-    def test_res_with_q_control(self):
-        """Test RES with reactive power control."""
-        res = RES(
-            name="Solar1",
-            bus="bus1",
-            sn_mva=2.0,
-            source="solar",
-            max_q_mvar=1.0,
-            min_q_mvar=-1.0,
-            policy=MockPolicy()
-        )
-
-        assert res.max_q_mvar == 1.0
-        assert res.min_q_mvar == -1.0
-        assert res.action.dim_c == 1  # Q only
-
-    def test_res_update_state_with_scaling(self):
-        """Test RES state update with scaling factor."""
-        res = RES(
-            name="Solar1",
-            bus="bus1",
-            sn_mva=2.0,
-            source="solar",
-            policy=MockPolicy()
-        )
-
-        # 70% solar irradiance
-        res.update_state(scaling=0.7)
-
-        assert res.state.P == 1.4  # 70% of 2.0 MW
-
-    def test_res_update_state_with_q(self):
-        """Test RES state update with Q control."""
-        res = RES(
-            name="Solar1",
-            bus="bus1",
-            sn_mva=2.0,
-            source="solar",
-            max_q_mvar=1.0,
-            min_q_mvar=-1.0,
-            policy=MockPolicy(0.3)
-        )
-
-        res.action.c = np.array([0.3], dtype=np.float32)
-        res.update_state(scaling=0.8)
-
-        assert res.state.P == 1.6  # 80% of 2.0 MW
-        np.testing.assert_almost_equal(res.state.Q, 0.3, decimal=5)
-
-    def test_res_update_cost_safety(self):
-        """Test RES safety calculation."""
-        res = RES(
-            name="Solar1",
-            bus="bus1",
-            sn_mva=2.0,
-            source="solar",
-            max_q_mvar=1.0,
-            min_q_mvar=-1.0,
-            dt=1.0,
-            policy=MockPolicy()
-        )
-
-        # Set state within limits
-        res.state.P = 1.5
-        res.state.Q = 0.5
-        res.action.c = np.array([0.5], dtype=np.float32)
-        res.update_cost_safety()
-
-        # No safety violation
-        assert res.safety >= 0
-
-    def test_res_update_cost_safety_exceeding_rating(self):
-        """Test RES safety penalty when exceeding rating."""
-        res = RES(
-            name="Solar1",
-            bus="bus1",
-            sn_mva=2.0,
-            source="solar",
-            max_q_mvar=2.0,
-            min_q_mvar=-2.0,
-            dt=1.0,
-            policy=MockPolicy()
-        )
-
-        # Set state exceeding sn_mva rating
-        res.state.P = 1.8
-        res.state.Q = 1.8  # S = sqrt(1.8^2 + 1.8^2) = 2.55 > 2.0
-        res.action.c = np.array([1.8], dtype=np.float32)
-        res.update_cost_safety()
-
-        # Should have safety penalty
-        assert res.safety > 0
-
-    def test_res_reset(self):
-        """Test RES reset."""
-        res = RES(
-            name="Solar1",
-            bus="bus1",
-            sn_mva=2.0,
-            source="solar",
-            max_q_mvar=1.0,
-            min_q_mvar=-1.0,
-            policy=MockPolicy()
-        )
-
-        # Modify state
-        res.state.P = 1.5
-        res.state.Q = 0.5
-        res.cost = 100.0
-
-        # Reset
-        res.reset_device()
-
-        assert res.state.P == 0.0
-        assert res.state.Q == 0.0
-        assert res.cost == 0.0
-        assert res.safety == 0.0
-
-    def test_res_without_q_control(self):
-        """Test RES without Q control (action_callback mode)."""
-        res = RES(
-            name="Solar1",
-            bus="bus1",
-            sn_mva=2.0,
-            source="solar",
-            policy=MockPolicy()
-        )
-
-        # Should be in action_callback mode with dummy discrete action
-        assert res.action_callback
-        assert res.action.dim_c == 0
-        assert res.action.dim_d == 1
-        assert res.action.ncats == 1
+from powergrid.devices.generator import Generator
+from powergrid.core.state import PhaseModel
+
+
+def make_config(
+    *,
+    with_q=True,
+    with_uc=True,
+    s_mva=10.0,
+    pmin=1.0,
+    pmax=8.0,
+    qmin=-3.0,
+    qmax=3.0,
+    pfmin=0.8,
+    dt_h=1.0,
+):
+    cfg = {
+        "name": "G1",
+        "device_state_config": {
+            "phase_model": PhaseModel.BALANCED_1PH.value,
+            "s_rated_MVA": s_mva,
+            "derate_frac": 1.0,
+            "p_min_MW": pmin,
+            "p_max_MW": pmax,
+            "cost_curve_coefs": (0.01, 1.0, 0.0),
+            "dt_h": dt_h,
+            "min_pf": pfmin,
+        },
+    }
+    if with_q:
+        cfg["device_state_config"]["q_min_MVAr"] = qmin
+        cfg["device_state_config"]["q_max_MVAr"] = qmax
+        cfg["device_state_config"]["pf_min_abs"] = pfmin
+    if with_uc:
+        cfg["device_state_config"]["startup_time"] = 2
+        cfg["device_state_config"]["shutdown_time"] = 2
+        cfg["device_state_config"]["startup_cost"] = 5.0
+        cfg["device_state_config"]["shutdown_cost"] = 1.0
+    return cfg
+
+
+def test_features_and_observation_vector_parity():
+    dg = Generator(agent_id="G1", device_config=make_config())
+    # Feature types present
+    kinds = {type(f).__name__ for f in dg.state.features}
+    assert "ElectricalBasePh" in kinds
+    assert "StatusBlock" in kinds
+    assert "GeneratorLimits" in kinds
+
+    # Observation space shape == state.vector().shape
+    vec = dg.state.vector()
+    names = dg.state.names()
+    obs = dg.observe()
+    assert vec.dtype == np.float32
+    assert obs.local["state"].shape == vec.shape
+
+
+def test_action_space_continuous_only_and_mixed_uc():
+    # P + Q + UC; DeviceAgent action space is built from continuous part (Box)
+    dg = Generator(
+        agent_id="G1", 
+        device_config=make_config(with_q=True, with_uc=True)
+    )
+    assert dg.action.dim_c == 2 # Control bothe P and Q
+    assert dg.action.dim_d == 1 # Control when to startup or shutdown 
+    low, high = dg.action.range
+    assert low.shape == (2,) and high.shape == (2,)
+    # UC head exists with 2 categories
+    assert dg.action.ncats == 2
+
+
+def test_projection_applies_limits():
+    dg = Generator(
+        agent_id="G1", 
+        device_config=make_config(with_q=True, with_uc=False)
+    )
+    # ask for an over-limit action: P>pmax and Q>qmax → must be projected
+    a = np.array([9.0, 4.0], dtype=np.float32)  # [P, Q] over the limits
+    # base API expects one flat vector with dim_c + dim_d
+    dg._set_device_action(a)
+    dg.update_state()
+    e = dg._electrical()
+    lim = dg._limits()
+
+    # within static bounds
+    assert lim.p_min_MW <= e.P_MW <= lim.p_max_MW
+    assert lim.q_min_MVAr <= e.Q_MVAr <= lim.q_max_MVAr
+    # within S circle if S is set
+    if lim.s_rated_MVA is not None:
+        assert math.hypot(e.P_MW, e.Q_MVAr) <= lim.s_rated_MVA + 1e-6
+    # within PF wedge if pf_min_abs set
+    if lim.pf_min_abs is not None and abs(e.P_MW) > 1e-8:
+        tanphi = math.sqrt(1.0 / (lim.pf_min_abs**2) - 1.0)
+        assert abs(e.Q_MVAr) <= abs(e.P_MW) * tanphi + 1e-6
+
+
+def test_uc_shutdown_then_startup_costs_and_states():
+    dg = Generator(
+        agent_id="G1", 
+        device_config=make_config(with_q=True, with_uc=True)
+    )
+    dg.reset_device()
+    # dg._status().state == "online"
+
+    # Request OFF: d=0; include continuous c to satisfy _set_device_action
+    a = np.array([5.0, 0.0, 0], dtype=np.float32)  # [P,Q,d], d for UC control
+    dg._set_device_action(a)
+    dg.update_state()
+    # first step: entering "shutdown"
+    assert dg._status().state == "shutdown"
+
+    # advance one more step to complete shutdown (t_stop=1)
+    dg._set_device_action(a)
+    dg.update_state()
+    dg.update_cost_safety()
+    assert dg._status().state == "offline"
+    # shutdown cost applied on completion
+    assert dg.cost >= dg._shutdown_cost * dg._dt_h
+
+    # Now request ON: d=1, two steps to start (t_start=2)
+    a_on = np.array([5.0, 0.0, 1], dtype=np.float32)
+    dg._set_device_action(a_on)
+    dg.update_state()
+    assert dg._status().state == "startup"
+
+    dg._set_device_action(a_on)
+    dg.update_state()
+    dg.update_cost_safety()
+    assert dg._status().state == "online"
+    # startup cost applied on completion
+    assert dg.cost >= dg._startup_cost * dg._dt_h
+
+
+def test_uc_timers_startup_shutdown():
+    dg = Generator(
+        agent_id="G1", 
+        device_config=make_config(with_q=True, with_uc=True)
+    )
+    dg.reset_device()
+
+    # Request OFF (d=0) → enter shutdown → next step complete → offline
+    dg._set_device_action(np.array([5.0, 0.0, 0], np.float32))
+    dg.update_state()
+    assert dg._status().state == "shutdown"
+
+    dg._set_device_action(np.array([5.0, 0.0, 0], np.float32))
+    dg.update_state()
+    dg.update_cost_safety()
+    assert dg._status().state == "offline"
+    assert dg.cost >= dg._shutdown_cost * dg._dt_h
+
+    # Request ON (d=1) → startup spans 2 steps → online and startup_cost
+    dg._set_device_action(np.array([5.0, 0.0, 1], np.float32))
+    dg.update_state()
+    assert dg._status().state == "startup"
+
+    dg._set_device_action(np.array([5.0, 0.0, 1], np.float32))
+    dg.update_state()
+    dg.update_cost_safety()
+    assert dg._status().state == "online"
+    assert dg.cost >= dg._startup_cost * dg._dt_h
+
+def test_cost_and_safety_accounting():
+    dg = Generator(
+        agent_id="G1", 
+        device_config=make_config(with_q=True, with_uc=False)
+    )
+    # Set a feasible but nonzero (P,Q)
+    a = np.array([6.0, 2.0], dtype=np.float32)
+    dg._set_device_action(a)
+    dg.update_state()
+    dg.update_cost_safety()
+    # Cost should be positive when online and P>0
+    assert dg.cost > 0.0
+    # Safety non-negative; positive if S and PF penalties kick in
+    assert dg.safety >= 0.0
+
+
+def test_feasible_action_preclips_action_vector():
+    dg = Generator(
+        agent_id="G1", 
+        device_config=make_config(with_q=True, with_uc=False)
+    )
+    # Action far outside bounds
+    dg.action.c[:] = np.array([999.0, 999.0], dtype=np.float32)
+    dg.feasible_action()
+    P, Q = dg.action.c.tolist()
+    lim = dg._limits()
+    assert lim.p_min_MW <= P <= lim.p_max_MW
+    assert lim.q_min_MVAr <= Q <= lim.q_max_MVAr
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    import sys
+    print(f"Running {__file__} as standalone test module...\n")
+    # You can pass pytest args like -q, -v, etc.
+    raise SystemExit(pytest.main([__file__] + sys.argv[1:]))

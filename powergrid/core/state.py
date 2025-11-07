@@ -3,7 +3,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple, Type
 
 import numpy as np
 
-from powergrid.devices.features.base import FeatureProvider
+from powergrid.features.base import FeatureProvider
 from powergrid.utils.phase import PhaseModel, PhaseSpec
 from powergrid.utils.registry import provider
 from powergrid.utils.typing import Array

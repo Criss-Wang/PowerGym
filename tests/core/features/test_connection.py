@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from powergrid.utils.phase import PhaseModel, PhaseSpec
-from powergrid.core.features import PhaseConnection
+from powergrid.features.connection import PhaseConnection
 
 
 def _assert_vec_names_consistent(x: PhaseConnection):
@@ -41,7 +41,7 @@ def test_three_phase_none_connection_ok():
         connection=None,
     )
     assert pc.names() == []
-    assert np.allclose(pc.vector(), [0.0, 0.0, 0.0])
+    assert np.allclose(pc.vector(), [])
 
 def test_roundtrip_three_phase():
     pc0 = PhaseConnection(
