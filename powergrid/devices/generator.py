@@ -88,35 +88,35 @@ class Generator(DeviceAgent):
         protocol: Protocol = NoProtocol(),
         device_config: Dict[str, Any],
     ):
+
+        config = device_config.get("device_state_config", {})
+        self._generator_config = GeneratorConfig(
+            bus=config.get("bus", ""),
+            s_rated_MVA=float_if_not_none(config.get("s_rated_MVA", None)),
+            p_min_MW=float_if_not_none(config.get("p_min_MW", 0.0)),
+            p_max_MW=float_if_not_none(config.get("p_max_MW", 0.0)),
+            q_min_MVAr=float_if_not_none(config.get("q_min_MVAr", None)),
+            q_max_MVAr=float_if_not_none(config.get("q_max_MVAr", None)),
+            pf_min_abs=float_if_not_none(config.get("pf_min_abs", None)),
+            derate_frac=float_if_not_none(config.get("derate_frac", 1.0)),
+
+            # economics & UC params
+            cost_curve_coefs=config.get("cost_curve_coefs", (0.0, 0.0, 0.0)),
+            dt_h=float_if_not_none(config.get("dt_h", 1.0)),
+            startup_time=float_if_not_none(config.get("startup_time", None)),
+            shutdown_time=float_if_not_none(config.get("shutdown_time", None)),
+            startup_cost=float_if_not_none(config.get("startup_cost", 0.0)),
+            shutdown_cost=float_if_not_none(config.get("shutdown_cost", 0.0)),
+            min_pf=float_if_not_none(config.get("min_pf", None)),
+
+            phase_model=config.get("phase_model", "balanced_1ph"),
+            phase_spec=config.get("phase_spec", None),
+        )
         super().__init__(
             agent_id=agent_id,
             policy=policy,
             protocol=protocol,
             device_config=device_config,
-        )
-
-        generator_config = self.config.device_state_config
-        self._generator_config = GeneratorConfig(
-            bus=generator_config.get("bus", ""),
-            s_rated_MVA=float_if_not_none(generator_config.get("s_rated_MVA", None)),
-            p_min_MW=float_if_not_none(generator_config.get("p_min_MW", 0.0)),
-            p_max_MW=float_if_not_none(generator_config.get("p_max_MW", 0.0)),
-            q_min_MVAr=float_if_not_none(generator_config.get("q_min_MVAr", None)),
-            q_max_MVAr=float_if_not_none(generator_config.get("q_max_MVAr", None)),
-            pf_min_abs=float_if_not_none(generator_config.get("pf_min_abs", None)),
-            derate_frac=float_if_not_none(generator_config.get("derate_frac", 1.0)),
-
-            # economics & UC params
-            cost_curve_coefs=generator_config.get("cost_curve_coefs", (0.0, 0.0, 0.0)),
-            dt_h=float_if_not_none(generator_config.get("dt_h", 1.0)),
-            startup_time=float_if_not_none(generator_config.get("startup_time", None)),
-            shutdown_time=float_if_not_none(generator_config.get("shutdown_time", None)),
-            startup_cost=float_if_not_none(generator_config.get("startup_cost", 0.0)),
-            shutdown_cost=float_if_not_none(generator_config.get("shutdown_cost", 0.0)),
-            min_pf=float_if_not_none(generator_config.get("min_pf", None)),
-
-            phase_model=generator_config.get("phase_model", None),
-            phase_spec=generator_config.get("phase_spec", None),
         )
 
     def set_action_space(self) -> None:

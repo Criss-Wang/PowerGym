@@ -2,17 +2,17 @@
 MultiAgentMicrogrids: Concrete environment for 3 networked microgrids.
 
 This is a modernized version of the legacy MultiAgentMicrogrids that uses
-PowerGridAgent instead of GridEnv while maintaining identical logic.
+PowerGridAgentV2 instead of GridEnv while maintaining identical logic.
 """
 
 from typing import List
 
 import pandapower as pp
 
-from powergrid.agents.grid_agent import PowerGridAgent
+from powergrid.agents.grid_agent import PowerGridAgentV2
 from powergrid.data.data_loader import load_dataset
 from powergrid.devices.generator import Generator
-# from powergrid.devices.storage import ESS
+from powergrid.devices.storage import ESS
 from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
 from powergrid.networks.ieee13 import IEEE13Bus
 from powergrid.networks.ieee34 import IEEE34Bus
@@ -30,7 +30,7 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
     - 1 PV (Solar)
     - 1 WT (Wind Turbine)
 
-    This implementation uses PowerGridAgent to manage devices instead of
+    This implementation uses PowerGridAgentV2 to manage devices instead of
     the legacy GridEnv, but maintains identical environment logic.
     """
 
@@ -77,7 +77,7 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
         load_area = dso_config.get('load_area', 'BANC')
         renew_area = dso_config.get('renew_area', 'NP15')
 
-        self.dso = PowerGridAgent(
+        self.dso = PowerGridAgentV2(
             net=net,
             grid_config=dso_config,
             devices=[],  # No actionable devices in DSO
@@ -89,7 +89,7 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
 
         return net
 
-    def _build_mg_agent(self, mg_config) -> PowerGridAgent:
+    def _build_mg_agent(self, mg_config) -> PowerGridAgentV2:
         """Build microgrid agent from config."""
         mg_net = IEEE13Bus(mg_config['name'])
         storage = []
@@ -109,9 +109,10 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
             #     sgen.append(RES(**device_kwargs))
             else:
                 raise ValueError(f"Unknown device type: {device_type}")
-        mg_agent = PowerGridAgent(
+        mg_agent = PowerGridAgentV2(
             net=mg_net,
             grid_config=mg_config,
+            devices=storage + sgen,
             centralized=mg_config.get('centralized', True)
         )
         load_area = mg_config.get('load_area', 'AVA')
@@ -128,7 +129,7 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
         net = self._build_dso_net()
 
         # Create microgrids (actionable)
-        mg_agents: List[PowerGridAgent] = []
+        mg_agents: List[PowerGridAgentV2] = []
         for mg_config in self.env_config['mg_configs']:
             mg_agent = self._build_mg_agent(mg_config)
             net = mg_agent.fuse_buses(net, mg_config['connection_bus'])

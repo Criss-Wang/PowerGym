@@ -1,197 +1,333 @@
-from typing import Any, Dict, Optional
-
 import numpy as np
+
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
 from powergrid.agents.device_agent import DeviceAgent
 from powergrid.core.policies import Policy
-from powergrid.core.protocols import NoProtocol, Protocol
-from powergrid.devices.features.electrical import ElectricalBasePh
-from powergrid.devices.features.storage import StorageBlock
+from powergrid.core.protocols import Protocol, NoProtocol
+from powergrid.core.state import DeviceState, PhaseModel, PhaseSpec
+from powergrid.features.electrical import ElectricalBasePh
+from powergrid.features.connection import PhaseConnection
+from powergrid.features.storage import StorageBlock
 from powergrid.utils.cost import cost_from_curve
 from powergrid.utils.safety import s_over_rating, soc_bounds_penalty
+from powergrid.utils.typing import float_if_not_none
+
+
+@dataclass
+class StorageConfig:
+    """Configuration for an Energy Storage System."""
+    bus: str
+
+    # power & energy constraints
+    min_p_MW: float = 0.0
+    max_p_MW: float = 0.0
+    capacity_MWh: float = 0.0
+    max_e_MWh: Optional[float] = None
+    min_e_MWh: float = 0.0
+    init_soc: float = 0.5
+
+    # reactive power
+    min_q_MVAr: Optional[float] = None
+    max_q_MVAr: Optional[float] = None
+    s_rated_MVA: Optional[float] = None
+
+    # efficiency
+    ch_eff: float = 0.98
+    dsc_eff: float = 0.98
+
+    # economics & sim
+    cost_curve_coefs: tuple = (0.0, 0.0, 0.0)
+    dt_h: float = 1.0
+
+    # phase context
+    phase_model: str = "balanced_1ph"
+    phase_spec: Optional[Dict[str, Any]] = None
 
 
 class ESS(DeviceAgent):
-    """Energy Storage System with SOC and optional Q support."""
+    """
+    Energy Storage System following DeviceAgent's lifecycle.
+
+    Example device_config:
+    {
+      "device_state_config": {
+        "phase_model": "BALANCED_1PH" | "THREE_PHASE",
+        "phase_spec": None or {
+            "phases": "ABC", "has_neutral": False, "earth_bond": True
+        },
+
+        "bus": "bus_1",
+        "min_p_MW": -10.0,
+        "max_p_MW": 10.0,
+        "capacity_MWh": 20.0,
+        "max_e_MWh": 18.0,
+        "min_e_MWh": 2.0,
+        "init_soc": 0.5,
+
+        "min_q_MVAr": -5.0,
+        "max_q_MVAr": 5.0,
+        "s_rated_MVA": 12.0,
+
+        "ch_eff": 0.98,
+        "dsc_eff": 0.98,
+
+        "cost_curve_coefs": [0.01, 0.5, 0.0],
+        "dt_h": 1.0
+      }
+    }
+    """
 
     def __init__(
         self,
-        name: str,
-        bus: int,
-        min_p_mw: float,
-        max_p_mw: float,
-        capacity: float,
         *,
-        max_e_mwh: Optional[float] = None,
-        min_e_mwh: float = 0.0,
-        init_soc: float = 0.5,
-        min_q_mvar: float = np.nan,
-        max_q_mvar: float = np.nan,
-        sn_mva: float = np.nan,
-        ch_eff: float = 0.98,
-        dsc_eff: float = 0.98,
-        cost_curve_coefs = (0.0, 0.0, 0.0),
-        dt: float = 1.0,
-        # Base class args
+        agent_id: Optional[str] = None,
         policy: Optional[Policy] = None,
         protocol: Protocol = NoProtocol(),
-        device_config: Dict[str, Any] = {},
-    ) -> None:
-        self.type = "ESS"
-        self.name = name
-        self.bus = bus
-        self.capacity = float(capacity)
-        self.min_p_mw = float(min_p_mw)
-        self.max_p_mw = float(max_p_mw)
-        self.max_e_mwh = float(max_e_mwh if max_e_mwh is not None else capacity)
-        self.min_e_mwh = float(min_e_mwh)
-        assert 0.0 <= self.min_e_mwh < self.max_e_mwh <= self.capacity
-        self.min_q_mvar = float(min_q_mvar)
-        self.max_q_mvar = float(max_q_mvar)
-        self.sn_mva = float(sn_mva)
-        self.dt = float(dt)
-        self.ch_eff = float(ch_eff)
-        self.dsc_eff = float(dsc_eff)
-        self.cost_curve_coefs = list(cost_curve_coefs)
-        self.init_soc = float(init_soc)
-        self.min_soc = self.min_e_mwh / self.capacity
-        self.max_soc = self.max_e_mwh / self.capacity
+        device_config: Dict[str, Any],
+    ):
+        config = device_config.get("device_state_config", {})
 
-        if not np.isnan(self.sn_mva):
-            self.min_q_mvar = -float(np.sqrt(self.sn_mva**2 - self.max_p_mw**2))
-            self.max_q_mvar = float(np.sqrt(self.sn_mva**2 - self.max_p_mw**2))
+        # compute max_e_MWh and capacity
+        capacity = float_if_not_none(config.get("capacity_MWh", 0.0))
+        max_e = config.get("max_e_MWh", None)
+        max_e_MWh = float_if_not_none(max_e) if max_e is not None else capacity
+
+        self._storage_config = StorageConfig(
+            bus=config.get("bus", ""),
+            min_p_MW=float_if_not_none(config.get("min_p_MW", 0.0)),
+            max_p_MW=float_if_not_none(config.get("max_p_MW", 0.0)),
+            capacity_MWh=capacity,
+            max_e_MWh=max_e_MWh,
+            min_e_MWh=float_if_not_none(config.get("min_e_MWh", 0.0)),
+            init_soc=float_if_not_none(config.get("init_soc", 0.5)),
+
+            min_q_MVAr=float_if_not_none(config.get("min_q_MVAr", None)),
+            max_q_MVAr=float_if_not_none(config.get("max_q_MVAr", None)),
+            s_rated_MVA=float_if_not_none(config.get("s_rated_MVA", None)),
+
+            ch_eff=float_if_not_none(config.get("ch_eff", 0.98)),
+            dsc_eff=float_if_not_none(config.get("dsc_eff", 0.98)),
+
+            cost_curve_coefs=config.get("cost_curve_coefs", (0.0, 0.0, 0.0)),
+            dt_h=float_if_not_none(config.get("dt_h", 1.0)),
+
+            phase_model=config.get("phase_model", "balanced_1ph"),
+            phase_spec=config.get("phase_spec", None),
+        )
+
+        # compute Q limits from S rating if provided
+        if self._storage_config.s_rated_MVA is not None:
+            P_max = self._storage_config.max_p_MW
+            S = self._storage_config.s_rated_MVA
+            Q_max = float(np.sqrt(max(0.0, S**2 - P_max**2)))
+            self._storage_config.min_q_MVAr = -Q_max
+            self._storage_config.max_q_MVAr = Q_max
 
         super().__init__(
-            agent_id=name,
+            agent_id=agent_id,
             policy=policy,
             protocol=protocol,
             device_config=device_config,
         )
 
-    def set_device_state(self, config: Dict[str, Any]) -> None:
-        # Initialize state with StorageBlock and ElectricalBasePh features
-        storage_block = StorageBlock(
-            soc=self.init_soc,
-            soc_min=self.min_soc,
-            soc_max=self.max_soc,
-            e_capacity_MWh=self.capacity,
-            p_ch_max_MW=self.max_p_mw,
-            p_dis_max_MW=-self.min_p_mw,  # Note: discharge is positive
-            eta_ch=self.ch_eff,
-            eta_dis=self.dsc_eff,
-        )
-        electrical_block = ElectricalBasePh(
-            P_MW=0.0,
-            Q_MVAr=0.0 if not np.isnan(self.max_q_mvar) else None,
-        )
-        self.state.features = [storage_block, electrical_block]
-
     def set_action_space(self) -> None:
-        if not np.isnan(self.sn_mva) or not np.isnan(self.max_q_mvar):
-            low = [self.min_p_mw, self.min_q_mvar]
-            high = [self.max_p_mw, self.max_q_mvar]
-        else:
-            low, high = [self.min_p_mw], [self.max_p_mw]
-        self.action.range = np.array([low, high], dtype=np.float32)
-        self.action.dim_c = len(low)
+        """
+        Define Action:
+          - continuous P (and optionally Q).
+        """
+        lows = [self._storage_config.min_p_MW]
+        highs = [self._storage_config.max_p_MW]
+
+        # if control reactive power
+        if self._storage_config.min_q_MVAr is not None and self._storage_config.max_q_MVAr is not None:
+            lows.append(self._storage_config.min_q_MVAr)
+            highs.append(self._storage_config.max_q_MVAr)
+
+        # Set action specs & sample
+        self.action.set_specs(
+            dim_c=len(lows),
+            dim_d=0,
+            ncats=0,
+            range=(np.asarray(lows, np.float32), np.asarray(highs, np.float32)),
+            masks=None,
+        )
         self.action.sample()
 
-    def update_state(self) -> None:
-        # Get features
-        storage_block = self.storage_block
-        electrical_block = self.electrical_block
+    def set_device_state(self) -> None:
+        # phase model & spec
+        pm = PhaseModel(self._storage_config.phase_model)
+        ps = PhaseSpec(
+            self._storage_config.phase_spec.get("phases", "ABC"),
+            self._storage_config.phase_spec.get("has_neutral", False),
+            self._storage_config.phase_spec.get("earth_bond", True),
+        ) if self._storage_config.phase_spec is not None else None
 
-        # Update P and Q from action
-        if self.action.c.size > 1:
-            P, Q = map(float, self.action.c)
-            electrical_block.P_MW = P
-            electrical_block.Q_MVAr = Q
-        else:
-            P = float(self.action.c[0])
-            electrical_block.P_MW = P
-
-        # SOC dynamics (P>=0 charging; P<0 discharging). SOC is fraction of *capacity*.
-        if P >= 0:
-            storage_block.soc += P * self.ch_eff * self.dt / self.capacity
-        else:
-            storage_block.soc += P / self.dsc_eff * self.dt / self.capacity
-
-    def update_cost_safety(self) -> None:
-        # Get features
-        storage_block = self.storage_block
-        electrical_block = self.electrical_block
-
-        P = float(electrical_block.P_MW or 0.0)
-        cost = cost_from_curve(P, self.cost_curve_coefs)
-        # Note: we don't have 'on' state in new architecture, assume always on
-        self.cost = cost * self.dt
-
-        s = 0.0
-        s += s_over_rating(
-            P,
-            float(electrical_block.Q_MVAr or 0.0),
-            None if np.isnan(self.sn_mva) else self.sn_mva
-        )
-        s += soc_bounds_penalty(storage_block.soc, self.min_soc, self.max_soc)
-        self.safety = s * self.dt
-
-    def feasible_action(self) -> None:
-        # Get storage provider
-        storage_block = self.storage_block
-
-        # compute instantaneous feasible P based on available energy windows
-        max_dsc_power = (storage_block.soc - self.min_soc) * self.capacity * self.dsc_eff / self.dt
-        max_dsc_power = min(max_dsc_power, -self.min_p_mw)  # note: discharging => negative P allowed up to -min_p
-
-        max_ch_power = (self.max_soc - storage_block.soc) * self.capacity / self.ch_eff / self.dt
-        max_ch_power = min(max_ch_power, self.max_p_mw)
-
-        low, high = -max_dsc_power, max_ch_power
-        if self.action.c.size > 1:
-            low = np.array([low, self.min_q_mvar], dtype=np.float32)
-            high = np.array([high, self.max_q_mvar], dtype=np.float32)
-        self.action.c = np.clip(self.action.c, low, high)
-
-    def reset_device(self, *, rnd=None, init_soc: Optional[float] = None) -> None:
-        rnd = np.random if rnd is None else rnd
-
-        # Get features
-        storage_block = self.storage_block
-        electrical_block = self.electrical_block
-
-        # Reset SOC
-        storage_block.soc = float(init_soc) if init_soc is not None else float(
-            rnd.uniform(self.min_soc, self.max_soc)
+        # Electrical telemetry
+        electrical_telemetry = ElectricalBasePh(
+            P_MW=0.0,
+            Q_MVAr=(
+                0.0
+                if self._storage_config.min_q_MVAr is not None and self._storage_config.max_q_MVAr is not None
+                else None
+            ),
         )
 
-        # Reset P and Q
-        electrical_block.P_MW = 0.0
-        if self.action.c.size > 1:
-            electrical_block.Q_MVAr = 0.0
+        # Connection
+        conn = "ON" if pm == PhaseModel.BALANCED_1PH else "ABC"
+        connection = PhaseConnection(
+            phase_model=pm,
+            phase_spec=ps,
+            connection=conn
+        )
 
+        # Storage block
+        min_soc = self._storage_config.min_e_MWh / self._storage_config.capacity_MWh
+        max_soc = self._storage_config.max_e_MWh / self._storage_config.capacity_MWh
+
+        storage_block = StorageBlock(
+            soc=self._storage_config.init_soc,
+            soc_min=min_soc,
+            soc_max=max_soc,
+            e_capacity_MWh=self._storage_config.capacity_MWh,
+            p_ch_max_MW=self._storage_config.max_p_MW,
+            p_dis_max_MW=-self._storage_config.min_p_MW,
+            eta_ch=self._storage_config.ch_eff,
+            eta_dis=self._storage_config.dsc_eff,
+        )
+
+        self.state = DeviceState(
+            phase_model=pm,
+            phase_spec=ps,
+            features=[
+                electrical_telemetry,
+                connection,
+                storage_block,
+            ],
+            prefix_names=False,
+        )
+        self.state._apply_phase_context_to_features_()
+
+    def reset_device(self, *args, **kwargs) -> None:
+        """Reset P/Q and SOC."""
+        rnd = kwargs.get("rnd", np.random)
+        init_soc = kwargs.get("init_soc", None)
+
+        # reset electricals
+        electrical = self.electrical
+        electrical.P_MW = 0.0
+        if self.action.dim_c >= 2:
+            electrical.Q_MVAr = 0.0
+
+        # reset storage SOC
+        storage = self.storage
+        min_soc = self._storage_config.min_e_MWh / self._storage_config.capacity_MWh
+        max_soc = self._storage_config.max_e_MWh / self._storage_config.capacity_MWh
+        storage.soc = float(init_soc) if init_soc is not None else float(
+            rnd.uniform(min_soc, max_soc)
+        )
+
+        # reset cost and safety
         self.cost = 0.0
         self.safety = 0.0
 
-    @property
-    def storage_block(self) -> StorageBlock:
-        """Get the StorageBlock provider from state."""
-        for provider in self.state.features:
-            if isinstance(provider, StorageBlock):
-                return provider
-        raise ValueError("StorageBlock provider not found in state")
+    def update_state(self, *args, **kwargs) -> None:
+        """
+        Apply P/Q from action and update SOC dynamics.
+        P > 0: charging, P < 0: discharging.
+        """
+        electrical = self.electrical
+        storage = self.storage
+
+        # Read action
+        P = float(self.action.c[0]) if self.action.c.size >= 1 else 0.0
+        Q = float(self.action.c[1]) if self.action.c.size >= 2 else 0.0
+
+        # Update electrical
+        electrical.P_MW = P
+        if self.action.dim_c >= 2:
+            electrical.Q_MVAr = Q
+
+        # Update SOC (P >= 0: charging, P < 0: discharging)
+        if P >= 0:
+            storage.soc += P * self._storage_config.ch_eff * self._storage_config.dt_h / self._storage_config.capacity_MWh
+        else:
+            storage.soc += P / self._storage_config.dsc_eff * self._storage_config.dt_h / self._storage_config.capacity_MWh
+
+        # Defensive clamp on all child features
+        self.state.clamp_()
+
+    def update_cost_safety(self, *args, **kwargs) -> None:
+        """Economic cost + S/SOC penalties."""
+        electrical = self.electrical
+        storage = self.storage
+
+        P = float(electrical.P_MW or 0.0)
+        Q = float(electrical.Q_MVAr or 0.0)
+
+        # Cost
+        self.cost = cost_from_curve(P, self._storage_config.cost_curve_coefs) * self._storage_config.dt_h
+
+        # Safety
+        safety = 0.0
+        S = self._storage_config.s_rated_MVA
+        if self.action.dim_c >= 2 and S is not None:
+            safety += s_over_rating(P, Q, S)
+
+        min_soc = self._storage_config.min_e_MWh / self._storage_config.capacity_MWh
+        max_soc = self._storage_config.max_e_MWh / self._storage_config.capacity_MWh
+        safety += soc_bounds_penalty(storage.soc, min_soc, max_soc)
+
+        self.safety = safety * self._storage_config.dt_h
+
+    def feasible_action(self) -> None:
+        """Clip action to feasible set based on current SOC."""
+        storage = self.storage
+
+        min_soc = self._storage_config.min_e_MWh / self._storage_config.capacity_MWh
+        max_soc = self._storage_config.max_e_MWh / self._storage_config.capacity_MWh
+
+        # compute instantaneous feasible P based on available energy windows
+        max_dsc_power = (storage.soc - min_soc) * self._storage_config.capacity_MWh * self._storage_config.dsc_eff / self._storage_config.dt_h
+        max_dsc_power = min(max_dsc_power, -self._storage_config.min_p_MW)
+
+        max_ch_power = (max_soc - storage.soc) * self._storage_config.capacity_MWh / self._storage_config.ch_eff / self._storage_config.dt_h
+        max_ch_power = min(max_ch_power, self._storage_config.max_p_MW)
+
+        low = -max_dsc_power
+        high = max_ch_power
+
+        if self.action.c.size >= 1:
+            self.action.c[0] = np.clip(self.action.c[0], low, high)
+        if self.action.c.size >= 2:
+            self.action.c[1] = np.clip(
+                self.action.c[1],
+                self._storage_config.min_q_MVAr,
+                self._storage_config.max_q_MVAr
+            )
 
     @property
-    def electrical_block(self) -> ElectricalBasePh:
-        """Get the ElectricalBasePh provider from state."""
-        for provider in self.state.features:
-            if isinstance(provider, ElectricalBasePh):
-                return provider
-        raise ValueError("ElectricalBasePh provider not found in state")
+    def electrical(self) -> ElectricalBasePh:
+        for f in self.state.features:
+            if isinstance(f, ElectricalBasePh):
+                return f
+        raise ValueError("ElectricalBasePh feature not found")
+
+    @property
+    def storage(self) -> StorageBlock:
+        for f in self.state.features:
+            if isinstance(f, StorageBlock):
+                return f
+        raise ValueError("StorageBlock feature not found")
+
+    @property
+    def bus(self) -> str:
+        return self._storage_config.bus
 
     def __repr__(self) -> str:
-        """Return string representation of the ESS.
-
-        Returns:
-            String representation
-        """
-        return f"ESS(name={self.name}, bus={self.bus}, capacity={self.capacity}MWh, device_states=[{self.storage_block}, {self.electrical_block}])"
+        name = self.agent_id
+        cap = self._storage_config.capacity_MWh
+        pmin = self._storage_config.min_p_MW
+        pmax = self._storage_config.max_p_MW
+        return f"ESS(name={name}, capacity={cap}MWh, P∈[{pmin},{pmax}]MW)"

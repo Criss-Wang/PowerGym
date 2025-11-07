@@ -19,34 +19,46 @@ class MockPolicy(Policy):
         return np.array([self.action_value])
 
 
+def make_shunt_config(
+    bus="Bus1",
+    q_mvar=1.0,
+    max_step=3,
+    switching_cost=0.0
+):
+    """Helper to create Shunt device config."""
+    return {
+        "device_state_config": {
+            "bus": bus,
+            "q_mvar": q_mvar,
+            "max_step": max_step,
+            "switching_cost": switching_cost,
+        }
+    }
+
+
 class TestShunt:
     """Test Shunt device."""
 
     def test_shunt_initialization(self):
         """Test shunt initialization."""
         shunt = Shunt(
-            name="SCB1",
-            bus=1,
-            q_mvar=1.0,
-            max_step=3,
-            policy=MockPolicy()
+            agent_id="SCB1",
+            policy=MockPolicy(),
+            device_config=make_shunt_config()
         )
 
-        assert shunt.name == "SCB1"
-        assert shunt.bus == 1
-        assert shunt.q_mvar == 1.0
-        assert shunt.max_step == 3
-        assert shunt.type == "SCB"
         assert shunt.agent_id == "SCB1"
+        assert shunt.bus == "Bus1"
+        assert shunt._shunt_config.q_mvar == 1.0
+        assert shunt._shunt_config.max_step == 3
+        assert shunt.type == "SCB"
 
     def test_shunt_action_space(self):
         """Test shunt has discrete action space."""
         shunt = Shunt(
-            name="SCB1",
-            bus=1,
-            q_mvar=1.0,
-            max_step=2,
-            policy=MockPolicy()
+            agent_id="SCB1",
+            policy=MockPolicy(),
+            device_config=make_shunt_config(max_step=2)
         )
 
         assert shunt.action.ncats == 3  # 0, 1, 2
@@ -55,25 +67,22 @@ class TestShunt:
     def test_shunt_state_initialization(self):
         """Test shunt state is initialized correctly."""
         shunt = Shunt(
-            name="SCB1",
-            bus=1,
-            q_mvar=1.0,
-            max_step=2,
-            policy=MockPolicy()
+            agent_id="SCB1",
+            policy=MockPolicy(),
+            device_config=make_shunt_config(max_step=2)
         )
 
-        assert shunt.state.max_step == 2
-        assert shunt.state.step.shape == (3,)  # max_step + 1
-        assert shunt.state.step.dtype == np.float32
+        step_state = shunt._get_step_state()
+        assert step_state.max_step == 2
+        assert step_state.step.shape == (3,)  # max_step + 1
+        assert step_state.step.dtype == np.float32
 
     def test_shunt_update_state(self):
         """Test shunt state update from action."""
         shunt = Shunt(
-            name="SCB1",
-            bus=1,
-            q_mvar=1.0,
-            max_step=2,
-            policy=MockPolicy(action_value=1)
+            agent_id="SCB1",
+            policy=MockPolicy(action_value=1),
+            device_config=make_shunt_config(max_step=2)
         )
 
         # Set action
@@ -83,19 +92,17 @@ class TestShunt:
         shunt.update_state()
 
         # Check one-hot encoding
+        step_state = shunt._get_step_state()
         expected_step = np.array([0, 1, 0], dtype=np.float32)
-        np.testing.assert_array_equal(shunt.state.step, expected_step)
+        np.testing.assert_array_equal(step_state.step, expected_step)
         assert shunt._current_step == 1
 
     def test_shunt_update_cost_safety_no_change(self):
         """Test cost when step doesn't change."""
         shunt = Shunt(
-            name="SCB1",
-            bus=1,
-            q_mvar=1.0,
-            max_step=2,
-            switching_cost=10.0,
-            policy=MockPolicy()
+            agent_id="SCB1",
+            policy=MockPolicy(),
+            device_config=make_shunt_config(max_step=2, switching_cost=10.0)
         )
 
         # Initialize
@@ -111,12 +118,9 @@ class TestShunt:
     def test_shunt_update_cost_safety_with_change(self):
         """Test cost when step changes."""
         shunt = Shunt(
-            name="SCB1",
-            bus=1,
-            q_mvar=1.0,
-            max_step=2,
-            switching_cost=10.0,
-            policy=MockPolicy()
+            agent_id="SCB1",
+            policy=MockPolicy(),
+            device_config=make_shunt_config(max_step=2, switching_cost=10.0)
         )
 
         # Initialize at step 0
@@ -135,11 +139,9 @@ class TestShunt:
     def test_shunt_reset(self):
         """Test shunt reset."""
         shunt = Shunt(
-            name="SCB1",
-            bus=1,
-            q_mvar=1.0,
-            max_step=2,
-            policy=MockPolicy()
+            agent_id="SCB1",
+            policy=MockPolicy(),
+            device_config=make_shunt_config(max_step=2)
         )
 
         # Modify state
@@ -151,8 +153,9 @@ class TestShunt:
         shunt.reset_device()
 
         # Check reset state
+        step_state = shunt._get_step_state()
         expected_step = np.zeros(3, dtype=np.float32)
-        np.testing.assert_array_equal(shunt.state.step, expected_step)
+        np.testing.assert_array_equal(step_state.step, expected_step)
         assert shunt._last_step == 0
         assert shunt.cost == 0.0
         assert shunt.safety == 0.0
@@ -160,29 +163,24 @@ class TestShunt:
     def test_shunt_repr(self):
         """Test shunt string representation."""
         shunt = Shunt(
-            name="SCB1",
-            bus=1,
-            q_mvar=1.0,
-            max_step=2,
-            policy=MockPolicy()
+            agent_id="SCB1",
+            policy=MockPolicy(),
+            device_config=make_shunt_config()
         )
 
         repr_str = repr(shunt)
 
         assert "Shunt" in repr_str
         assert "SCB1" in repr_str
-        assert "1.0" in repr_str
+        assert "Bus1" in repr_str
 
     def test_shunt_full_lifecycle(self):
         """Test full shunt lifecycle."""
         policy = MockPolicy(action_value=1)
         shunt = Shunt(
-            name="SCB1",
-            bus=1,
-            q_mvar=1.0,
-            max_step=2,
-            switching_cost=5.0,
-            policy=policy
+            agent_id="SCB1",
+            policy=policy,
+            device_config=make_shunt_config(max_step=2, switching_cost=5.0)
         )
 
         # Reset
@@ -208,12 +206,9 @@ class TestShunt:
     def test_shunt_multiple_step_changes(self):
         """Test cost tracking across multiple step changes."""
         shunt = Shunt(
-            name="SCB1",
-            bus=1,
-            q_mvar=1.0,
-            max_step=3,
-            switching_cost=10.0,
-            policy=MockPolicy()
+            agent_id="SCB1",
+            policy=MockPolicy(),
+            device_config=make_shunt_config(max_step=3, switching_cost=10.0)
         )
 
         shunt.reset_device()

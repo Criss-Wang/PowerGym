@@ -23,7 +23,7 @@ class NetworkedGridEnv(ParallelEnv):
 
     def __init__(self, env_config):
         super().__init__()
-        self.net: pp.pandapowerNet = pp.pandapowerNet()
+        self.net: pp.pandapowerNet = pp.create_empty_network()
         self.agent_dict: Dict[str, PowerGridAgent] = {}
         self.data_size: int = 0
         self._t: int = 0  # current timestep

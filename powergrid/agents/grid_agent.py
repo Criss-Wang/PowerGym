@@ -133,7 +133,7 @@ class GridAgent(Agent):
             NotImplementedError: If using decentralized mode (not yet implemented)
         """
         # Get coordinator action from policy if available
-        if given_action:
+        if given_action is not None:
             action = given_action
         elif self.centralized:
             assert self.policy is not None, "GridAgent requires a policy to compute actions."
@@ -157,8 +157,8 @@ class GridAgent(Agent):
             observation: Current observation
             action: Computed action from coordinator
         """
-        self.protocol.coordinate_actions(self.devices, observation, action)
-        self.protocol.coordinate_messages(self.devices, observation, action)
+        self.protocol.coordinate_action(self.devices, observation, action)
+        self.protocol.coordinate_message(self.devices, observation, action)
 
     def get_device_actions(
         self,
@@ -442,8 +442,11 @@ class PowerGridAgentV2(GridAgent):
         """
         for name, dg in self.sgen.items():
             local_ids = pp.get_element_index(net, 'sgen', self.name + ' ' + name)
-            p_mw = net.res_sgen.loc[local_ids, 'p_mw'].values[0]
-            q_mvar = net.res_sgen.loc[local_ids, 'q_mvar'].values[0]
+            p_mw_val = net.res_sgen.loc[local_ids, 'p_mw']
+            q_mvar_val = net.res_sgen.loc[local_ids, 'q_mvar']
+            # Handle both scalar and array cases
+            p_mw = p_mw_val if np.isscalar(p_mw_val) else p_mw_val.values[0]
+            q_mvar = q_mvar_val if np.isscalar(q_mvar_val) else q_mvar_val.values[0]
             dg.electrical.P_MW = p_mw
             dg.electrical.Q_MVAr = q_mvar
 
