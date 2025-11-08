@@ -11,8 +11,8 @@ import pandapower as pp
 
 from powergrid.agents.grid_agent import PowerGridAgent
 from powergrid.data.data_loader import load_dataset
-from powergrid.devices.generator import DG, RES
-from powergrid.devices.storage import ESS
+from powergrid.devices.generator import Generator
+# from powergrid.devices.storage import ESS
 from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
 from powergrid.networks.ieee13 import IEEE13Bus
 from powergrid.networks.ieee34 import IEEE34Bus
@@ -95,16 +95,18 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
         storage = []
         sgen = []
         for device_args in mg_config['devices']:
-            # Use .get() instead of .pop() to avoid modifying the config
             device_type = device_args.get('type', None)
-            # Create a copy without 'type' for device initialization
             device_kwargs = {k: v for k, v in device_args.items() if k != 'type'}
-            if device_type == 'ESS':
-                storage.append(ESS(**device_kwargs))
-            elif device_type == 'DG':
-                sgen.append(DG(**device_kwargs))
-            elif device_type == 'RES':
-                sgen.append(RES(**device_kwargs))
+
+            if device_type == 'Generator':
+                sgen.append(Generator(**device_kwargs))
+            # TODO: Re-enable storage devices when needed
+            # if device_type == 'ESS':
+            #     storage.append(ESS(**device_kwargs))
+            # elif device_type == 'Generator':
+            #     sgen.append(Generator(**device_kwargs))
+            # elif device_type == 'RES':
+            #     sgen.append(RES(**device_kwargs))
             else:
                 raise ValueError(f"Unknown device type: {device_type}")
         mg_agent = PowerGridAgent(
@@ -115,7 +117,7 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
         load_area = mg_config.get('load_area', 'AVA')
         renew_area = mg_config.get('renew_area', 'NP15')
         mg_agent.add_sgen(sgen)
-        mg_agent.add_storage(storage)
+        # mg_agent.add_storage(storage)
         mg_agent.add_dataset(self._read_data(load_area, renew_area))
         return mg_agent
 
