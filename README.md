@@ -61,6 +61,8 @@ pip install -e .
 ```
 
 # Quick Start
+
+## Sample Environment setup
 ```bash
 from powergrid.envs.single_agent.ieee13_mg import IEEE13Env
 
@@ -97,3 +99,9 @@ Below are the single-line diagrams of two networks:
 
 ### IEEE 34-Bus System
 <img src="docs/images/ieee34.png" alt="IEEE 34 Bus System" width="700"/>
+
+## Example algorithm running
+Using `Ray` and *MAPPO*
+```bash
+python examples/train_mappo_microgrids.py --iterations 5 --num-workers 2 --checkpoint-freq 5 --no-cuda
+```

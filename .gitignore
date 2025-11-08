@@ -151,3 +151,6 @@ data/.DS_Store
 
 # claude code
 .claude/
+
+# checkpoints
+checkpoints/*
