@@ -122,17 +122,35 @@ def env_creator(env_config):
 
 def get_policy_configs(env, args):
     """Get policy configuration (shared or independent)."""
+    # Get possible agents - access from wrapped env if needed
+    if hasattr(env, 'possible_agents'):
+        possible_agents = env.possible_agents
+    elif hasattr(env, 'env') and hasattr(env.env, 'possible_agents'):
+        possible_agents = env.env.possible_agents
+    else:
+        # Fallback: get agents from observation/action space keys
+        possible_agents = list(env.get_agent_ids())
+
     if args.independent_policies:
         # IPPO: Each agent has its own policy
         policies = {
-            agent_id: (None, env.observation_space(agent_id), env.action_space(agent_id), {})
-            for agent_id in env.possible_agents
+            agent_id: (None, env.observation_space[agent_id], env.action_space[agent_id], {})
+            for agent_id in possible_agents
         }
-        policy_mapping_fn = lambda agent_id, *args_: agent_id
+        policy_mapping_fn = lambda agent_id, *args_, **kwargs: agent_id
     else:
         # MAPPO: All agents share one policy
-        policies = {'shared_policy': (None, None, None, {})}
-        policy_mapping_fn = lambda agent_id, *args_: 'shared_policy'
+        # Use the first agent's spaces since all agents have identical spaces
+        first_agent = possible_agents[0]
+        policies = {
+            'shared_policy': (
+                None,
+                env.observation_space[first_agent],
+                env.action_space[first_agent],
+                {}
+            )
+        }
+        policy_mapping_fn = lambda agent_id, *args_, **kwargs: 'shared_policy'
 
     return policies, policy_mapping_fn
 
@@ -185,6 +203,7 @@ def main():
         .environment(
             env="multi_agent_microgrids",
             env_config=env_config,
+            disable_env_checking=True,
         )
         .framework("torch")
         .training(

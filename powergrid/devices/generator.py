@@ -42,6 +42,7 @@ class GeneratorConfig:
     dt_h: float = 1.0  # hours per step (for costs)
     min_pf: Optional[float] = None   # for safety penalty
     type: str = "fossil"
+    source: Optional[str] = None  # "solar", "wind", or None for dispatchable
 
     # phase context
     phase_model: str = "balanced_1ph"
@@ -108,6 +109,8 @@ class Generator(DeviceAgent):
             startup_cost=float_if_not_none(config.get("startup_cost", 0.0)),
             shutdown_cost=float_if_not_none(config.get("shutdown_cost", 0.0)),
             min_pf=float_if_not_none(config.get("min_pf", None)),
+            type=config.get("type", "fossil"),
+            source=config.get("source", None),
 
             phase_model=config.get("phase_model", "balanced_1ph"),
             phase_spec=config.get("phase_spec", None),
@@ -158,11 +161,8 @@ class Generator(DeviceAgent):
         # Electrical telemetry
         eletrical_telemetry = ElectricalBasePh(
             P_MW=0.0,
-            Q_MVAr=(
-                0.0
-                if self._generator_config.q_min_MVAr is not None and self._generator_config.q_max_MVAr is not None
-                else None
-            ),
+            # Always initialize Q_MVAr to 0.0 for consistent observation space dimensions
+            Q_MVAr=0.0,
         )
 
         # Status / UC lifecycle
@@ -418,6 +418,11 @@ class Generator(DeviceAgent):
     @property
     def bus(self) -> str:
         return self._generator_config.bus
+
+    @property
+    def source(self) -> Optional[str]:
+        """Get renewable source type ('solar', 'wind', or None for dispatchable)."""
+        return self._generator_config.source
 
     def __repr__(self) -> str:
         name = self.config.name

@@ -325,6 +325,38 @@ class ESS(DeviceAgent):
     def bus(self) -> str:
         return self._storage_config.bus
 
+    @property
+    def name(self) -> str:
+        return self.agent_id
+
+    @property
+    def max_e_mwh(self) -> float:
+        return self._storage_config.max_e_MWh
+
+    @property
+    def min_e_mwh(self) -> float:
+        return self._storage_config.min_e_MWh
+
+    @property
+    def max_p_mw(self) -> float:
+        return self._storage_config.max_p_MW
+
+    @property
+    def min_p_mw(self) -> float:
+        return self._storage_config.min_p_MW
+
+    @property
+    def max_q_mvar(self) -> Optional[float]:
+        return self._storage_config.max_q_MVAr
+
+    @property
+    def min_q_mvar(self) -> Optional[float]:
+        return self._storage_config.min_q_MVAr
+
+    @property
+    def sn_mva(self) -> Optional[float]:
+        return self._storage_config.s_rated_MVA
+
     def __repr__(self) -> str:
         name = self.agent_id
         cap = self._storage_config.capacity_MWh

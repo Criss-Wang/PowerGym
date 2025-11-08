@@ -228,6 +228,7 @@ class PowerGridAgentV2(GridAgent):
         self.name = net.name
         self.config = grid_config
         self.sgen: DictType[str, Generator] = {}
+        self.storage: DictType[str, ESS] = {}
         self.base_power = grid_config.get("base_power", 1)
         self.load_scale = grid_config.get("load_scale", 1)
         self.load_rescaling(net, self.load_scale)
@@ -261,10 +262,10 @@ class PowerGridAgentV2(GridAgent):
         for sgen in sgens:
             bus_id = pp.get_element_index(self.net, 'bus', self.name + ' ' + sgen.bus)
             pp.create_sgen(
-                self.net, 
-                bus_id, 
+                self.net,
+                bus_id,
                 name=self.name + ' ' + sgen.config.name,
-                index=len(self.sgen), 
+                index=None,  # Let pandapower auto-assign to avoid collisions during fuse
                 p_mw=sgen.electrical.P_MW,
                 sn_mva=sgen.limits.s_rated_MVA,
                 max_p_mw=sgen.limits.p_max_MW,
@@ -274,6 +275,27 @@ class PowerGridAgentV2(GridAgent):
             )
             self.sgen[sgen.config.name] = sgen
             self.devices[sgen.config.name] = sgen
+
+    def add_storage(self, storages):
+        """Add energy storage systems to the network.
+
+        Args:
+            storages: Single ESS instance or iterable of ESS instances
+        """
+        if not isinstance(storages, Iterable):
+            storages = [storages]
+
+        for ess in storages:
+            bus_id = pp.get_element_index(self.net, 'bus', self.name + ' ' + ess.bus)
+            pp.create_storage(self.net, bus_id, ess.electrical.P_MW, ess.max_e_mwh,
+                            sn_mva=ess.sn_mva, soc_percent=ess.storage.soc,
+                            min_e_mwh=ess.min_e_mwh, name=self.name + ' ' + ess.name,
+                            index=None,  # Let pandapower auto-assign to avoid collisions during fuse
+                            max_p_mw=ess.max_p_mw,
+                            min_p_mw=ess.min_p_mw, max_q_mvar=ess.max_q_mvar,
+                            min_q_mvar=ess.min_q_mvar)
+            self.storage[ess.name] = ess
+            self.devices[ess.name] = ess
 
     def fuse_buses(self, ext_net, bus_name):
         """Merge this grid with an external network by fusing buses.
@@ -424,12 +446,16 @@ class PowerGridAgentV2(GridAgent):
         net.load.loc[local_ids, 'scaling'] = load_scaling
         self.load_rescaling(net, self.load_scale)
 
-
+        # Update all generators with their actions
         for name, generator in self.sgen.items():
             generator.update_state()
+
+            # Update network with generator state
             local_ids = pp.get_element_index(net, 'sgen', self.name + ' ' + name)
             states = ['p_mw', 'q_mvar', 'in_service']
-            values = [generator.electrical.P_MW, generator.electrical.Q_MVAr, generator.status.in_service]
+            # Ensure Q_MVAr is not None (use 0.0 if None)
+            q_mvar = generator.electrical.Q_MVAr if generator.electrical.Q_MVAr is not None else 0.0
+            values = [generator.electrical.P_MW, q_mvar, generator.status.in_service]
             net.sgen.loc[local_ids, states] = values
 
 
@@ -568,10 +594,11 @@ class PowerGridAgent(GridAgent):
 
         for ess in storages:
             bus_id = pp.get_element_index(self.net, 'bus', self.name + ' ' + ess.bus)
-            pp.create_storage(self.net, bus_id, ess.state.P, ess.max_e_mwh,
-                            sn_mva=ess.sn_mva, soc_percent=ess.state.soc,
+            pp.create_storage(self.net, bus_id, ess.electrical.P_MW, ess.max_e_mwh,
+                            sn_mva=ess.sn_mva, soc_percent=ess.storage.soc,
                             min_e_mwh=ess.min_e_mwh, name=self.name + ' ' + ess.name,
-                            index=len(self.storage), max_p_mw=ess.max_p_mw,
+                            index=None,  # Let pandapower auto-assign to avoid collisions during fuse
+                            max_p_mw=ess.max_p_mw,
                             min_p_mw=ess.min_p_mw, max_q_mvar=ess.max_q_mvar,
                             min_q_mvar=ess.min_q_mvar)
             self.storage[ess.name] = ess

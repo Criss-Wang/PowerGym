@@ -2,7 +2,7 @@
 NetworkedGridEnv: Multi-agent environment for networked microgrids using agent classes.
 
 This is a modernized version of the legacy NetworkedGridEnv that replaces GridEnv
-with PowerGridAgent while maintaining identical environment logic and API.
+with PowerGridAgentV2 while maintaining identical environment logic and API.
 """
 
 from abc import abstractmethod
@@ -14,7 +14,7 @@ import pandapower as pp
 from gymnasium.spaces import Box, Dict as SpaceDict, Discrete, MultiDiscrete
 from pettingzoo import ParallelEnv
 
-from powergrid.agents.grid_agent import PowerGridAgent
+from powergrid.agents.grid_agent import PowerGridAgentV2
 from powergrid.core.protocols import NoProtocol, Protocol
 
 
@@ -24,7 +24,7 @@ class NetworkedGridEnv(ParallelEnv):
     def __init__(self, env_config):
         super().__init__()
         self.net: pp.pandapowerNet = pp.create_empty_network()
-        self.agent_dict: Dict[str, PowerGridAgent] = {}
+        self.agent_dict: Dict[str, PowerGridAgentV2] = {}
         self.data_size: int = 0
         self._t: int = 0  # current timestep
         # _day will be initialized in reset() for test mode
@@ -55,7 +55,7 @@ class NetworkedGridEnv(ParallelEnv):
 
         Subclasses must implement this method to:
         1. Create merged pandapower network (self.net)
-        2. Create PowerGridAgent instances (self.possible_agents dict)
+        2. Create PowerGridAgentV2 instances (self.possible_agents dict)
         3. Set active agents (self.agent_dict)
         4. Set episode parameters (self.max_episode_steps, self.data_size, etc.)
         """
@@ -130,16 +130,19 @@ class NetworkedGridEnv(ParallelEnv):
             rewards = {name: shared_reward for name in self.agent_dict}
 
         # ==== Update environment and prepare outputs ====
-        # Timestep counter
+        # Increment episode step counter
+        self._episode_step += 1
+
+        # Timestep counter (for dataset indexing)
         self._t = self._t + 1 if self._t < self.data_size else 0
 
-        # Done
-        done = self._t % self.max_episode_steps == 0
+        # Done when we've completed max_episode_steps
+        done = self._episode_step >= self.max_episode_steps
         terminateds = {"__all__": done}
         truncateds = {"__all__": done}
 
-        # Info
-        infos = safety
+        # Info - wrap safety values in dicts for Ray compatibility
+        infos = {agent_id: {"safety": safety_val} for agent_id, safety_val in safety.items()}
 
         return self._get_obs(), rewards, terminateds, truncateds, infos
 
@@ -160,6 +163,9 @@ class NetworkedGridEnv(ParallelEnv):
             self.np_random, _ = seeding.np_random(seed)
         elif not hasattr(self, 'np_random'):
             self.np_random, _ = seeding.np_random(None)
+
+        # Reset episode step counter
+        self._episode_step = 0
 
         # Reset all agents
         if self.train:

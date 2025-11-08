@@ -10,6 +10,7 @@ from typing import List
 import pandapower as pp
 
 from powergrid.agents.grid_agent import PowerGridAgentV2
+from powergrid.core.protocols import CentralizedSetpointProtocol, NoProtocol
 from powergrid.data.data_loader import load_dataset
 from powergrid.devices.generator import Generator
 from powergrid.devices.storage import ESS
@@ -96,29 +97,37 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
         sgen = []
         for device_args in mg_config['devices']:
             device_type = device_args.get('type', None)
-            device_kwargs = {k: v for k, v in device_args.items() if k != 'type'}
+            device_name = device_args.get('name', f'{device_type}_device')
 
-            if device_type == 'Generator':
-                sgen.append(Generator(**device_kwargs))
-            # TODO: Re-enable storage devices when needed
-            # if device_type == 'ESS':
-            #     storage.append(ESS(**device_kwargs))
-            # elif device_type == 'Generator':
-            #     sgen.append(Generator(**device_kwargs))
-            # elif device_type == 'RES':
-            #     sgen.append(RES(**device_kwargs))
+            # Prepare device_config with device_state_config wrapper
+            device_state_config = {k: v for k, v in device_args.items()
+                                   if k not in ['type', 'name']}
+            device_config = {
+                'name': device_name,  # Pass name in device_config for DeviceConfig
+                'device_state_config': device_state_config
+            }
+
+            if device_type == 'ESS':
+                storage.append(ESS(agent_id=device_name, device_config=device_config))
+            elif device_type in ['Generator', 'DG']:
+                sgen.append(Generator(agent_id=device_name, device_config=device_config))
             else:
                 raise ValueError(f"Unknown device type: {device_type}")
+
+        centralized = mg_config.get('centralized', True)
+        protocol = CentralizedSetpointProtocol() if centralized else NoProtocol()
+
         mg_agent = PowerGridAgentV2(
             net=mg_net,
             grid_config=mg_config,
             devices=storage + sgen,
-            centralized=mg_config.get('centralized', True)
+            protocol=protocol,
+            centralized=centralized
         )
         load_area = mg_config.get('load_area', 'AVA')
         renew_area = mg_config.get('renew_area', 'NP15')
         mg_agent.add_sgen(sgen)
-        # mg_agent.add_storage(storage)
+        mg_agent.add_storage(storage)
         mg_agent.add_dataset(self._read_data(load_area, renew_area))
         return mg_agent
 

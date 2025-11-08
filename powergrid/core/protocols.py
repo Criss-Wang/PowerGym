@@ -366,6 +366,55 @@ class SetpointProtocol(VerticalProtocol):
                 offset += action_size
 
 
+class CentralizedSetpointProtocol(VerticalProtocol):
+    """Setpoint protocol optimized for centralized control without device observations.
+
+    This protocol distributes actions directly to devices by setting their internal
+    action state, bypassing the observation requirement of the standard SetpointProtocol.
+    This is more efficient for centralized control where the parent agent computes
+    all device setpoints and devices don't need their own observations to act.
+    """
+
+    def coordinate(
+        self,
+        subordinate_observations: Dict[AgentID, Observation],
+        parent_action: Optional[Any] = None
+    ) -> Dict[AgentID, Dict[str, Any]]:
+        """Return empty coordination signals (actions set directly)."""
+        return {sub_id: {} for sub_id in subordinate_observations}
+
+    def coordinate_action(
+        self,
+        devices: Dict[AgentID, Agent],
+        observation: Observation,
+        action: Optional[Any] = None
+    ) -> None:
+        """Distribute actions to devices by splitting the action vector.
+
+        Sets device actions directly via _set_device_action to bypass the
+        observation requirement, which is unnecessary in centralized control.
+
+        Args:
+            devices: Dictionary of subordinate device agents
+            observation: Current observation from parent (unused)
+            action: Action vector from parent (numpy array)
+        """
+        if action is None:
+            return
+
+        action = np.asarray(action)
+        offset = 0
+        device_list = list(devices.values())
+
+        for device in device_list:
+            # Get device action size
+            action_size = device.action.dim_c + device.action.dim_d
+            device_action = action[offset:offset + action_size]
+            # Set action directly via _set_device_action (bypass observation requirement)
+            device._set_device_action(device_action)
+            offset += action_size
+
+
 # =============================================================================
 # HORIZONTAL PROTOCOLS (Environment-owned: Peer ↔ Peer)
 # =============================================================================
