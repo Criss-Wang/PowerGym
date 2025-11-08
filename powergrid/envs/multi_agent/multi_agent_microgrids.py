@@ -2,17 +2,18 @@
 MultiAgentMicrogrids: Concrete environment for 3 networked microgrids.
 
 This is a modernized version of the legacy MultiAgentMicrogrids that uses
-PowerGridAgent instead of GridEnv while maintaining identical logic.
+PowerGridAgentV2 instead of GridEnv while maintaining identical logic.
 """
 
 from typing import List
 
 import pandapower as pp
 
-from powergrid.agents.grid_agent import PowerGridAgent
+from powergrid.agents.grid_agent import PowerGridAgentV2
+from powergrid.core.protocols import CentralizedSetpointProtocol, NoProtocol
 from powergrid.data.data_loader import load_dataset
 from powergrid.devices.generator import Generator
-# from powergrid.devices.storage import ESS
+from powergrid.devices.storage import ESS
 from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
 from powergrid.networks.ieee13 import IEEE13Bus
 from powergrid.networks.ieee34 import IEEE34Bus
@@ -30,7 +31,7 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
     - 1 PV (Solar)
     - 1 WT (Wind Turbine)
 
-    This implementation uses PowerGridAgent to manage devices instead of
+    This implementation uses PowerGridAgentV2 to manage devices instead of
     the legacy GridEnv, but maintains identical environment logic.
     """
 
@@ -77,7 +78,7 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
         load_area = dso_config.get('load_area', 'BANC')
         renew_area = dso_config.get('renew_area', 'NP15')
 
-        self.dso = PowerGridAgent(
+        self.dso = PowerGridAgentV2(
             net=net,
             grid_config=dso_config,
             devices=[],  # No actionable devices in DSO
@@ -89,35 +90,44 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
 
         return net
 
-    def _build_mg_agent(self, mg_config) -> PowerGridAgent:
+    def _build_mg_agent(self, mg_config) -> PowerGridAgentV2:
         """Build microgrid agent from config."""
         mg_net = IEEE13Bus(mg_config['name'])
         storage = []
         sgen = []
         for device_args in mg_config['devices']:
             device_type = device_args.get('type', None)
-            device_kwargs = {k: v for k, v in device_args.items() if k != 'type'}
+            device_name = device_args.get('name', f'{device_type}_device')
 
-            if device_type == 'Generator':
-                sgen.append(Generator(**device_kwargs))
-            # TODO: Re-enable storage devices when needed
-            # if device_type == 'ESS':
-            #     storage.append(ESS(**device_kwargs))
-            # elif device_type == 'Generator':
-            #     sgen.append(Generator(**device_kwargs))
-            # elif device_type == 'RES':
-            #     sgen.append(RES(**device_kwargs))
+            # Prepare device_config with device_state_config wrapper
+            device_state_config = {k: v for k, v in device_args.items()
+                                   if k not in ['type', 'name']}
+            device_config = {
+                'name': device_name,  # Pass name in device_config for DeviceConfig
+                'device_state_config': device_state_config
+            }
+
+            if device_type == 'ESS':
+                storage.append(ESS(agent_id=device_name, device_config=device_config))
+            elif device_type in ['Generator', 'DG']:
+                sgen.append(Generator(agent_id=device_name, device_config=device_config))
             else:
                 raise ValueError(f"Unknown device type: {device_type}")
-        mg_agent = PowerGridAgent(
+
+        centralized = mg_config.get('centralized', True)
+        protocol = CentralizedSetpointProtocol() if centralized else NoProtocol()
+
+        mg_agent = PowerGridAgentV2(
             net=mg_net,
             grid_config=mg_config,
-            centralized=mg_config.get('centralized', True)
+            devices=storage + sgen,
+            protocol=protocol,
+            centralized=centralized
         )
         load_area = mg_config.get('load_area', 'AVA')
         renew_area = mg_config.get('renew_area', 'NP15')
         mg_agent.add_sgen(sgen)
-        # mg_agent.add_storage(storage)
+        mg_agent.add_storage(storage)
         mg_agent.add_dataset(self._read_data(load_area, renew_area))
         return mg_agent
 
@@ -128,7 +138,7 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
         net = self._build_dso_net()
 
         # Create microgrids (actionable)
-        mg_agents: List[PowerGridAgent] = []
+        mg_agents: List[PowerGridAgentV2] = []
         for mg_config in self.env_config['mg_configs']:
             mg_agent = self._build_mg_agent(mg_config)
             net = mg_agent.fuse_buses(net, mg_config['connection_bus'])

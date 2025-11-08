@@ -33,28 +33,35 @@ mg_configs:
       - type: "ESS"
         name: "ESS1"
         bus: "Bus 645"
-        min_p_mw: -0.5
-        max_p_mw: 0.5
-        capacity: 2.0
-        max_e_mwh: 2.0
-        min_e_mwh: 0.2
+        min_p_MW: -0.5
+        max_p_MW: 0.5
+        s_rated_MVA: 0.6
+        capacity_MWh: 2.0
+        max_e_MWh: 2.0
+        min_e_MWh: 0.2
         init_soc: 0.5
       - type: "DG"
         name: "DG1"
         bus: "Bus 675"
-        min_p_mw: 0.0
-        max_p_mw: 0.66
-        sn_mva: 1.0
+        p_min_MW: 0.0
+        p_max_MW: 0.66
+        s_rated_MVA: 1.0
         cost_curve_coefs: [100, 72.4, 0.5011]
-      - type: "RES"
+      - type: "DG"
         name: "PV1"
         bus: "Bus 652"
-        sn_mva: 0.1
+        p_min_MW: 0.0
+        p_max_MW: 0.1
+        s_rated_MVA: 0.1
+        cost_curve_coefs: [0, 0, 0]
         source: "solar"
-      - type: "RES"
+      - type: "DG"
         name: "WT1"
         bus: "Bus 645"
-        sn_mva: 0.1
+        p_min_MW: 0.0
+        p_max_MW: 0.1
+        s_rated_MVA: 0.1
+        cost_curve_coefs: [0, 0, 0]
         source: "wind"
 
   # MG2 (Microgrid 2)
@@ -70,28 +77,35 @@ mg_configs:
       - type: "ESS"
         name: "ESS1"
         bus: "Bus 645"
-        min_p_mw: -0.5
-        max_p_mw: 0.5
-        capacity: 2.0
-        max_e_mwh: 2.0
-        min_e_mwh: 0.2
+        min_p_MW: -0.5
+        max_p_MW: 0.5
+        s_rated_MVA: 0.6
+        capacity_MWh: 2.0
+        max_e_MWh: 2.0
+        min_e_MWh: 0.2
         init_soc: 0.5
       - type: "DG"
         name: "DG1"
         bus: "Bus 675"
-        min_p_mw: 0.0
-        max_p_mw: 0.60
-        sn_mva: 1.0
+        p_min_MW: 0.0
+        p_max_MW: 0.60
+        s_rated_MVA: 1.0
         cost_curve_coefs: [100, 51.6, 0.4615]
-      - type: "RES"
+      - type: "DG"
         name: "PV1"
         bus: "Bus 652"
-        sn_mva: 0.1
+        p_min_MW: 0.0
+        p_max_MW: 0.1
+        s_rated_MVA: 0.1
+        cost_curve_coefs: [0, 0, 0]
         source: "solar"
-      - type: "RES"
+      - type: "DG"
         name: "WT1"
         bus: "Bus 645"
-        sn_mva: 0.1
+        p_min_MW: 0.0
+        p_max_MW: 0.1
+        s_rated_MVA: 0.1
+        cost_curve_coefs: [0, 0, 0]
         source: "wind"
 
   # MG3 (Microgrid 3)
@@ -107,28 +121,35 @@ mg_configs:
       - type: "ESS"
         name: "ESS1"
         bus: "Bus 645"
-        min_p_mw: -0.5
-        max_p_mw: 0.5
-        capacity: 2.0
-        max_e_mwh: 2.0
-        min_e_mwh: 0.2
+        min_p_MW: -0.5
+        max_p_MW: 0.5
+        s_rated_MVA: 0.6
+        capacity_MWh: 2.0
+        max_e_MWh: 2.0
+        min_e_MWh: 0.2
         init_soc: 0.5
       - type: "DG"
         name: "DG1"
         bus: "Bus 675"
-        min_p_mw: 0.0
-        max_p_mw: 0.50
-        sn_mva: 1.0
+        p_min_MW: 0.0
+        p_max_MW: 0.50
+        s_rated_MVA: 1.0
         cost_curve_coefs: [100, 51.6, 0.4615]
-      - type: "RES"
+      - type: "DG"
         name: "PV1"
         bus: "Bus 652"
-        sn_mva: 0.1
+        p_min_MW: 0.0
+        p_max_MW: 0.1
+        s_rated_MVA: 0.1
+        cost_curve_coefs: [0, 0, 0]
         source: "solar"
-      - type: "RES"
+      - type: "DG"
         name: "WT1"
         bus: "Bus 645"
-        sn_mva: 0.1
+        p_min_MW: 0.0
+        p_max_MW: 0.1
+        s_rated_MVA: 0.1
+        cost_curve_coefs: [0, 0, 0]
         source: "wind"
 
 # Data configuration
