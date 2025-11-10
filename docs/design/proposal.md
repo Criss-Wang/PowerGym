@@ -11,29 +11,32 @@ PowerGrid 2.0 is a **hierarchical multi-agent reinforcement learning platform** 
 
 ### Key Innovation: Protocol-Based Coordination
 
-Real power systems use **structured protocols** to coordinate agents:
-- **Price signals**: ISO broadcasts prices → microgrids optimize dispatch
-- **Setpoint commands**: Controllers send direct control commands
-- **Market mechanisms**: P2P trading, energy auctions
-- **Consensus protocols**: Distributed averaging for coordination
+Real power systems require **cooperative coordination** among distributed agents:
+- **Load balancing**: Distribute power generation across multiple sources
+- **Voltage regulation**: Maintain voltage stability through reactive power control
+- **Power sharing**: Coordinate battery charge/discharge for optimal operation
+- **Frequency regulation**: Maintain grid frequency through coordinated response
+- **Hierarchical dispatch**: Parent controllers coordinate subordinate devices
 
 PowerGrid 2.0 makes protocols **first-class abstractions**, enabling systematic study of:
 1. **Protocol design**: Implement custom coordination mechanisms in ~100 lines
-2. **Protocol comparison**: Which protocols work best under what conditions?
+2. **Protocol comparison**: Which protocols work best for cooperative tasks?
 3. **Action + communication coordination**: Protocols define both how agents act together AND how they communicate
 4. **Scalability**: Hierarchical grouping achieves 6x training speedup
 
 ### Target Research Questions
 
 **For Power Systems Researchers**:
-- How do different market mechanisms (price-based vs. quantity-based) affect system efficiency?
-- What coordination protocols enable safe distributed control of microgrids?
-- How do communication constraints affect coordination quality?
+- How do we achieve cooperative control of multiple microgrids for load balancing?
+- What coordination protocols enable safe voltage/frequency regulation?
+- How do communication constraints affect system stability?
+- Can multi-agent systems learn to share resources optimally?
 
 **For RL Researchers**:
-- How does hierarchical structure affect sample efficiency in MARL?
-- Can agents learn to design better coordination protocols?
-- How do we scale MARL to 100+ agents?
+- How does hierarchical structure affect sample efficiency in cooperative MARL?
+- Can agents learn emergent coordination strategies?
+- How do we scale cooperative MARL to 100+ agents?
+- What credit assignment methods work best for hierarchical cooperative tasks?
 
 ---
 
@@ -62,17 +65,17 @@ class Protocol(ABC):
         pass
 ```
 
-**Example: Price Signal Protocol**
-- **Communication**: Broadcast price signal to all agents
-- **Action**: Agents optimize independently based on received price (decentralized)
+**Example: Cooperative Load Balancing**
+- **Communication**: Share current load and capacity status
+- **Action**: Agents adjust output to balance total load (coordinated)
 
 **Example: Setpoint Protocol**
 - **Communication**: Send individual setpoints to agents
 - **Action**: Agents execute commanded setpoints (centralized)
 
-**Example: P2P Trading Protocol**
-- **Communication**: Send trade confirmations
-- **Action**: Modify agent actions based on market clearing (market-based)
+**Example: Consensus Protocol**
+- **Communication**: Exchange state information with neighbors
+- **Action**: Agents converge to agreed setpoint (distributed)
 
 ---
 
@@ -80,12 +83,12 @@ class Protocol(ABC):
 
 **Vertical Protocols** (agent-owned): Parent → Child coordination
 - Used for: GridAgent → DeviceAgents
-- Examples: Price signals, setpoint commands, reserve requirements
+- Examples: Setpoint commands, load allocation, voltage/frequency setpoints
 - Ownership: Each agent manages its own subordinates
 
 **Horizontal Protocols** (environment-owned): Peer ↔ Peer coordination
 - Used for: GridAgent ↔ GridAgent
-- Examples: P2P trading, consensus, frequency regulation
+- Examples: Load balancing, consensus, cooperative voltage regulation
 - Ownership: Environment coordinates peers (requires global view)
 
 ---
@@ -195,25 +198,29 @@ class Protocol(ABC):
    - No communication, no action coordination
    - Each device acts independently
 
-2. **PriceSignalProtocol**: Price-based coordination
-   - Communication: Broadcast price to all devices
-   - Action: Devices optimize independently based on price (decentralized)
-
-3. **CentralizedSetpointProtocol**: Direct control
-   - Communication: Send individual setpoints
+2. **CentralizedSetpointProtocol**: Direct hierarchical control
+   - Communication: Send individual power setpoints to devices
    - Action: Devices execute commanded setpoints (centralized)
+   - Use case: Parent controller optimizes aggregate microgrid dispatch
+
+3. **PriceSignalProtocol**: Price-based coordination
+   - Communication: Broadcast marginal price signal to all devices
+   - Action: Devices optimize independently based on price (decentralized)
+   - Use case: Economic dispatch, demand response
 
 **Implemented Horizontal Protocols**:
 
 1. **NoHorizontalProtocol**: No peer coordination (baseline)
 
-2. **PeerToPeerTradingProtocol**: Market-based coordination
-   - Action: Run market clearing, adjust agent actions based on trades
-   - Communication: Send trade confirmations to buyers/sellers
+2. **ConsensusProtocol**: Cooperative distributed control
+   - Action: Iteratively average agent states to reach agreement
+   - Communication: Exchange state information with neighbors
+   - Use case: Distributed voltage regulation, load balancing
 
-3. **ConsensusProtocol**: Distributed averaging (future)
-   - Action: Average agent states iteratively
-   - Communication: Exchange state values with neighbors
+3. **PeerToPeerTradingProtocol**: Market-based energy exchange
+   - Action: Match energy surplus/deficit, adjust agent setpoints
+   - Communication: Send trade confirmations to participants
+   - Use case: Energy sharing between microgrids
 
 ---
 
@@ -359,18 +366,17 @@ class DeviceState:
 
 ## Research Enabled by Protocol Framework
 
-### 1. Protocol Design & Comparison ⭐⭐⭐
+### 1. Cooperative Protocol Comparison ⭐⭐⭐
 
-**Question**: Which coordination protocols work best?
+**Question**: Which coordination protocols enable better cooperative control?
 
 **Approach**:
 ```python
 protocols = {
     "NoProtocol": NoProtocol(),
-    "PriceSignal": PriceSignalProtocol(),
-    "Setpoint": CentralizedSetpointProtocol(),
-    "P2PTrading": PeerToPeerTradingProtocol(),
-    "Hybrid": HybridProtocol(price=True, p2p=True)
+    "Centralized": CentralizedSetpointProtocol(),
+    "Consensus": ConsensusProtocol(),
+    "LoadBalancing": LoadBalancingProtocol()
 }
 
 for name, protocol in protocols.items():
@@ -378,14 +384,17 @@ for name, protocol in protocols.items():
     results[name] = train_and_evaluate(env)
 ```
 
-**Metrics**: Economic cost, sample efficiency, scalability, robustness
+**Metrics**:
+- System stability (voltage violations, frequency deviations)
+- Load balance quality (variance across agents)
+- Renewable integration (curtailment rate)
+- Sample efficiency (episodes to converge)
 
 **Expected Result**:
-- NoProtocol: $1000/day (baseline)
-- PriceSignal: $850/day (15% improvement)
-- Setpoint: $820/day (18% improvement)
-- P2PTrading: $870/day (13% improvement)
-- Hybrid: $780/day (22% improvement) ← best
+- NoProtocol: High variance, frequent violations (baseline)
+- Centralized: Low variance, requires full observability
+- Consensus: Moderate variance, distributed and robust
+- LoadBalancing: Lowest variance, optimal for cooperative tasks
 
 ---
 
@@ -397,61 +406,68 @@ for name, protocol in protocols.items():
 
 ```python
 @dataclass
-class TimeOfUsePricingProtocol(VerticalProtocol):
-    """Time-varying price signals for demand response."""
+class ProportionalLoadSharingProtocol(HorizontalProtocol):
+    """Proportional load sharing based on agent capacity."""
 
-    peak_hours: List[int] = field(default_factory=lambda: [16, 17, 18, 19, 20])
-    peak_price: float = 100.0
-    off_peak_price: float = 30.0
+    def coordinate_actions(self, agents, actions, net, t):
+        # Calculate total load demand
+        total_load = sum(agent.get_total_load() for agent in agents.values())
 
-    def coordinate_messages(self, devices, observation, action):
-        # Determine price based on time
-        hour = int(observation.timestamp / 3600) % 24
-        price = self.peak_price if hour in self.peak_hours else self.off_peak_price
+        # Calculate total available capacity
+        total_capacity = sum(agent.get_capacity() for agent in agents.values())
 
-        # Broadcast to devices
-        for device in devices.values():
-            device.receive_message(Message(
-                sender="tou_coordinator",
-                content={"price": price, "type": "tou_price"}
+        # Distribute load proportionally
+        for agent_id, agent in agents.items():
+            capacity_ratio = agent.get_capacity() / total_capacity
+            target_power = total_load * capacity_ratio
+
+            # Adjust agent action to meet target
+            actions[agent_id] = self._adjust_to_target(
+                actions[agent_id], target_power
+            )
+
+    def coordinate_messages(self, agents, observations, net, t):
+        # Share load and capacity info
+        for agent in agents.values():
+            agent.receive_message(Message(
+                sender="load_coordinator",
+                content={
+                    "total_load": self.total_load,
+                    "your_target": self.targets[agent.agent_id]
+                }
             ))
-
-    # Action coordination: Implicit (devices respond to price)
 ```
 
-**Impact**: Researchers can implement and test new protocols in <100 lines of code
+**Impact**: Researchers can implement and test new cooperative protocols in <100 lines of code
 
 ---
 
-### 3. Bandwidth-Constrained Coordination
+### 3. Emergent Cooperative Behavior
 
-**Question**: How does communication budget affect protocol performance?
+**Question**: Can agents learn emergent cooperative strategies without explicit coordination?
 
-**Approach**: Add bandwidth tracking to protocols
+**Approach**: Train with shared reward + independent policies
 
 ```python
-class BandwidthTrackingProtocol(Protocol):
-    def __init__(self, base_protocol: Protocol, max_bytes_per_step: int = 100):
-        self.base_protocol = base_protocol
-        self.max_bytes = max_bytes_per_step
-        self.bytes_used = 0
+# Shared reward encourages cooperation
+def compute_shared_reward(agents):
+    # Penalize variance (encourages load balancing)
+    power_variance = np.var([agent.get_power() for agent in agents])
 
-    def coordinate_messages(self, agents, observations, net, t):
-        # Run base protocol
-        self.base_protocol.coordinate_messages(agents, observations, net, t)
+    # Reward system stability
+    voltage_violations = sum(agent.get_voltage_violations() for agent in agents)
 
-        # Track bandwidth
-        self.bytes_used = sum(
-            len(str(msg.content)) for agent in agents.values()
-            for msg in agent.mailbox
-        )
+    # Reward renewable utilization
+    renewable_usage = sum(agent.get_renewable_power() for agent in agents)
 
-        if self.bytes_used > self.max_bytes:
-            # Penalty for exceeding budget
-            self._apply_bandwidth_penalty()
+    return -power_variance - 10 * voltage_violations + 0.1 * renewable_usage
+
+# Compare with/without communication
+env_no_comm = NetworkedGridEnv(grids=grids, protocol=NoHorizontalProtocol())
+env_with_comm = NetworkedGridEnv(grids=grids, protocol=ConsensusProtocol())
 ```
 
-**Expected Result**: Price signals achieve 90% of P2P trading benefits at 1/5 bandwidth
+**Expected Result**: Communication enables faster convergence and better coordination
 
 ---
 
@@ -607,24 +623,24 @@ for t in range(96):
     obs, rewards, dones, truncated, info = env.step(actions)
 ```
 
-**2. Multi-Microgrid with P2P Trading**
+**2. Multi-Microgrid with Cooperative Load Balancing**
 
 ```python
-# Create 3 microgrids
+# Create 3 microgrids with different capacities
 grids = [
-    PowerGridAgentV2("MG1", net1, devices1, PriceSignalProtocol()),
-    PowerGridAgentV2("MG2", net2, devices2, PriceSignalProtocol()),
-    PowerGridAgentV2("MG3", net3, devices3, PriceSignalProtocol())
+    PowerGridAgentV2("MG1", net1, devices1, CentralizedSetpointProtocol()),
+    PowerGridAgentV2("MG2", net2, devices2, CentralizedSetpointProtocol()),
+    PowerGridAgentV2("MG3", net3, devices3, CentralizedSetpointProtocol())
 ]
 
-# Environment with horizontal P2P trading protocol
+# Environment with horizontal consensus protocol for load balancing
 env = NetworkedGridEnv(
     grids=grids,
-    protocol=PeerToPeerTradingProtocol(trading_fee=0.02),
+    protocol=ConsensusProtocol(),  # Cooperative load sharing
     max_episode_steps=96
 )
 
-# Train with RLlib MAPPO
+# Train with RLlib MAPPO (shared reward for cooperation)
 from ray.rllib.algorithms.ppo import PPOConfig
 
 config = (
@@ -645,37 +661,37 @@ algo.train()
 
 ### Power Systems Research
 
-1. **Market Mechanism Design**
-   - Compare price-based vs. quantity-based coordination
-   - Study P2P energy trading efficiency
-   - Design demand response programs
+1. **Cooperative Multi-Microgrid Control**
+   - Load balancing across multiple microgrids
+   - Cooperative voltage/frequency regulation
+   - Resource sharing for renewable integration
 
-2. **Distributed Control**
-   - Voltage regulation via consensus
-   - Frequency regulation with droop control
-   - Economic dispatch optimization
+2. **Distributed Control Algorithms**
+   - Consensus-based voltage regulation
+   - Proportional load sharing
+   - Cooperative frequency response
 
-3. **Microgrid Management**
-   - Optimal battery scheduling
-   - Renewable integration
-   - Islanding and reconnection
+3. **Hierarchical Coordination**
+   - Parent-child dispatch coordination
+   - Multi-level optimization
+   - Centralized vs. decentralized control comparison
 
 ### RL Research
 
-1. **Multi-Agent Learning**
-   - Hierarchical MARL (feudal RL, options)
-   - Communication-efficient MARL
-   - Meta-learning across protocols
+1. **Cooperative Multi-Agent Learning**
+   - Hierarchical MARL with shared rewards
+   - Credit assignment in cooperative tasks
+   - Emergent coordination without explicit communication
 
-2. **Scalability**
-   - Compare flat vs. hierarchical agent structures
-   - Study coordination complexity
+2. **Scalability & Efficiency**
+   - Flat vs. hierarchical agent structures
+   - Communication overhead vs. coordination quality
    - Transfer learning across system sizes
 
-3. **Protocol Learning**
-   - Learn optimal coordination mechanisms
+3. **Protocol Design via Learning**
+   - Learn optimal coordination strategies
    - Meta-RL over protocol parameters
-   - Emergent communication strategies
+   - Compare learned vs. hand-designed protocols
 
 ---
 
