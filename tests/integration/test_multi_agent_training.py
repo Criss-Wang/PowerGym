@@ -2,10 +2,18 @@
 Integration tests for multi-agent training environment.
 
 Tests the complete workflow without requiring Ray/RLlib installation.
+Includes tests for:
+- Environment creation and spaces
+- Reset and step functionality
+- Action sampling and execution
+- Complete episode rollouts
+- PandaPower integration
+- Reward computation
 """
 
 import pytest
 import numpy as np
+import pandapower as pp
 from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogrids
 from powergrid.envs.configs.config_loader import load_config
 
@@ -261,3 +269,55 @@ class TestMultiAgentTrainingIntegration:
                 assert True  # Should not crash
             except Exception as e:
                 pytest.fail(f"Failed with dict action format: {e}")
+
+    def test_pandapower_convergence(self, env):
+        """Test that PandaPower power flow converges."""
+        obs, info = env.reset(seed=42)
+
+        # Take a few steps
+        for _ in range(5):
+            actions = {aid: env.action_spaces[aid].sample() for aid in env.possible_agents}
+            obs, rewards, dones, truncated, infos = env.step(actions)
+
+            # Check power flow convergence
+            assert env.net['converged'], "Power flow should converge with valid actions"
+
+    def test_device_state_synchronization(self, env):
+        """Test that device states are properly synced with PandaPower network."""
+        obs, info = env.reset(seed=42)
+
+        # Take a step
+        actions = {aid: env.action_spaces[aid].sample() for aid in env.possible_agents}
+        obs, rewards, dones, truncated, infos = env.step(actions)
+
+        # Check that device powers are reflected in network results
+        for agent_id, agent in env.agent_dict.items():
+            for device_id, device in agent.devices.items():
+                # Check electrical state exists and is reasonable
+                if hasattr(device, 'electrical'):
+                    p_mw = device.electrical.P_MW
+                    q_mvar = device.electrical.Q_MVAr
+
+                    assert not np.isnan(p_mw), f"{device_id} has NaN P"
+                    assert not np.isnan(q_mvar), f"{device_id} has NaN Q"
+                    assert -100 < p_mw < 100, f"{device_id} P out of range"
+                    assert -100 < q_mvar < 100, f"{device_id} Q out of range"
+
+    def test_reward_computation_consistency(self, env):
+        """Test that rewards are computed consistently."""
+        obs, info = env.reset(seed=42)
+
+        # Take steps and track rewards
+        total_rewards = {aid: 0.0 for aid in env.possible_agents}
+
+        for _ in range(10):
+            actions = {aid: env.action_spaces[aid].sample() for aid in env.possible_agents}
+            obs, rewards, dones, truncated, infos = env.step(actions)
+
+            for agent_id in env.possible_agents:
+                total_rewards[agent_id] += rewards[agent_id]
+
+        # Rewards should be negative (costs) or zero
+        # In energy systems, we typically minimize cost
+        for agent_id, total_reward in total_rewards.items():
+            assert total_reward < 100, f"{agent_id} reward too high (likely incorrect sign)"

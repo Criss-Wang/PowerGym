@@ -36,12 +36,13 @@ class Grid(DeviceAgent):
         )
 
     def set_action_space(self) -> None:
+        # Grid has no controllable actions (handled externally by power flow)
         pass
 
-    def set_device_state(self, config: Dict[str, Any]) -> None:
-        self.state.P = 0.0
-        self.state.Q = 0.0
-        self.state.price = 0.0
+    def set_device_state(self) -> None:
+        # Initialize simple state (no complex features needed for Grid)
+        # Grid just tracks P, Q, and price - these are set via update_state()
+        pass
 
     def update_state(self, *, price: float = None, P: float = None, Q: float = None) -> None:
         if P is not None:
