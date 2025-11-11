@@ -1,34 +1,64 @@
 """
-MAPPO Training Script for Multi-Agent Microgrids
+Example 5: MAPPO Training for Cooperative Multi-Agent Systems
+==============================================================
 
-This script trains a Multi-Agent PPO (MAPPO) policy on the 3-microgrid environment
-using Ray RLlib. Supports both shared and independent policies.
+This example demonstrates production-ready training of Multi-Agent PPO (MAPPO)
+or Independent PPO (IPPO) on cooperative multi-agent microgrids with full
+experiment management capabilities.
+
+What you'll learn:
+- Command-line training script with comprehensive arguments
+- MAPPO vs IPPO for cooperative tasks
+- Shared rewards to encourage cooperation
+- Experiment tracking with Weights & Biases
+- Checkpointing and resuming training
+- Performance monitoring and logging
+
+Architecture:
+    RLlib (PPO Algorithm)
+    └── ParallelPettingZooEnv (Wrapper)
+        └── MultiAgentMicrogrids (PowerGrid)
+            ├── GridAgent MG1
+            ├── GridAgent MG2
+            └── GridAgent MG3
+
+Cooperative Task:
+    Agents learn to balance loads, maintain voltage stability, and share
+    resources optimally through shared rewards and communication protocols.
 
 Usage:
-    # Train with shared policy (MAPPO)
-    python examples/train_mappo_microgrids.py --iterations 100
+    # Train with shared policy (MAPPO) for cooperative tasks
+    python examples/05_mappo_training.py --iterations 100
 
     # Train with independent policies (IPPO)
-    python examples/train_mappo_microgrids.py --iterations 100 --independent-policies
+    python examples/05_mappo_training.py --iterations 100 --independent-policies
 
     # Resume from checkpoint
-    python examples/train_mappo_microgrids.py --resume /path/to/checkpoint
+    python examples/05_mappo_training.py --resume /path/to/checkpoint
 
     # With W&B logging
-    python examples/train_mappo_microgrids.py --wandb --wandb-project powergrid-marl
+    python examples/05_mappo_training.py --wandb --wandb-project powergrid-coop
+
+    # Custom experiment with shared rewards (encourages cooperation)
+    python examples/05_mappo_training.py --iterations 200 --share-reward \\
+        --lr 5e-5 --hidden-dim 256 --num-workers 8
+
+    # Quick test mode (3 iterations for verification)
+    python examples/05_mappo_training.py --test --no-cuda
 
 Requirements:
     pip install "ray[rllib]==2.9.0"
-    pip install wandb  # Optional, for logging
+    pip install wandb  # Optional, for experiment tracking
+
+Runtime: ~30 minutes for 100 iterations (depends on workers and hardware)
 """
 
 import argparse
-import os
 import json
+import os
 from datetime import datetime
 
 import ray
-from ray import tune
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.env.wrappers.pettingzoo_env import ParallelPettingZooEnv
 from ray.tune.registry import register_env
@@ -39,65 +69,70 @@ from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogri
 
 def parse_args():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='Train MAPPO on multi-agent microgrids')
+    parser = argparse.ArgumentParser(
+        description='Train MAPPO/IPPO on cooperative multi-agent microgrids',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
 
     # Training parameters
     parser.add_argument('--iterations', type=int, default=100,
-                        help='Number of training iterations (default: 100)')
+                        help='Number of training iterations')
+    parser.add_argument('--test', action='store_true',
+                        help='Quick test mode (3 iterations, 1 worker, small batch)')
     parser.add_argument('--train-batch-size', type=int, default=4000,
-                        help='Training batch size (default: 4000)')
+                        help='Training batch size')
     parser.add_argument('--sgd-minibatch-size', type=int, default=128,
-                        help='SGD minibatch size (default: 128)')
+                        help='SGD minibatch size')
     parser.add_argument('--num-sgd-iter', type=int, default=10,
-                        help='Number of SGD iterations (default: 10)')
+                        help='Number of SGD iterations per training step')
     parser.add_argument('--lr', type=float, default=5e-5,
-                        help='Learning rate (default: 5e-5)')
+                        help='Learning rate')
     parser.add_argument('--gamma', type=float, default=0.99,
-                        help='Discount factor (default: 0.99)')
+                        help='Discount factor')
     parser.add_argument('--lambda', type=float, default=0.95, dest='lambda_',
-                        help='GAE lambda (default: 0.95)')
+                        help='GAE lambda (advantage estimation)')
 
     # Environment parameters
-    parser.add_argument('--penalty', type=float, default=10,
-                        help='Safety penalty coefficient (default: 10)')
+    parser.add_argument('--penalty', type=float, default=10.0,
+                        help='Safety violation penalty coefficient')
     parser.add_argument('--share-reward', action='store_true',
-                        help='Use shared rewards across all agents')
+                        help='Use shared rewards across agents (encourages cooperation)')
     parser.add_argument('--no-share-reward', dest='share_reward', action='store_false')
     parser.set_defaults(share_reward=True)
 
     # Policy parameters
     parser.add_argument('--independent-policies', action='store_true',
-                        help='Use independent policies for each agent (IPPO)')
+                        help='Use independent policies for each agent (IPPO vs MAPPO)')
     parser.add_argument('--hidden-dim', type=int, default=256,
-                        help='Hidden layer dimension (default: 256)')
+                        help='Hidden layer dimension for policy network')
 
     # Parallelization
     parser.add_argument('--num-workers', type=int, default=4,
-                        help='Number of rollout workers (default: 4)')
+                        help='Number of parallel rollout workers')
     parser.add_argument('--num-envs-per-worker', type=int, default=1,
-                        help='Number of environments per worker (default: 1)')
+                        help='Number of environments per worker')
 
     # Checkpointing
     parser.add_argument('--checkpoint-freq', type=int, default=10,
-                        help='Checkpoint frequency in iterations (default: 10)')
+                        help='Checkpoint frequency (iterations)')
     parser.add_argument('--checkpoint-dir', type=str, default='./checkpoints',
-                        help='Directory for checkpoints (default: ./checkpoints)')
+                        help='Directory for saving checkpoints')
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint to resume from')
 
     # Logging
     parser.add_argument('--wandb', action='store_true',
-                        help='Enable Weights & Biases logging')
-    parser.add_argument('--wandb-project', type=str, default='powergrid-marl',
-                        help='W&B project name (default: powergrid-marl)')
+                        help='Enable Weights & Biases experiment tracking')
+    parser.add_argument('--wandb-project', type=str, default='powergrid-cooperative',
+                        help='W&B project name')
     parser.add_argument('--wandb-entity', type=str, default=None,
-                        help='W&B entity (username or team)')
+                        help='W&B entity (username or team name)')
     parser.add_argument('--experiment-name', type=str, default=None,
-                        help='Experiment name for logging')
+                        help='Custom experiment name (auto-generated if not provided)')
 
     # Miscellaneous
     parser.add_argument('--seed', type=int, default=42,
-                        help='Random seed (default: 42)')
+                        help='Random seed for reproducibility')
     parser.add_argument('--no-cuda', action='store_true',
                         help='Disable CUDA even if available')
 
@@ -105,7 +140,14 @@ def parse_args():
 
 
 def env_creator(env_config):
-    """Create environment with RLlib compatibility."""
+    """Create environment with RLlib compatibility.
+
+    Args:
+        env_config: Configuration dict from RLlib
+
+    Returns:
+        ParallelPettingZooEnv wrapper around PowerGrid environment
+    """
     # Load default config if not provided
     if 'dataset_path' not in env_config:
         from powergrid.envs.configs.config_loader import load_config
@@ -121,8 +163,16 @@ def env_creator(env_config):
 
 
 def get_policy_configs(env, args):
-    """Get policy configuration (shared or independent)."""
-    # Get possible agents - access from wrapped env if needed
+    """Get policy configuration for MAPPO or IPPO.
+
+    Args:
+        env: Environment instance
+        args: Command line arguments
+
+    Returns:
+        Tuple of (policies dict, policy_mapping_fn)
+    """
+    # Get possible agents - handle wrapped env
     if hasattr(env, 'possible_agents'):
         possible_agents = env.possible_agents
     elif hasattr(env, 'env') and hasattr(env.env, 'possible_agents'):
@@ -132,14 +182,15 @@ def get_policy_configs(env, args):
         possible_agents = list(env.get_agent_ids())
 
     if args.independent_policies:
-        # IPPO: Each agent has its own policy
+        # IPPO: Each agent has its own independent policy
         policies = {
             agent_id: (None, env.observation_space[agent_id], env.action_space[agent_id], {})
             for agent_id in possible_agents
         }
         policy_mapping_fn = lambda agent_id, *args_, **kwargs: agent_id
+        policy_type = "IPPO (Independent Policies)"
     else:
-        # MAPPO: All agents share one policy
+        # MAPPO: All agents share one policy (better for cooperation)
         # Use the first agent's spaces since all agents have identical spaces
         first_agent = possible_agents[0]
         policies = {
@@ -151,13 +202,23 @@ def get_policy_configs(env, args):
             )
         }
         policy_mapping_fn = lambda agent_id, *args_, **kwargs: 'shared_policy'
+        policy_type = "MAPPO (Shared Policy)"
 
-    return policies, policy_mapping_fn
+    return policies, policy_mapping_fn, policy_type
 
 
 def main():
     """Main training function."""
     args = parse_args()
+
+    # Apply test mode overrides
+    if args.test:
+        print("⚠ TEST MODE: Using minimal configuration for quick verification")
+        args.iterations = 3
+        args.num_workers = 1
+        args.train_batch_size = 1000
+        args.checkpoint_freq = 1
+        args.wandb = False
 
     # Initialize Ray
     ray.init(ignore_reinit_error=True)
@@ -168,6 +229,7 @@ def main():
     # Create environment to get spaces
     from powergrid.envs.configs.config_loader import load_config
     env_config = load_config('ieee34_ieee13')
+
     # Override with command line args
     env_config['train'] = True
     env_config['penalty'] = args.penalty
@@ -177,25 +239,30 @@ def main():
     temp_env = env_creator(env_config)
 
     # Get policy configuration
-    policies, policy_mapping_fn = get_policy_configs(temp_env, args)
+    policies, policy_mapping_fn, policy_type = get_policy_configs(temp_env, args)
 
     # Generate experiment name
     if args.experiment_name is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        policy_type = "ippo" if args.independent_policies else "mappo"
-        args.experiment_name = f"{policy_type}_mg3_{timestamp}"
+        policy_tag = "ippo" if args.independent_policies else "mappo"
+        reward_tag = "shared" if args.share_reward else "indep"
+        args.experiment_name = f"{policy_tag}_{reward_tag}_mg3_{timestamp}"
 
-    print("=" * 70)
-    print("Multi-Agent Microgrid Training with RLlib")
-    print("=" * 70)
-    print(f"Experiment: {args.experiment_name}")
-    print(f"Policy type: {'IPPO (Independent)' if args.independent_policies else 'MAPPO (Shared)'}")
-    print(f"Iterations: {args.iterations}")
-    print(f"Shared reward: {args.share_reward}")
-    print(f"Safety penalty: {args.penalty}")
-    print(f"Learning rate: {args.lr}")
-    print(f"Workers: {args.num_workers}")
-    print("=" * 70)
+    # Print training configuration
+    print("=" * 80)
+    print("Cooperative Multi-Agent Microgrid Training with RLlib")
+    print("=" * 80)
+    print(f"Experiment:        {args.experiment_name}")
+    print(f"Policy type:       {policy_type}")
+    print(f"Shared reward:     {args.share_reward} (encourages cooperation)")
+    print(f"Iterations:        {args.iterations}")
+    print(f"Safety penalty:    {args.penalty}")
+    print(f"Learning rate:     {args.lr}")
+    print(f"Hidden dimension:  {args.hidden_dim}")
+    print(f"Rollout workers:   {args.num_workers}")
+    print(f"Batch size:        {args.train_batch_size}")
+    print(f"Random seed:       {args.seed}")
+    print("=" * 80)
 
     # Configure PPO algorithm
     config = (
@@ -238,7 +305,6 @@ def main():
     )
 
     # Setup W&B logging if requested
-    callbacks = []
     if args.wandb:
         try:
             import wandb
@@ -247,10 +313,12 @@ def main():
                 entity=args.wandb_entity,
                 name=args.experiment_name,
                 config=vars(args),
+                tags=["cooperative", policy_tag, reward_tag],
             )
-            print(f"W&B logging enabled: {args.wandb_project}")
+            print(f"✓ W&B logging enabled: {args.wandb_project}/{args.experiment_name}")
         except ImportError:
-            print("WARNING: wandb not installed. Install with: pip install wandb")
+            print("⚠ WARNING: wandb not installed. Install with: pip install wandb")
+            args.wandb = False
 
     # Create checkpoint directory
     checkpoint_dir = os.path.join(args.checkpoint_dir, args.experiment_name)
@@ -260,22 +328,23 @@ def main():
     config_path = os.path.join(checkpoint_dir, 'config.json')
     with open(config_path, 'w') as f:
         json.dump(vars(args), f, indent=2)
-    print(f"Configuration saved to: {config_path}")
+    print(f"✓ Configuration saved to: {config_path}")
 
     # Build algorithm
     if args.resume:
-        print(f"Resuming from checkpoint: {args.resume}")
+        print(f"⟳ Resuming from checkpoint: {args.resume}")
         algo = config.build()
         algo.restore(args.resume)
     else:
         algo = config.build()
 
     # Training loop
-    print("\nStarting training...")
-    print("-" * 70)
+    print("\n" + "=" * 80)
+    print("Starting training...")
+    print("-" * 80)
     print(f"{'Iter':>5} | {'Reward':>10} | {'Cost':>10} | {'Episodes':>8} | "
           f"{'Steps':>10} | {'Time':>8}")
-    print("-" * 70)
+    print("-" * 80)
 
     best_reward = float('-inf')
 
@@ -313,7 +382,7 @@ def main():
         # Checkpoint
         if (i + 1) % args.checkpoint_freq == 0:
             checkpoint_path = algo.save(checkpoint_dir)
-            print(f"  → Checkpoint saved: {checkpoint_path}")
+            print(f"  ✓ Checkpoint saved: {checkpoint_path}")
 
             # Save best model
             if reward_mean > best_reward:
@@ -321,15 +390,15 @@ def main():
                 best_path = os.path.join(checkpoint_dir, 'best_checkpoint')
                 os.makedirs(best_path, exist_ok=True)
                 algo.save(best_path)
-                print(f"  → Best model saved: {best_path}")
+                print(f"  ★ Best model saved: {best_path} (reward: {best_reward:.2f})")
 
-    print("-" * 70)
-    print("Training complete!")
-    print(f"Best reward: {best_reward:.2f}")
+    print("-" * 80)
+    print(f"✓ Training complete!")
+    print(f"  Best reward achieved: {best_reward:.2f}")
 
     # Final checkpoint
     final_path = algo.save(checkpoint_dir)
-    print(f"Final checkpoint: {final_path}")
+    print(f"  Final checkpoint: {final_path}")
 
     # Cleanup
     algo.stop()
@@ -341,7 +410,7 @@ def main():
         except:
             pass
 
-    print("=" * 70)
+    print("=" * 80)
 
 
 if __name__ == '__main__':

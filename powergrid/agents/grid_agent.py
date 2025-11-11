@@ -19,6 +19,8 @@ from powergrid.devices.generator import Generator
 from powergrid.devices.storage import ESS
 
 
+GRID_LEVEL = 2  # Level identifier for grid-level agents
+
 class GridAgent(Agent):
     """Grid-level coordinator for managing device agents.
 
@@ -54,7 +56,7 @@ class GridAgent(Agent):
 
         super().__init__(
             agent_id=agent_id,
-            level=2,  # Grid level
+            level=GRID_LEVEL,
         )
         self.protocol = protocol
         self.policy = policy
