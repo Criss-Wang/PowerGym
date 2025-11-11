@@ -2,7 +2,7 @@ from typing import Dict, List, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
 
-Array = np.ndarray
+from powergrid.utils.typing import Array
 
 
 def _as_f32(x: Sequence[float] | Array) -> Array:
