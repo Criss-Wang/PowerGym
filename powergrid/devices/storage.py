@@ -1,14 +1,14 @@
-import numpy as np
-
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+import numpy as np
+
 from powergrid.agents.device_agent import DeviceAgent
 from powergrid.core.policies import Policy
-from powergrid.core.protocols import Protocol, NoProtocol
+from powergrid.core.protocols import NoProtocol, Protocol
 from powergrid.core.state import DeviceState, PhaseModel, PhaseSpec
-from powergrid.features.electrical import ElectricalBasePh
 from powergrid.features.connection import PhaseConnection
+from powergrid.features.electrical import ElectricalBasePh
 from powergrid.features.storage import StorageBlock
 from powergrid.utils.cost import cost_from_curve
 from powergrid.utils.safety import s_over_rating, soc_bounds_penalty
@@ -131,6 +131,14 @@ class ESS(DeviceAgent):
             protocol=protocol,
             device_config=device_config,
         )
+
+    def _init_action_space(self) -> None:
+        """Initialize action space - calls set_action_space()."""
+        self.set_action_space()
+
+    def _init_device_state(self) -> None:
+        """Initialize device state - calls set_device_state()."""
+        self.set_device_state()
 
     def set_action_space(self) -> None:
         """

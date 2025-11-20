@@ -1,5 +1,4 @@
-"""
-NetworkedGridEnv: Multi-agent environment for networked microgrids using agent classes.
+"""NetworkedGridEnv: Multi-agent environment for networked microgrids using agent classes.
 
 This is a modernized version of the legacy NetworkedGridEnv that replaces GridEnv
 with PowerGridAgent while maintaining identical environment logic and API.
@@ -16,10 +15,10 @@ from pettingzoo import ParallelEnv
 
 from powergrid.agents.grid_agent import PowerGridAgent
 from powergrid.core.protocols import NoProtocol, Protocol
-from powergrid.utils.typing import AgentID
-from powergrid.messaging.base import MessageBroker, ChannelManager, Message, MessageType
+from powergrid.messaging.base import ChannelManager, Message, MessageBroker, MessageType
 from powergrid.messaging.memory import InMemoryBroker
 from powergrid.utils.helpers import gen_uuid
+from powergrid.utils.typing import AgentID
 
 class NetworkedGridEnv(ParallelEnv):
     def __init__(self, env_config):
@@ -61,7 +60,12 @@ class NetworkedGridEnv(ParallelEnv):
         pass
 
     def _build_message_broker(self) -> Optional[MessageBroker]:
-        broker_type = self.env_config.get('message_broker', None)
+        # If centralized mode, no broker needed
+        if self.centralized:
+            return None
+
+        # For distributed mode, default to in-memory broker
+        broker_type = self.env_config.get('message_broker', 'in_memory')
         if broker_type == 'in_memory':
             return InMemoryBroker()
         elif broker_type is None:
@@ -136,7 +140,7 @@ class NetworkedGridEnv(ParallelEnv):
             # Get pandapower element index
             try:
                 element_idx = pp.get_element_index(self.net, device_type, element_name)
-            except (KeyError, IndexError):
+            except (KeyError, IndexError, UserWarning):
                 # Element not found in network, skip
                 continue
 
@@ -151,10 +155,104 @@ class NetworkedGridEnv(ParallelEnv):
             for agent in self.agent_dict.values():
                 agent.update_state(self.net, self._t)
         else:
+            # Update load scaling for all agents
+            self._update_loads_distributed()
             # Consume all state updates from devices at once
             state_updates = self._consume_all_state_updates()
             # Apply state updates to pandapower network
             self._apply_state_updates_to_net(state_updates)
+
+    def _publish_network_state_to_agents(self):
+        """Publish network state (voltages, line loading, device results) to agents via messages.
+
+        In distributed mode, agents don't access net directly. Instead, the environment
+        publishes relevant network state information to each agent via the message broker.
+        """
+        if not self.message_broker:
+            return
+
+        for agent in self.agent_dict.values():
+            if not isinstance(agent, PowerGridAgent):
+                continue
+
+            # Extract network state relevant to this agent
+            network_state = {
+                'converged': self.net.get('converged', False),
+                'device_results': {},
+                'bus_voltages': {},
+                'line_loading': {}
+            }
+
+            # Device results (sgen outputs)
+            for device_name in agent.sgen.keys():
+                element_name = f"{agent.name} {device_name}"
+                try:
+                    idx = pp.get_element_index(self.net, 'sgen', element_name)
+                    network_state['device_results'][device_name] = {
+                        'p_mw': float(self.net.res_sgen.loc[idx, 'p_mw']),
+                        'q_mvar': float(self.net.res_sgen.loc[idx, 'q_mvar'])
+                    }
+                except (KeyError, IndexError, UserWarning):
+                    pass
+
+            # Bus voltages for this agent's buses
+            if network_state['converged']:
+                try:
+                    local_bus_ids = pp.get_element_index(self.net, 'bus', agent.name, False)
+                    bus_voltages = self.net.res_bus.loc[local_bus_ids, 'vm_pu'].values
+                    network_state['bus_voltages'] = {
+                        'vm_pu': bus_voltages.tolist(),
+                        'overvoltage': float(np.maximum(bus_voltages - 1.05, 0).sum()),
+                        'undervoltage': float(np.maximum(0.95 - bus_voltages, 0).sum())
+                    }
+                except (KeyError, UserWarning):
+                    pass
+
+                # Line loading for this agent's lines
+                try:
+                    local_line_ids = pp.get_element_index(self.net, 'line', agent.name, False)
+                    line_loading = self.net.res_line.loc[local_line_ids, 'loading_percent'].values
+                    network_state['line_loading'] = {
+                        'loading_percent': line_loading.tolist(),
+                        'overloading': float(np.maximum(line_loading - 100, 0).sum() * 0.01)
+                    }
+                except (KeyError, UserWarning):
+                    pass
+
+            # Send network state to agent via message broker
+            channel = ChannelManager.power_flow_result_channel(self._env_id, agent.agent_id)
+            message = Message(
+                env_id=self._env_id,
+                sender_id="environment",
+                recipient_id=agent.agent_id,
+                timestamp=self._t,
+                message_type=MessageType.INFO,
+                payload=network_state
+            )
+            self.message_broker.publish(channel, message)
+
+    def _update_loads_distributed(self):
+        """Update load scaling for all agents in distributed mode.
+
+        In distributed mode, the environment directly updates the network
+        without passing net to agents.
+        """
+        for agent in self.agent_dict.values():
+            if not hasattr(agent, 'dataset') or agent.dataset is None:
+                continue
+
+            # Get load scaling from agent's dataset
+            load_scaling = agent.dataset['load'][self._t]
+
+            # Update network loads for this agent (environment does this, not agent)
+            try:
+                local_ids = pp.get_element_index(self.net, 'load', agent.name, False)
+                self.net.load.loc[local_ids, 'scaling'] = load_scaling
+                # Apply load rescaling directly (don't pass net to agent)
+                self.net.load.loc[local_ids, 'scaling'] *= agent.load_scale
+            except (KeyError, UserWarning):
+                # No loads for this agent, skip
+                continue
 
     def step(self, action_n: Dict[str, Any]):
         """
@@ -192,14 +290,23 @@ class NetworkedGridEnv(ParallelEnv):
             self.net['converged'] = False
 
         # ==== Sync states to all agents ====
-        # TODO: Think about whether message passing is needed for decentralized case
-        for agent_id, agent in self.agent_dict.items():
-            agent.sync_global_state(self.net, self._t)
+        if self.centralized:
+            # Centralized: agents access net directly
+            for agent_id, agent in self.agent_dict.items():
+                agent.sync_global_state(self.net, self._t)
+        else:
+            # Distributed: send network state to agents via messages
+            self._publish_network_state_to_agents()
 
         # ==== Compute rewards and safety ====
-        # Update costs and safety for all agents
-        for agent in self.agent_dict.values():
-            agent.update_cost_safety(self.net)
+        if self.centralized:
+            # Centralized: agents compute from net directly
+            for agent in self.agent_dict.values():
+                agent.update_cost_safety(self.net)
+        else:
+            # Distributed: agents compute from locally received network state (via messages)
+            for agent in self.agent_dict.values():
+                agent.update_cost_safety(None)
 
         # Get rewards and safety from subclass
         rewards, safety = self._reward_and_safety()
