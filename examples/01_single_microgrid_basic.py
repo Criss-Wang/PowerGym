@@ -24,7 +24,7 @@ import numpy as np
 import pandapower as pp
 from pettingzoo import ParallelEnv
 
-from powergrid.agents.grid_agent import PowerGridAgentV2
+from powergrid.agents.grid_agent import PowerGridAgent
 from powergrid.core.protocols import CentralizedSetpointProtocol
 from powergrid.devices.generator import Generator
 # Note: Grid device not used in this example (implementation incomplete)
@@ -43,7 +43,7 @@ class SingleMicrogridEnv(NetworkedGridEnv):
 
         # Create devices
         # Note: bus names should be just "Bus XXX" without MG1 prefix
-        # The PowerGridAgentV2.add_sgen/add_storage will prepend the microgrid name
+        # The PowerGridAgent.add_sgen/add_storage will prepend the microgrid name
         generator = Generator(
             agent_id="gen1",
             device_config={
@@ -84,7 +84,7 @@ class SingleMicrogridEnv(NetworkedGridEnv):
         )
 
         # Create GridAgent with centralized control
-        mg_agent = PowerGridAgentV2(
+        mg_agent = PowerGridAgent(
             net=net,
             grid_config={
                 "name": "MG1",

@@ -2,11 +2,11 @@
 NetworkedGridEnv: Multi-agent environment for networked microgrids using agent classes.
 
 This is a modernized version of the legacy NetworkedGridEnv that replaces GridEnv
-with PowerGridAgentV2 while maintaining identical environment logic and API.
+with PowerGridAgent while maintaining identical environment logic and API.
 """
 
 from abc import abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import gymnasium.utils.seeding as seeding
 import numpy as np
@@ -14,30 +14,30 @@ import pandapower as pp
 from gymnasium.spaces import Box, Dict as SpaceDict, Discrete, MultiDiscrete
 from pettingzoo import ParallelEnv
 
-from powergrid.agents.grid_agent import PowerGridAgentV2
+from powergrid.agents.grid_agent import PowerGridAgent
 from powergrid.core.protocols import NoProtocol, Protocol
-
+from powergrid.utils.typing import AgentID
+from powergrid.messaging.base import MessageBroker, ChannelManager, Message, MessageType
+from powergrid.messaging.memory import InMemoryBroker
+from powergrid.utils.helpers import gen_uuid
 
 class NetworkedGridEnv(ParallelEnv):
-    metadata = {"name": "networked_grid_env"}
-
     def __init__(self, env_config):
         super().__init__()
-        self.net: pp.pandapowerNet = pp.create_empty_network()
-        self.agent_dict: Dict[str, PowerGridAgentV2] = {}
+        self._env_id = gen_uuid()
+        self._name = "NetworkedGridEnv"
         self.data_size: int = 0
         self._t: int = 0  # current timestep
-        # _day will be initialized in reset() for test mode
         self._total_days: int = 0  # total number of days in the dataset
 
         self.env_config = env_config
         self.max_episode_steps = env_config.get('max_episode_steps', 24)
+        self.centralized = env_config.get('centralized', False)
         self.train = env_config.get('train', True)
-        self.type = env_config.get('type', 'AC')
-        self.protocol: Protocol = env_config.get('protocol', NoProtocol())
 
-        # Build network (must set self.net, self.possible_agents, self.agent_dict)
-        self._build_net()
+        self.message_broker = self._build_message_broker()
+        self.agent_dict = self._build_agents()
+        self.net = self._build_net()
         self._init_space()
 
     @property
@@ -50,71 +50,151 @@ class NetworkedGridEnv(ParallelEnv):
 
     @abstractmethod
     def _build_net(self):
-        """
-        Build network and agents.
-
-        Subclasses must implement this method to:
-        1. Create merged pandapower network (self.net)
-        2. Create PowerGridAgentV2 instances (self.possible_agents dict)
-        3. Set active agents (self.agent_dict)
-        4. Set episode parameters (self.max_episode_steps, self.data_size, etc.)
-        """
         pass
 
     @abstractmethod
     def _reward_and_safety(self):
-        """
-        Compute rewards and safety violations.
+        pass
+
+    @abstractmethod
+    def _build_agents(self) -> Dict[AgentID, PowerGridAgent]:
+        pass
+
+    def _build_message_broker(self) -> Optional[MessageBroker]:
+        broker_type = self.env_config.get('message_broker', None)
+        if broker_type == 'in_memory':
+            return InMemoryBroker()
+        elif broker_type is None:
+            return None
+        else:
+            raise ValueError(f"Unsupported message broker type: {broker_type}")
+        
+
+    def _send_actions_to_agent(self, agent_id: AgentID, action: Any):
+        if self.message_broker is None:
+            raise RuntimeError("Message broker is not initialized.")
+        channel = ChannelManager.action_channel(
+            self._name,
+            agent_id,
+            self._env_id
+        )
+        message = Message(
+            env_id=self._env_id,
+            sender_id=self._name,
+            recipient_id=agent_id,
+            timestamp=self._t,
+            message_type=MessageType.ACTION,
+            payload={'action': action}
+        )
+        self.message_broker.publish(channel, message)
+
+    def _consume_all_state_updates(self) -> List[Dict[str, Any]]:
+        """Consume all state updates from devices via message broker.
 
         Returns:
-            rewards: Dict mapping agent_id → reward (float)
-            safety: Dict mapping agent_id → safety violation (float)
+            List of state update payloads from all devices
         """
-        pass
+        if not self.message_broker:
+            raise RuntimeError("Message broker required for distributed mode")
+
+        channel = ChannelManager.state_update_channel(self._env_id)
+        messages = self.message_broker.consume(
+            channel,
+            recipient_id="environment",
+            env_id=self._env_id,
+            clear=True
+        )
+        return [msg.payload for msg in messages]
+
+    def _apply_state_updates_to_net(self, updates: List[Dict[str, Any]]) -> None:
+        """Apply device state updates to pandapower network.
+
+        Args:
+            updates: List of state update payloads from devices
+        """
+        for update in updates:
+            agent_id = update.get('agent_id')
+            device_type = update.get('device_type')
+
+            if not agent_id or not device_type:
+                continue
+
+            # Find the grid agent that owns this device
+            grid_agent = None
+            for agent in self.agent_dict.values():
+                if isinstance(agent, PowerGridAgent):
+                    if agent_id in agent.devices:
+                        grid_agent = agent
+                        break
+
+            if not grid_agent:
+                continue
+
+            # Construct pandapower element name (follows PowerGridAgent._add_sgen convention)
+            element_name = f"{grid_agent.name} {agent_id}"
+
+            # Get pandapower element index
+            try:
+                element_idx = pp.get_element_index(self.net, device_type, element_name)
+            except (KeyError, IndexError):
+                # Element not found in network, skip
+                continue
+
+            # Update pandapower network with device state
+            self.net[device_type].loc[element_idx, 'p_mw'] = update.get('P_MW', 0.0)
+            if 'Q_MVAr' in update:
+                self.net[device_type].loc[element_idx, 'q_mvar'] = update.get('Q_MVAr', 0.0)
+            self.net[device_type].loc[element_idx, 'in_service'] = update.get('in_service', True)
+
+    def _update_net(self):
+        if self.centralized:
+            for agent in self.agent_dict.values():
+                agent.update_state(self.net, self._t)
+        else:
+            # Consume all state updates from devices at once
+            state_updates = self._consume_all_state_updates()
+            # Apply state updates to pandapower network
+            self._apply_state_updates_to_net(state_updates)
 
     def step(self, action_n: Dict[str, Any]):
         """
-        Execute one environment step.
+        For centralized case: Collective agent state update
+        - Actions are computed and set on devices by each agent.
+        - Agent state updates are done after actions are set and during _update_net.
 
-        Args:
-            action_n: Dict mapping agent_id → action
-
-        Returns:
-            observations: Dict mapping agent_id → observation
-            rewards: Dict mapping agent_id → reward
-            dones: Dict with '__all__' → done
-            truncated: Dict with '__all__' → truncated
-            infos: Safety information dict
+        For decentralized case: Per agent state update
+        - Actions are sent to agents via message broker.
+        - Each agent steps its local devices and updates its local state.
+        - Agent state updates are done before _update_net.
         """
-        # ==== Run action and update local states ====
         # Set action for each agent
-        if self.protocol.no_op():
+        if self.centralized:
             # note that action can be None here -> decentralized action computation per grid agent
             for name, action in action_n.items():
                 if name in self.actionable_agents:
                     # Get observation for this agent
-                    obs = self.actionable_agents[name].observe(net=self.net)
+                    obs = self.actionable_agents[name].observe()
                     # Compute and set actions on devices
                     self.actionable_agents[name].act(obs, given_action=action)
-            # Update device states and sync to pandapower
-            for agent in self.agent_dict.values():
-                agent.update_state(self.net, self._t)
         else:
-            # Coordinate actions via protocol and update states
-            self.protocol.coordinate_actions(self.actionable_agents, action_n, self.net, self._t)
+            for agent_id, action in action_n.items():
+                if agent_id in self.actionable_agents:
+                    self._send_actions_to_agent(agent_id, action)
+                    self.actionable_agents[agent_id].step_distributed()
 
-        # ==== Run power flow and update global states ====
+        # Update network states based on agent actions
+        self._update_net()
+
         # Run power flow for the whole network
         try:
             pp.runpp(self.net)
         except:
             self.net['converged'] = False
 
-        if self.protocol.no_op():
-            for agent in self.agent_dict.values():
-                agent.sync_global_state(self.net, self._t)
-        else:
-            self.protocol.sync_global_state(self.agent_dict, self.net, self._t)
+        # ==== Sync states to all agents ====
+        # TODO: Think about whether message passing is needed for decentralized case
+        for agent_id, agent in self.agent_dict.items():
+            agent.sync_global_state(self.net, self._t)
 
         # ==== Compute rewards and safety ====
         # Update costs and safety for all agents
@@ -204,10 +284,10 @@ class NetworkedGridEnv(ParallelEnv):
             Dict mapping agent_id → observation array
         """
         obs_dict = {}
-        for n, a in self.agent_dict.items():
-            obs = a.observe(net=self.net)
+        for agent_id, agent in self.agent_dict.items():
+            obs = agent.observe(net=self.net)
             # Extract state from observation
-            obs_dict[n] = obs.local['state']
+            obs_dict[agent_id] = obs.local['state']
 
         return obs_dict
 
@@ -218,7 +298,6 @@ class NetworkedGridEnv(ParallelEnv):
 
         for name, agent in self.agent_dict.items():
             ac_spaces[name] = agent.get_grid_action_space()
-            # Use merged network (self.net) since that's what observe() uses
             ob_spaces[name] = agent.get_grid_observation_space(self.net)
 
         self.action_spaces = ac_spaces

@@ -37,7 +37,7 @@ Runtime: ~45 seconds for 24 timesteps
 import numpy as np
 import pandapower as pp
 
-from powergrid.agents.grid_agent import PowerGridAgentV2
+from powergrid.agents.grid_agent import PowerGridAgent
 from powergrid.core.protocols import CentralizedSetpointProtocol, PeerToPeerTradingProtocol
 from powergrid.devices.generator import Generator
 from powergrid.devices.storage import ESS
@@ -136,7 +136,7 @@ class MultiMicrogridP2PEnv(NetworkedGridEnv):
             devices.append(ess)
 
             # Create microgrid agent
-            mg_agent = PowerGridAgentV2(
+            mg_agent = PowerGridAgent(
                 net=mg_net,
                 grid_config={
                     "name": config["name"],

@@ -16,7 +16,8 @@ from powergrid.core.action import Action
 from powergrid.core.policies import Policy
 from powergrid.core.protocols import NoProtocol, Protocol
 from powergrid.core.state import DeviceState
-
+from powergrid.utils.typing import AgentID
+from powergrid.messaging.base import MessageBroker
 
 DEVICE_LEVEL = 1  # Level identifier for device-level agents
 
@@ -27,8 +28,6 @@ class DeviceConfig:
     device_state_config: Dict[str, Any]
     discrete_action: bool
     discrete_action_cats: int  # Number of categories for discrete action if applicable
-
-    
 
 
 class DeviceAgent(Agent):
@@ -48,26 +47,35 @@ class DeviceAgent(Agent):
 
     def __init__(
         self,
-        agent_id: Optional[str] = None,
-        policy: Optional[Policy] = None,
+        agent_id: Optional[AgentID] = None,
         protocol: Protocol = NoProtocol(),
+        policy: Optional[Policy] = None,
+
+        # communication params
+        message_broker: Optional[MessageBroker] = None,
+        upstream_id: Optional[AgentID] = None,
+        env_id: Optional[str] = None,
+
+        # DeviceAgent specific params
         device_config: Dict[str, Any] = {},
     ):
         """Initialize device agent.
 
         Args:
-            device: Device to wrap (must have set_action_space called)
-            policy: Decision policy (defaults to random)
-            agent_id: Agent ID (defaults to device.name)
+            agent_id: Agent ID (defaults to device name from config)
+            policy: Decision policy (optional)
+            protocol: Communication protocol (defaults to NoProtocol)
+            message_broker: Optional message broker for hierarchical execution
+            upstream_id: Optional upstream agent ID for hierarchical execution
+            env_id: Optional environment ID for multi-environment isolation
+            device_config: Device configuration dict
         """
         self.state: DeviceState = DeviceState()
         self.action: Action = Action()
-        self.action_callback: bool = False  # True if external logic sets state
         self.cost: float = 0.0
         self.safety: float = 0.0
-        self.adversarial: bool = False
-        self.policy: Optional[Policy] = policy
         self.protocol: Protocol = protocol
+        self.policy: Optional[Policy] = policy
 
         self.config = DeviceConfig(
             name=device_config.get("name", "device_agent"),
@@ -76,32 +84,50 @@ class DeviceAgent(Agent):
             discrete_action_cats=device_config.get("discrete_action_cats", 2),
         )
         
-        self.set_action_space()
-        self.set_device_state()
+        self._init_action_space()
+        self._init_device_state()
+        self._init_observation_space()
 
         super().__init__(
             agent_id=agent_id or self.config.name,
-            level=DEVICE_LEVEL,  # Device level
+            level=DEVICE_LEVEL,
             action_space=self._get_action_space(),
             observation_space=self._get_observation_space(),
+            message_broker=message_broker,
+            upstream_id=upstream_id,
+            env_id=env_id,
+            subordinates={}  # Device agents have no subordinates
         )
 
-    # Initialization methods
-    def set_action_space(self) -> None:
+    # ============================================
+    # Initialization Methods
+    # ============================================
+
+    def _init_action_space(self) -> None:
         """Define action space based on underlying device action.
 
         This method should be overridden by subclasses to define device-specific action spaces.
         """
         pass
 
-    def set_device_state(self) -> None:
+    def _init_device_state(self) -> None:
         """Initialize device-specific state attributes.
 
         This method can be overridden by subclasses to initialize device-specific state.
         """
         pass
 
-    # Space construction methods
+    def _init_observation_space(self) -> None:
+        """Define observation space based on device state.
+
+        This method can be overridden by subclasses to define device-specific observation spaces.
+        """
+        pass
+
+    # ============================================
+    # Space Construction Methods
+    # ============================================
+
     def _get_action_space(self) -> gym.Space:
         """Construct Gymnasium action space from device action configuration.
 
@@ -152,7 +178,10 @@ class DeviceAgent(Agent):
             dtype=np.float32
         )
 
-    # Core agent lifecycle methods
+    # ============================================
+    # Core Agent Lifecycle Methods
+    # ============================================
+
     def reset(self, *, seed: Optional[int] = None, **kwargs) -> None:
         """Reset agent and underlying device.
 
@@ -176,7 +205,6 @@ class DeviceAgent(Agent):
         """
         obs = Observation(
             timestamp=self._timestep,
-            messages=self.mailbox.copy()
         )
 
         # Local device state only
@@ -187,7 +215,7 @@ class DeviceAgent(Agent):
 
         return obs
 
-    def act(self, observation: Observation, given_action: Any = None) -> Any:
+    def act(self, observation: Observation, given_action: Any = None) -> None:
         """Compute action using policy.
 
         Args:
@@ -199,15 +227,90 @@ class DeviceAgent(Agent):
         """
         if given_action:
             action = given_action
-        else:
-            assert self.policy is not None, "DeviceAgent requires a policy to compute actions."
+        elif self.policy is not None:
             action = self.policy.forward(observation)
+        else:
+            raise ValueError("No action provided and no policy defined for DeviceAgent.")
 
         self._set_device_action(action)
         # TODO: Add communication logic (send/receive message) if needed
 
+    
+    # ============================================
+    # Abstract Methods for Hierarchical Execution
+    # ============================================
+    def _derive_local_action(self, upstream_action: Optional[Any]) -> Optional[Any]:
+        """Derive local action from upstream action.
+
+        Args:
+            upstream_action: Action received from upstream agent
+
+        Returns:
+            Local action to execute
+        """
+        if self.policy is not None:
+            obs = self.observe()
+            action = self.policy.forward(obs)
+        else:
+            action = upstream_action
+
+        # Store action internally
+        if action is not None:
+            self._set_device_action(action)
+
         return action
 
+    def _execute_local_action(self, action: Optional[Any]) -> None:
+        """Execute own action and update internal state.
+
+        Subclasses should override this to implement their action execution.
+        State updates should be published via _publish_state_updates().
+
+        Args:
+            action: Action to execute
+        """
+        self.update_state()
+
+    # ============================================
+    # State Update Hooks
+    # ============================================
+
+    def _update_state_with_upstream_info(self, upstream_info: Optional[Dict[str, Any]]) -> None:
+        """Update internal state based on info received from upstream agent.
+
+        Args:
+            upstream_info: Info dict received from upstream agent
+        """
+        # Default: no update
+        pass
+
+    def _update_state_with_subordinates_info(self) -> None:
+        """Update internal state based on info received from subordinates."""
+        # Default: no update
+        pass
+
+    def _update_state_post_step(self) -> None:
+        """Update internal state after executing local action.
+
+        This method can be overridden by subclasses to update internal
+        state variables after executing the local action.
+        """
+        # Default: no update
+        pass
+
+    def _publish_state_updates(self) -> None:
+        """Publish state updates to environment via message broker.
+
+        Subclasses should override this to publish device state changes
+        to the environment for power flow computation.
+        """
+        # Default: no state updates
+        pass
+        
+
+    # ============================================
+    # Device-Specific Methods (Abstract)
+    # ============================================
     def _set_device_action(self, action: Any) -> None:
         """Set action on underlying device.
 
@@ -223,8 +326,7 @@ class DeviceAgent(Agent):
             acts = np.linspace(low, high, cats).transpose()
             self.action.c[:] = [a[action[i]] for i, a in enumerate(acts)]
         self.action.d[:] = action[self.action.c.size:]
-
-    # Device-specific methods (to be implemented by subclasses)
+    
     def reset_device(self, *args, **kwargs) -> None:
         """Reset device to initial state (to be implemented by subclasses).
 
@@ -258,7 +360,7 @@ class DeviceAgent(Agent):
         Returns:
             Reward value (negative cost minus safety penalty)
         """
-        return {"cost": self.cost, "safety": self.safety, "adversarial": self.adversarial}
+        return {"cost": self.cost, "safety": self.safety}
 
     def feasible_action(self) -> None:
         """Clamp/adjust current action to ensure feasibility.
@@ -268,7 +370,10 @@ class DeviceAgent(Agent):
         """
         return None
 
-    # Utility methods
+    # ============================================
+    # Utility Methods
+    # ============================================
+
     def __repr__(self) -> str:
         """Return string representation of the agent.
 

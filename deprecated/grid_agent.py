@@ -1,0 +1,312 @@
+class PowerGridAgent(GridAgent):
+    """Grid agent for power system coordination with PandaPower integration.
+
+    PowerGridAgent extends GridAgent with power system-specific functionality,
+    including PandaPower network integration, device management, and state updates.
+
+    Attributes:
+        net: PandaPower network object
+        name: Grid name (from network)
+        config: Grid configuration dictionary
+        sgen: Dictionary of renewable energy sources (Generator)
+        storage: Dictionary of energy storage systems (ESS)
+        base_power: Base power for normalization (MW)
+        load_scale: Scaling factor for loads
+    """
+
+    def __init__(
+        self,
+        net: pp.pandapowerNet,
+        grid_config: DictType[str, Any],
+        *,
+        # Base class args
+        devices: List[DeviceAgent] = [],
+        protocol: Protocol = NoProtocol(),
+        policy: Optional[Policy] = None,
+        centralized: bool = False,
+    ):
+        """Initialize power grid agent.
+
+        Args:
+            net: PandaPower network object
+            grid_config: Grid configuration dictionary
+            devices: List of device agents to coordinate
+            protocol: Coordination protocol
+            policy: Optional centralized policy
+            centralized: If True, uses centralized control
+        """
+        self.net = net
+        self.name = net.name
+        self.config = grid_config
+        self.sgen: DictType[str, Generator] = {}
+        self.storage: DictType[str, ESS] = {}
+        self.base_power = grid_config.get("base_power", 1)
+        self.load_scale = grid_config.get("load_scale", 1)
+        self.load_rescaling(net, self.load_scale)
+
+        super().__init__(
+            agent_id=self.name,
+            devices=devices,
+            protocol=protocol,
+            policy=policy,
+            centralized=centralized,
+        )
+
+    # Network setup methods
+    def add_dataset(self, dataset):
+        """Add time-series dataset for loads and renewables.
+
+        Args:
+            dataset: Dictionary containing 'load', 'solar', 'wind' time series
+        """
+        self.dataset = dataset
+
+    def add_sgen(self, sgens):
+        """Add renewable generators (solar/wind) to the network.
+
+        Args:
+            sgens: Single RES instance or iterable of RES instances
+        """
+        if not isinstance(sgens, Iterable):
+            sgens = [sgens]
+
+        for sgen in sgens:
+            bus_id = pp.get_element_index(self.net, 'bus', self.name + ' ' + sgen.bus)
+            pp.create_sgen(self.net, bus_id, p_mw=sgen.state.P, sn_mva=sgen.sn_mva,
+                          index=len(self.sgen), name=self.name + ' ' + sgen.name,
+                          max_p_mw=sgen.max_p_mw, min_p_mw=sgen.min_p_mw,
+                          max_q_mvar=sgen.max_q_mvar, min_q_mvar=sgen.min_q_mvar)
+            self.sgen[sgen.name] = sgen
+            self.devices[sgen.name] = sgen
+
+    def add_storage(self, storages):
+        """Add energy storage systems to the network.
+
+        Args:
+            storages: Single ESS instance or iterable of ESS instances
+        """
+        if not isinstance(storages, Iterable):
+            storages = [storages]
+
+        for ess in storages:
+            bus_id = pp.get_element_index(self.net, 'bus', self.name + ' ' + ess.bus)
+            pp.create_storage(self.net, bus_id, ess.electrical.P_MW, ess.max_e_mwh,
+                            sn_mva=ess.sn_mva, soc_percent=ess.storage.soc,
+                            min_e_mwh=ess.min_e_mwh, name=self.name + ' ' + ess.name,
+                            index=None,  # Let pandapower auto-assign to avoid collisions during fuse
+                            max_p_mw=ess.max_p_mw,
+                            min_p_mw=ess.min_p_mw, max_q_mvar=ess.max_q_mvar,
+                            min_q_mvar=ess.min_q_mvar)
+            self.storage[ess.name] = ess
+            self.devices[ess.name] = ess
+
+    def fuse_buses(self, ext_net, bus_name):
+        """Merge this grid with an external network by fusing buses.
+
+        Args:
+            ext_net: External PandaPower network
+            bus_name: Name of bus to fuse with external grid
+
+        Returns:
+            Merged PandaPower network
+        """
+        self.net.ext_grid.in_service = False
+        net, index = pp.merge_nets(
+            ext_net,
+            self.net,
+            validate=False,
+            return_net2_reindex_lookup=True
+        )
+        substation = pp.get_element_index(net, 'bus', bus_name)
+        ext_grid = index['bus'][self.net.ext_grid.bus.values[0]]
+        pp.fuse_buses(net, ext_grid, substation)
+
+        return net
+
+    def load_rescaling(self, net, scale):
+        """Apply scaling factor to local loads.
+
+        Args:
+            net: PandaPower network
+            scale: Scaling multiplier
+        """
+        local_load_ids = pp.get_element_index(net, 'load', self.name, False)
+        net.load.loc[local_load_ids, 'scaling'] *= scale
+
+    # Observation methods
+    def _build_local_observation(self, device_obs: DictType[AgentID, Observation], net) -> Any:
+        """Build local observation including device states and network results.
+
+        Args:
+            device_obs: Device observations dictionary
+            net: PandaPower network with power flow results
+
+        Returns:
+            Local observation dictionary with device and network state
+        """
+        local = super()._build_local_observation(device_obs)
+        local['state'] = self._get_obs(net, device_obs)
+        return local
+
+    def _get_obs(self, net, device_obs=None):
+        """Extract numerical observation vector from network state.
+
+        Args:
+            net: PandaPower network
+            device_obs: Optional device observations (computed if not provided)
+
+        Returns:
+            Flattened observation array (float32)
+        """
+        if device_obs is None:
+            device_obs = {
+                agent_id: agent.observe()
+                for agent_id, agent in self.devices.items()
+            }
+        obs = np.array([])
+        for _, ob in device_obs.items():
+            # P, Q, SoC of energy storage units
+            # P, Q, UC status of generators
+            obs = np.concatenate((obs, ob.local['state']))
+        # P, Q at all buses
+        local_load_ids = pp.get_element_index(net, 'load', self.name, False)
+        load_pq = net.res_load.iloc[local_load_ids].values
+        obs = np.concatenate([obs, load_pq.ravel() / self.base_power])
+        return obs.astype(np.float32)
+
+    # Space construction methods
+    def get_device_action_spaces(self) -> DictType[str, gym.Space]:
+        """Get action spaces for all devices.
+
+        Returns:
+            Dictionary mapping device IDs to their action spaces
+        """
+        return {
+            device.agent_id: device.action_space
+            for device in self.devices.values()
+        }
+
+    def get_grid_action_space(self):
+        """Construct combined action space for all devices.
+
+        Returns:
+            Gymnasium space representing joint action space of all devices
+        """
+        low, high, discrete_n = [], [], []
+        for sp in self.get_device_action_spaces().values():
+            if isinstance(sp, Box):
+                low = np.append(low, sp.low)
+                high = np.append(high, sp.high)
+            elif isinstance(sp, Discrete):
+                discrete_n.append(sp.n)
+            elif isinstance(sp, MultiDiscrete):
+                discrete_n.extend(list(sp.nvec))
+
+        if len(low) and len(discrete_n):
+            return Dict({"continuous": Box(low=low, high=high, dtype=np.float32),
+                        'discrete': MultiDiscrete(discrete_n)})
+        elif len(low):  # Continuous only
+            return Box(low=low, high=high, dtype=np.float32)
+        elif len(discrete_n):  # Discrete only
+            return MultiDiscrete(discrete_n)
+        else:  # No actionable agents
+            return Discrete(1)
+
+    def get_grid_observation_space(self, net):
+        """Get observation space for this grid.
+
+        Args:
+            net: PandaPower network
+
+        Returns:
+            Gymnasium Box space for grid observations
+        """
+        # Ensure powerflow has run to get correct observation size
+        try:
+            pp.runpp(net, algorithm='nr', init='flat', max_iteration=100)
+        except:
+            # If powerflow fails, still create space (may need adjustment later)
+            pass
+
+        return Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=self._get_obs(net).shape,
+            dtype=np.float32
+        )
+
+    # State update methods
+    def update_state(self, net, t):
+        """Update grid state from dataset and device actions.
+
+        Args:
+            net: PandaPower network to update
+            t: Timestep index in dataset
+        """
+        load_scaling = self.dataset['load'][t]
+        solar_scaling = self.dataset['solar'][t]
+        wind_scaling = self.dataset['wind'][t]
+
+        local_ids = pp.get_element_index(net, 'load', self.name, False)
+        net.load.loc[local_ids, 'scaling'] = load_scaling
+        self.load_rescaling(net, self.load_scale)
+
+
+        for name, generator in self.sgen.items():
+            generator.update_state()
+            local_ids = pp.get_element_index(net, 'sgen', self.name + ' ' + name)
+            states = ['p_mw', 'q_mvar', 'in_service']
+            values = [generator.electrical_block.P_MW, generator.electrical_block.Q_MVAr, bool(generator.uc_state.on)]
+            net.sgen.loc[local_ids, states] = values
+
+    def sync_global_state(self, net, t):
+        """Sync global state from PandaPower network to devices.
+
+        Args:
+            net: PandaPower network with power flow results
+            t: Current timestep
+        """
+        for name, ess in self.storage.items():
+            local_ids = pp.get_element_index(net, 'storage', self.name + ' ' + name)
+            p_mw = net.res_storage.loc[local_ids, 'p_mw'].values[0]
+            q_mvar = net.res_storage.loc[local_ids, 'q_mvar'].values[0]
+            soc_percent = net.storage.loc[local_ids, 'soc_percent'].values[0]
+            ess.electrical_block.P_MW = p_mw
+            ess.electrical_block.Q_MVAr = q_mvar
+            ess.storage_block.soc = soc_percent
+
+        for name, dg in self.sgen.items():
+            local_ids = pp.get_element_index(net, 'sgen', self.name + ' ' + name)
+            p_mw = net.res_sgen.loc[local_ids, 'p_mw'].values[0]
+            q_mvar = net.res_sgen.loc[local_ids, 'q_mvar'].values[0]
+            dg.electrical_block.P_MW = p_mw
+            dg.electrical_block.Q_MVAr = q_mvar
+
+    def update_cost_safety(self, net):
+        """Update cost and safety metrics for the grid.
+
+        Args:
+            net: PandaPower network with power flow results
+        """
+        self.cost, self.safety = 0, 0
+        for ess in self.storage.values():
+            ess.update_cost_safety()
+            self.cost += ess.cost
+            self.safety += ess.safety
+
+        for dg in self.sgen.values():
+            dg.update_cost_safety()
+            self.cost += dg.cost
+            self.safety += dg.safety
+
+        if net["converged"]:
+            local_bus_ids = pp.get_element_index(net, 'bus', self.name, False)
+            local_vm = net.res_bus.loc[local_bus_ids].vm_pu.values
+            overvoltage = np.maximum(local_vm - 1.05, 0).sum()
+            undervoltage = np.maximum(0.95 - local_vm, 0).sum()
+
+            local_line_ids = pp.get_element_index(net, 'line', self.name, False)
+            local_line_loading = net.res_line.loc[local_line_ids].loading_percent.values
+            overloading = np.maximum(local_line_loading - 100, 0).sum() * 0.01
+
+            self.safety += overloading + overvoltage + undervoltage
