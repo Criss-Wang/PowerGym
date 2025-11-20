@@ -1,14 +1,176 @@
-# Kafka-Based Hierarchical Agent Implementation Plan
+# Message-Based Hierarchical Agent Implementation
+
+## Status: ✅ **IMPLEMENTED** (2025-11-20)
 
 ## Overview
 
-This document outlines the implementation plan for updating the PowerGrid agent architecture to support Kafka-based hierarchical multi-agent control, where agents communicate asynchronously through Kafka topics and execute recursively based on the parent-child hierarchy.
+PowerGrid 2.0 now supports message-based hierarchical multi-agent control with distributed execution. The architecture uses an abstract MessageBroker interface with an InMemoryBroker implementation, providing a foundation for future Kafka integration.
 
-## Current Architecture Analysis
+**Implemented Features**:
+- ✅ Message broker abstraction (MessageBroker interface)
+- ✅ InMemoryBroker implementation for local/single-process execution
+- ✅ Distributed step execution with message passing
+- ✅ Environment-agent communication (actions, network state)
+- ✅ Device-environment communication (state updates)
+- ✅ Centralized vs Distributed execution modes
 
-### Existing Components
+**See**: [distributed_architecture.md](design/distributed_architecture.md) for full documentation
 
-1. **Base Agent** ([powergrid/agents/base.py](../powergrid/agents/base.py))
+---
+
+## What Was Implemented
+
+### 1. Message Broker System
+
+**Files**:
+- `powergrid/messaging/base.py` - MessageBroker interface, Message dataclass, ChannelManager
+- `powergrid/messaging/memory.py` - InMemoryBroker implementation
+- `powergrid/messaging/utils.py` - Helper utilities
+
+**Key Classes**:
+```python
+class MessageBroker(ABC):
+    """Abstract message broker interface."""
+    def create_channel(channel_name: str)
+    def publish(channel: str, message: Message)
+    def consume(channel: str, recipient_id: str, env_id: str, clear: bool)
+    def subscribe(channel: str, callback: Callable)
+    def clear_environment(env_id: str)
+
+class InMemoryBroker(MessageBroker):
+    """In-memory implementation using Dict[str, List[Message]]."""
+
+class ChannelManager:
+    """Channel naming conventions."""
+    @staticmethod
+    def action_channel(upstream_id, node_id, env_id)
+    @staticmethod
+    def state_update_channel(env_id)
+    @staticmethod
+    def power_flow_result_channel(env_id, agent_id)
+```
+
+### 2. Agent Distributed Execution
+
+**Updated Files**:
+- `powergrid/agents/base.py` - Added `step_distributed()` method
+- `powergrid/agents/grid_agent.py` - Implemented action decomposition, network state consumption
+- `powergrid/agents/device_agent.py` - Device action execution
+
+**Key Methods**:
+```python
+class Agent:
+    def step_distributed(self):
+        """Execute one step with message-based communication."""
+        # 1. Receive action from upstream
+        # 2. Derive and send actions to subordinates
+        # 3. Execute subordinate steps recursively
+        # 4. Execute own action
+        # 5. Publish state updates
+```
+
+### 3. Environment-Side Communication
+
+**Updated Files**:
+- `powergrid/envs/multi_agent/networked_grid_env.py` - Message-based environment
+
+**Key Methods**:
+```python
+class NetworkedGridEnv:
+    def _send_actions_to_agent(agent_id, action):
+        """Send action via message broker."""
+
+    def _consume_all_state_updates():
+        """Consume device state updates."""
+
+    def _apply_state_updates_to_net(updates):
+        """Apply updates to PandaPower network."""
+
+    def _publish_network_state_to_agents():
+        """Send power flow results to agents."""
+```
+
+### 4. Device State Publishing
+
+**Updated Files**:
+- `powergrid/devices/generator.py` - State update publishing
+
+**Key Methods**:
+```python
+class Generator(DeviceAgent):
+    def _publish_state_updates(self):
+        """Publish P, Q, status to environment."""
+        message = Message(
+            payload={
+                'agent_id': self.agent_id,
+                'device_type': 'sgen',
+                'P_MW': self.electrical.P_MW,
+                'Q_MVAr': self.electrical.Q_MVAr,
+                'in_service': self.status.in_service
+            }
+        )
+        self.message_broker.publish(channel, message)
+```
+
+### 5. Execution Modes
+
+**Centralized Mode** (`centralized: true`):
+- Agents directly access PandaPower network
+- No message broker required
+- Traditional multi-agent RL setup
+
+**Distributed Mode** (`centralized: false`):
+- Agents communicate only via message broker
+- Environment has exclusive access to network
+- Realistic distributed control simulation
+
+---
+
+## Remaining Work for Kafka Integration
+
+The current implementation provides the foundation for Kafka integration. To add Kafka support:
+
+### To Implement:
+
+1. **KafkaBroker class** (`powergrid/messaging/kafka.py`):
+   ```python
+   class KafkaBroker(MessageBroker):
+       """Kafka-based message broker."""
+       def __init__(self, bootstrap_servers: List[str]):
+           self.producer = KafkaProducer(...)
+           self.consumer = KafkaConsumer(...)
+
+       def publish(self, channel: str, message: Message):
+           self.producer.send(channel, message.to_json())
+
+       def consume(self, channel: str, ...):
+           records = self.consumer.poll(...)
+           return [Message.from_json(r) for r in records]
+   ```
+
+2. **Configuration**:
+   ```yaml
+   centralized: false
+   message_broker: 'kafka'
+   kafka_config:
+     bootstrap_servers: ['localhost:9092']
+     topic_prefix: 'powergrid'
+   ```
+
+3. **Deployment Changes**:
+   - Run agents in separate processes/containers
+   - Connect all to same Kafka cluster
+   - Environment orchestrates via Kafka topics
+
+### Benefits of Kafka (Future):
+- True distributed training across multiple machines
+- Scalability to hundreds of agents
+- Message persistence and replay
+- Production-ready deployment
+
+---
+
+## Previous Design (Historical)
    - Simple mailbox-based messaging
    - Abstract `observe()` and `act()` methods
    - No explicit hierarchy management
