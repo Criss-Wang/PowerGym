@@ -219,6 +219,7 @@ def main():
         args.train_batch_size = 1000
         args.checkpoint_freq = 1
         args.wandb = False
+        args.no_cuda = True
 
     # Initialize Ray
     ray.init(ignore_reinit_error=True)

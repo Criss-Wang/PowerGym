@@ -17,7 +17,7 @@ from powergrid.core.policies import Policy
 from powergrid.core.protocols import NoProtocol, Protocol
 from powergrid.devices.generator import Generator
 from powergrid.devices.storage import ESS
-from powergrid.messaging.base import MessageBroker
+from powergrid.messaging.base import ChannelManager, MessageBroker
 
 
 GRID_LEVEL = 2  # Level identifier for grid-level agents
@@ -66,7 +66,7 @@ class GridAgent(Agent):
 
         # Build device agents
         device_configs = grid_config.get('devices', [])
-        self.devices = self._build_device_agents(device_configs, message_broker)
+        self.devices = self._build_device_agents(device_configs, message_broker, env_id, agent_id)
 
         super().__init__(
             agent_id=agent_id,
@@ -195,21 +195,42 @@ class GridAgent(Agent):
     def _derive_downstream_actions(
         self,
         upstream_action: Optional[Any]
-    ) -> Dict[AgentID, Any]:
+    ) -> DictType[AgentID, Any]:
         """Derive actions for subordinates from upstream action.
 
+        Decomposes the flat action vector from upstream (or from policy)
+        into per-device actions by splitting based on device action dimensions.
+
         Args:
-            upstream_action: Action received from upstream agent
+            upstream_action: Action received from upstream agent (flat numpy array or dict)
 
         Returns:
             Dict mapping subordinate IDs to their actions
         """
         downstream_actions = {}
-        if self.devices:
-            for agent_id in self.devices.keys():
-                # for now, assume all subordinates get the same upstream action
-                downstream_actions[agent_id] = upstream_action
-                
+        if not self.devices or upstream_action is None:
+            return downstream_actions
+
+        # Handle Dict action space (continuous + discrete)
+        if isinstance(upstream_action, dict):
+            # For Dict spaces with 'continuous' and 'discrete' keys
+            if 'continuous' in upstream_action:
+                action = np.asarray(upstream_action['continuous'])
+            else:
+                # Assume it's already a per-device dict
+                return upstream_action
+        else:
+            action = np.asarray(upstream_action)
+
+        # Decompose flat action vector into per-device actions
+        offset = 0
+        for agent_id, device in self.devices.items():
+            # Get device action size
+            action_size = device.action.dim_c + device.action.dim_d
+            device_action = action[offset:offset + action_size]
+            downstream_actions[agent_id] = device_action
+            offset += action_size
+
         return downstream_actions
 
     def _execute_local_action(self, action: Optional[Any]) -> None:
@@ -228,7 +249,7 @@ class GridAgent(Agent):
     # State Update Hooks
     # ============================================
 
-    def _update_state_with_upstream_info(self, upstream_info: Optional[Dict[str, Any]]) -> None:
+    def _update_state_with_upstream_info(self, upstream_info: Optional[DictType[str, Any]]) -> None:
         """Update internal state based on info received from upstream agent.
 
         Args:
@@ -300,6 +321,29 @@ class GridAgent(Agent):
     # Utility Methods
     # ============================================
 
+    def _consume_network_state(self) -> Optional[DictType[str, Any]]:
+        """Consume network state from environment via message broker.
+
+        Returns:
+            Network state payload or None if no message available
+        """
+        if not self.message_broker or not self.env_id:
+            return None
+
+        channel = ChannelManager.power_flow_result_channel(self.env_id, self.agent_id)
+        messages = self.message_broker.consume(
+            channel,
+            recipient_id=self.agent_id,
+            env_id=self.env_id,
+            clear=True
+        )
+
+        if messages:
+            # Return the most recent message
+            return messages[-1].payload
+
+        return None
+
     def __repr__(self) -> str:
         num_subs = len(self.devices)
         protocol_name = self.protocol.__class__.__name__
@@ -363,18 +407,23 @@ class PowerGridAgent(GridAgent):
             message_broker=message_broker,
             upstream_id=upstream_id,
             env_id=env_id,
+            grid_config=grid_config,
         )
 
     def _build_device_agents(
         self,
         device_configs: List[DictType[str, Any]],
         message_broker: Optional[MessageBroker] = None,
+        env_id: Optional[str] = None,
+        upstream_id: Optional[AgentID] = None,
     ) -> DictType[AgentID, DeviceAgent]:
         """Build device agents from configuration.
 
         Args:
             device_configs: List of device configuration dictionaries
             message_broker: Optional message broker for communication
+            env_id: Environment ID for multi-environment isolation
+            upstream_id: Upstream agent ID (this grid agent)
 
         Returns:
             Dictionary mapping device IDs to DeviceAgent instances
@@ -384,16 +433,18 @@ class PowerGridAgent(GridAgent):
             device_type = device_config.get('type', None)
 
             if device_type == 'Generator':
-                dg_agent = Generator(
+                generator = Generator(
                     message_broker=message_broker,
-                    upstream_id=self.agent_id,
-                    env_id=self.env_id,
+                    upstream_id=upstream_id,
+                    env_id=env_id,
                     device_config=device_config,
                 )
-                self._add_sgen(dg_agent)
-                devices[dg_agent.agent_id] = dg_agent
+                # Don't add to network here - that's done separately via _add_sgen()
+                devices[generator.agent_id] = generator
             else:
-                raise ValueError(f"Unknown device type: {device_type}")
+                # Only 'Generator' type is supported
+                # ESS and other device types are not yet implemented for distributed mode
+                pass
 
         return devices
 
@@ -627,23 +678,41 @@ class PowerGridAgent(GridAgent):
         """Update cost and safety metrics for the grid.
 
         Args:
-            net: PandaPower network with power flow results
+            net: PandaPower network with power flow results (None for distributed mode)
         """
         self.cost, self.safety = 0, 0
 
+        # Always update device-level costs (devices have local state)
         for dg in self.sgen.values():
             dg.update_cost_safety()
             self.cost += dg.cost
             self.safety += dg.safety
 
-        if net["converged"]:
-            local_bus_ids = pp.get_element_index(net, 'bus', self.name, False)
-            local_vm = net.res_bus.loc[local_bus_ids].vm_pu.values
-            overvoltage = np.maximum(local_vm - 1.05, 0).sum()
-            undervoltage = np.maximum(0.95 - local_vm, 0).sum()
+        # Network-level safety metrics
+        if net is not None:
+            # Centralized mode: access net directly
+            if net.get("converged", False):
+                local_bus_ids = pp.get_element_index(net, 'bus', self.name, False)
+                local_vm = net.res_bus.loc[local_bus_ids].vm_pu.values
+                overvoltage = np.maximum(local_vm - 1.05, 0).sum()
+                undervoltage = np.maximum(0.95 - local_vm, 0).sum()
 
-            local_line_ids = pp.get_element_index(net, 'line', self.name, False)
-            local_line_loading = net.res_line.loc[local_line_ids].loading_percent.values
-            overloading = np.maximum(local_line_loading - 100, 0).sum() * 0.01
+                local_line_ids = pp.get_element_index(net, 'line', self.name, False)
+                local_line_loading = net.res_line.loc[local_line_ids].loading_percent.values
+                overloading = np.maximum(local_line_loading - 100, 0).sum() * 0.01
 
-            self.safety += overloading + overvoltage + undervoltage
+                self.safety += overloading + overvoltage + undervoltage
+        else:
+            # Distributed mode: receive network state via messages
+            if self.message_broker and self.env_id:
+                network_state = self._consume_network_state()
+                if network_state and network_state.get('converged', False):
+                    # Extract pre-computed safety metrics from message
+                    bus_voltages = network_state.get('bus_voltages', {})
+                    line_loading = network_state.get('line_loading', {})
+
+                    overvoltage = bus_voltages.get('overvoltage', 0)
+                    undervoltage = bus_voltages.get('undervoltage', 0)
+                    overloading = line_loading.get('overloading', 0)
+
+                    self.safety += overloading + overvoltage + undervoltage

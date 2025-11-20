@@ -14,8 +14,8 @@ from typing import Any, Dict, List, Optional, Union
 
 import gymnasium as gym
 
-from powergrid.core.observation import AgentID, Message, Observation
-from powergrid.messaging.base import MessageBroker, ChannelManager, MessageType
+from powergrid.core.observation import AgentID, Observation
+from powergrid.messaging.base import MessageBroker, ChannelManager, Message, MessageType
 
 class Agent(ABC):
     """Abstract base class for all agents in the hierarchy.

@@ -1,11 +1,10 @@
-"""
-MultiAgentMicrogrids: Concrete environment for 3 networked microgrids.
+"""MultiAgentMicrogrids: Concrete environment for 3 networked microgrids.
 
 This is a modernized version of the legacy MultiAgentMicrogrids that uses
 PowerGridAgent instead of GridEnv while maintaining identical logic.
 """
 
-from typing import List, Dict
+from typing import Dict, List
 
 import pandapower as pp
 
@@ -139,6 +138,8 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
         self.agent_dict.update({a.agent_id: a for a in microgrid_agents})
         self.possible_agents = list(self.agent_dict.keys())
         self.agents = self.possible_agents
+
+        return net
 
     def _reward_and_safety(self):
         """
