@@ -33,7 +33,7 @@ Runtime: ~35 seconds for 24 timesteps
 import numpy as np
 import pandapower as pp
 
-from powergrid.agents.grid_agent import PowerGridAgentV2
+from powergrid.agents.grid_agent import PowerGridAgent
 from powergrid.core.protocols import PriceSignalProtocol
 from powergrid.devices.generator import Generator
 from powergrid.devices.storage import ESS
@@ -116,7 +116,7 @@ class PriceCoordinationEnv(NetworkedGridEnv):
 
         # Create GridAgent with price signal protocol
         # Initial price = $40/MWh (will vary during simulation)
-        mg_agent = PowerGridAgentV2(
+        mg_agent = PowerGridAgent(
             net=net,
             grid_config={
                 "name": "MG1",

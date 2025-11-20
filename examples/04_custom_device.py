@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from powergrid.agents.device_agent import DeviceAgent
-from powergrid.agents.grid_agent import PowerGridAgentV2
+from powergrid.agents.grid_agent import PowerGridAgent
 from powergrid.core.policies import Policy
 from powergrid.core.protocols import CentralizedSetpointProtocol, NoProtocol, Protocol
 from powergrid.core.state import DeviceState, PhaseModel
@@ -351,7 +351,7 @@ class CustomDeviceEnv(NetworkedGridEnv):
         )
 
         # Create GridAgent
-        mg_agent = PowerGridAgentV2(
+        mg_agent = PowerGridAgent(
             net=net,
             grid_config={
                 "name": "MG1",

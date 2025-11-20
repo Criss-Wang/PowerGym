@@ -19,7 +19,7 @@ import pytest
 import numpy as np
 import pandapower as pp
 
-from powergrid.agents.grid_agent import PowerGridAgentV2
+from powergrid.agents.grid_agent import PowerGridAgent
 from powergrid.core.protocols import (
     PriceSignalProtocol,
     CentralizedSetpointProtocol,
@@ -95,7 +95,7 @@ class TestVerticalProtocols:
         net, devices = microgrid_with_devices
 
         protocol = PriceSignalProtocol(initial_price=40.0)
-        mg_agent = PowerGridAgentV2(
+        mg_agent = PowerGridAgent(
             net=net,
             grid_config={"name": "MG1", "base_power": 1.0},
             devices=devices,
@@ -133,7 +133,7 @@ class TestVerticalProtocols:
         net, devices = microgrid_with_devices
 
         protocol = CentralizedSetpointProtocol()
-        mg_agent = PowerGridAgentV2(
+        mg_agent = PowerGridAgent(
             net=net,
             grid_config={"name": "MG1", "base_power": 1.0},
             devices=devices,
@@ -169,7 +169,7 @@ class TestVerticalProtocols:
         net, devices = microgrid_with_devices
 
         protocol = PriceSignalProtocol(initial_price=50.0)
-        mg_agent = PowerGridAgentV2(
+        mg_agent = PowerGridAgent(
             net=net,
             grid_config={"name": "MG1", "base_power": 1.0},
             devices=devices,
@@ -211,7 +211,7 @@ class TestHorizontalProtocols:
                 },
             )
 
-            mg_agent = PowerGridAgentV2(
+            mg_agent = PowerGridAgent(
                 net=net,
                 grid_config={"name": f"MG{i+1}", "base_power": 1.0},
                 devices=[gen],
@@ -321,7 +321,7 @@ class TestMessageDelivery:
         )
 
         protocol = PriceSignalProtocol(initial_price=50.0)
-        mg_agent = PowerGridAgentV2(
+        mg_agent = PowerGridAgent(
             net=net,
             grid_config={"name": "MG1", "base_power": 1.0},
             devices=[gen],
@@ -401,7 +401,7 @@ class TestProtocolIntegration:
         )
 
         protocol = CentralizedSetpointProtocol()
-        mg_agent = PowerGridAgentV2(
+        mg_agent = PowerGridAgent(
             net=net,
             grid_config={"name": "MG1", "base_power": 1.0},
             devices=[gen],
@@ -459,7 +459,7 @@ class TestProtocolEdgeCases:
         net = IEEE13Bus("MG1")
 
         protocol = CentralizedSetpointProtocol()
-        mg_agent = PowerGridAgentV2(
+        mg_agent = PowerGridAgent(
             net=net,
             grid_config={"name": "MG1", "base_power": 1.0},
             devices=[],  # No devices

@@ -339,6 +339,34 @@ class Generator(DeviceAgent):
             safety += pf_penalty(P, Q, self._generator_config.min_pf)
         self.safety = safety * self._generator_config.dt_h
 
+    def _publish_state_updates(self) -> None:
+        """Publish electrical state to environment for pandapower sync.
+
+        This method is called during hierarchical execution to send device
+        state updates to the environment via message broker.
+        """
+        if not self.message_broker:
+            return
+
+        from powergrid.messaging.base import ChannelManager, Message, MessageType
+
+        channel = ChannelManager.state_update_channel(self.env_id)
+        message = Message(
+            env_id=self.env_id,
+            sender_id=self.agent_id,
+            recipient_id="environment",
+            timestamp=self._timestep,
+            message_type=MessageType.STATE_UPDATE,
+            payload={
+                'agent_id': self.agent_id,
+                'device_type': 'sgen',
+                'P_MW': float(self.electrical.P_MW),
+                'Q_MVAr': float(self.electrical.Q_MVAr or 0.0),
+                'in_service': bool(self.status.in_service),
+            }
+        )
+        self.message_broker.publish(channel, message)
+
     def feasible_action(self) -> None:
         """Optionally clip action.c to feasible set before use."""
         if self.action.dim_c:
