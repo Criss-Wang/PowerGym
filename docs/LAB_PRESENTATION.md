@@ -90,7 +90,7 @@ graph LR
 
 ## Part 2: Architecture & Key Innovations (7 minutes)
 
-### Slide 4: System Architecture
+### Slide 4: System Architecture (Distributed Mode)
 
 ```mermaid
 graph TB
@@ -124,9 +124,9 @@ graph TB
     Broker <--> GA1
     Broker <--> GA2
     Broker <--> GA3
-    GA1 --> D1
-    GA2 --> D2
-    GA3 --> D3
+    Broker <--> D1
+    Broker <--> D2
+    Broker <--> D3
     Env --> PP
 
     style Broker fill:#87ceeb
@@ -134,7 +134,7 @@ graph TB
     style PP fill:#e3f2fd
 ```
 
-**Key Point**: Message broker enables true distributed control simulation
+**Key Point**: In distributed mode, ALL communication flows through the message broker—GridAgents communicate with DeviceAgents via messages, enforcing realistic distributed control
 
 ---
 
