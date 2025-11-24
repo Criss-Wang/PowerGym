@@ -12,10 +12,8 @@ Powergrid documentation
    :caption: Contents:
 
    README
-   multi_agent_quickstart
-   protocol_guide
-   agent_abstraction
-   Architecture_Agent_Data_Flow
+   getting_started
+   guides/protocols
    
 
 

@@ -6,9 +6,9 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = 'Powergrid'
-copyright = '2025, Philemon Maangi'
-author = 'Philemon Maangi'
+project = 'PowerGrid'
+copyright = '2025, Zhenlin Wang'
+author = 'Zhenlin Wang'
 release = 'v2.0.3'
 
 # -- General configuration ---------------------------------------------------
