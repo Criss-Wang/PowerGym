@@ -21,6 +21,34 @@ from powergrid.utils.helpers import gen_uuid
 from powergrid.utils.typing import AgentID
 
 class NetworkedGridEnv(ParallelEnv):
+    """Base environment for networked power grids with multi-agent control.
+
+    This environment supports both centralized and distributed execution modes:
+
+    Centralized Mode (centralized=True):
+    - Agents directly access and modify the PandaPower network object
+    - All state updates happen synchronously through direct method calls
+    - Traditional multi-agent RL setup with full observability
+    - No message broker required
+
+    Distributed Mode (centralized=False):
+    - Agents communicate via message broker, never accessing net directly
+    - Environment publishes network state (voltages, line loading) to agents via messages
+    - Agents publish state updates (P, Q, status) to environment via messages
+    - Mimics realistic distributed control systems with limited communication
+
+    Attributes:
+        env_config: Configuration dictionary with keys:
+            - centralized: bool, execution mode (default: False)
+            - max_episode_steps: int, episode length (default: 24)
+            - train: bool, training mode flag (default: True)
+            - message_broker: str, broker type for distributed mode (default: 'in_memory')
+        centralized: bool, whether to use centralized or distributed execution
+        message_broker: MessageBroker instance for distributed communication, or None
+        agent_dict: Dictionary of all grid agents in the environment
+        net: PandaPower network object containing the complete power system
+    """
+
     def __init__(self, env_config):
         super().__init__()
         self._env_id = gen_uuid()

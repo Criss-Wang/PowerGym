@@ -677,8 +677,18 @@ class PowerGridAgent(GridAgent):
     def update_cost_safety(self, net):
         """Update cost and safety metrics for the grid.
 
+        This method computes both device-level costs (generation costs) and
+        network-level safety metrics (voltage violations, line overloading).
+
+        Execution modes:
+        - Centralized (net != None): Directly accesses PandaPower network for
+          voltage and line loading information
+        - Distributed (net == None): Receives network state via messages from
+          environment through message broker, ensuring agents never access the
+          network object directly
+
         Args:
-            net: PandaPower network with power flow results (None for distributed mode)
+            net: PandaPower network with power flow results, or None for distributed mode
         """
         self.cost, self.safety = 0, 0
 

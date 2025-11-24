@@ -7,15 +7,19 @@ It provides modular device models (DG, RES, ESS, Shunt, Transformer, Grid) with 
 
 ## Highlights
 
-- ⚡ **Plug-and-play devices**: `DG`, `RES` (solar/wind), `ESS`, `Shunt`, `Transformer` (OLTC), `Grid`, `Switch`
+- ⚡ **Plug-and-play devices**: `Generator`, `ESS`, `Grid`, `Shunt`, `Transformer` (OLTC), `Switch`
 - 🔌 **Pandapower integration** with idempotent device → network attachment
-- 🧩 **Gymnasium-compatible** single-agent base (`GridBaseEnv`)
+- 🧩 **Single-agent environments**: Gymnasium-compatible `GridBaseEnv`
+- 👥 **Multi-agent environments**: PettingZoo ParallelEnv for networked microgrids
+- 🌐 **Distributed execution**: Message-based communication between agents (centralized & distributed modes)
 - 🎛️ **Mixed action spaces**: continuous (`Box`) and discrete (`Discrete` / `MultiDiscrete`) combined in a `Dict`
 - 🔄 **NormalizeActionWrapper**: agents act in `[-1, 1]`, environment rescales to physical ranges
-- 🛡️ **Safety framework** (`SafetySpec`, `total_safety`) for penalties: over-rating, power factor, SOC, voltage, line loading, etc.
+- 🛡️ **Safety framework**: penalties for over-rating, power factor, SOC, voltage, line loading, etc.
 - 💰 **Cost helpers**: quadratic, piecewise linear, ramping, tap wear, energy settlement
-- ✅ **Unit tests** for devices and environment logic
-- 🧪 **RL-ready**: works with Stable-Baselines3, RLlib, and custom Gym agents
+- 🎯 **Coordination protocols**: Price signals, setpoint control, P2P trading, consensus
+- 📨 **Message broker system**: InMemoryBroker with extensible interface for Kafka/RabbitMQ
+- ✅ **Comprehensive tests** for devices, agents, and environments
+- 🧪 **RL-ready**: works with Stable-Baselines3, RLlib (MAPPO/PPO), and custom agents
 
 ---
 
@@ -62,11 +66,12 @@ pip install -e .
 
 # Quick Start
 
-## Sample Environment setup
-```bash
+## Single-Agent Environment
+
+```python
 from powergrid.envs.single_agent.ieee13_mg import IEEE13Env
 
-# Create and wrap: agent acts in [-1,1] for the continuous part
+# Create environment: agent acts in [-1,1] for the continuous part
 env = IEEE13Env({"episode_length": 24, "train": True})
 obs, info = env.reset()
 
@@ -75,6 +80,52 @@ action = env.action_space.sample()
 obs, reward, terminated, truncated, info = env.step(action)
 print("reward=", reward, "converged=", info.get("converged"))
 ```
+
+## Multi-Agent Environment (Centralized)
+
+```python
+from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogrids
+
+# Create multi-agent environment (3 networked microgrids)
+env_config = {
+    "centralized": True,  # Traditional multi-agent RL
+    "max_episode_steps": 96,
+    "train": True,
+    "dataset_path": "data/data2023-2024.pkl"
+}
+env = MultiAgentMicrogrids(env_config)
+obs_dict, info = env.reset()
+
+# Each agent acts independently
+actions = {agent_id: env.action_spaces[agent_id].sample()
+           for agent_id in env.agents}
+obs_dict, rewards, terminateds, truncateds, infos = env.step(actions)
+```
+
+## Multi-Agent Environment (Distributed)
+
+```python
+from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogrids
+
+# Create distributed multi-agent environment
+env_config = {
+    "centralized": False,  # Distributed execution with message broker
+    "message_broker": "in_memory",  # InMemoryBroker (can extend to Kafka)
+    "max_episode_steps": 96,
+    "train": True,
+    "dataset_path": "data/data2023-2024.pkl"
+}
+env = MultiAgentMicrogrids(env_config)
+
+# Agents communicate via message broker, never access network directly
+obs_dict, info = env.reset()
+actions = {agent_id: policy(obs_dict[agent_id]) for agent_id in env.agents}
+obs_dict, rewards, terminateds, truncateds, infos = env.step(actions)
+```
+
+**Key Difference**:
+- **Centralized**: Agents directly access PandaPower network (traditional MARL)
+- **Distributed**: Agents communicate via messages only (realistic distributed control)
 
 ## Action Space
 
