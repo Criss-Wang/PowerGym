@@ -157,3 +157,6 @@ checkpoints/*
 
 # proposal docs
 */paper_related/*
+
+# preparation docs (not for remote)
+docs/prep/*
