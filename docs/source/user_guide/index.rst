@@ -1,9 +1,15 @@
 User Guides
 ===========
 
-This guide helps you configure and customize PowerGrid 2.0 for your specific use cases.
-
 .. toctree::
-   :maxdepth: 2
+   :hidden:
 
-   configuration
+   Configuration <configuration>
+   Training <training>
+   Testing <testing>
+
+Guides for configuring, training, and testing PowerGrid.
+
+- :doc:`configuration` - Environment configuration and parameters
+- :doc:`training` - Training policies with RLlib
+- :doc:`testing` - Evaluation and performance analysis

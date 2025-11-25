@@ -1,0 +1,10 @@
+/* Hide "Section Navigation" title in left sidebar */
+.bd-sidebar .sidebar-primary-items__start > p.sidebar-caption,
+.bd-sidebar .sidebar-primary-items__start > .caption-text {
+    display: none;
+}
+
+/* Hide section navigation caption */
+nav.bd-docs-nav p.caption {
+    display: none;
+}

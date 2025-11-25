@@ -43,13 +43,34 @@ exclude_patterns = []
 
 html_theme = 'pydata_sphinx_theme'
 html_theme_options = {
-    "collapse_navigation": False,
-    "navigation_depth": 4,
-    "show_toc_level": 2,
-    "navbar_align": "left",
     "logo": {
         "text": "PowerGrid 2.0",
     },
+    "navbar_start": ["navbar-logo"],
+    "navbar_center": ["navbar-nav"],
+    "navbar_end": ["navbar-icon-links"],
+    "navbar_persistent": ["search-button"],
+    "primary_sidebar_end": [],
+    "secondary_sidebar_items": ["page-toc"],
+    "show_toc_level": 2,
+    "navigation_depth": 4,
+    "show_nav_level": 2,
+    "collapse_navigation": False,
+    "header_links_before_dropdown": 6,
+    "icon_links": [
+        {
+            "name": "GitHub",
+            "url": "https://github.com/yourusername/powergrid",
+            "icon": "fab fa-github-square",
+        },
+    ],
 }
-
+html_sidebars = {
+    "**": ["search-field", "sidebar-nav-bs"]
+}
 html_static_path = ['_static']
+
+# Custom CSS files
+html_css_files = [
+    'css/custom.css',
+]

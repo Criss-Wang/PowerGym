@@ -1,17 +1,21 @@
 Environments
 ============
 
+.. toctree::
+   :hidden:
+
+   IEEE 13-Bus <ieee13>
+   IEEE 34-Bus <ieee34>
+   CIGRE MV <cigre_mv>
+
 PowerGrid environments provide realistic power grid simulations for multi-agent reinforcement learning.
 
 Available Environments
 ----------------------
 
-.. toctree::
-   :maxdepth: 1
-
-   ieee13
-   ieee34
-   cigre_mv
+- :doc:`ieee13` - IEEE 13-bus test feeder
+- :doc:`ieee34` - IEEE 34-bus test feeder
+- :doc:`cigre_mv` - CIGRE medium voltage network
 
 Environment Interface
 ---------------------

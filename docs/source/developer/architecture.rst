@@ -1,5 +1,5 @@
 Developer Architecture
-=====================
+======================
 
 Internal architecture and design decisions for contributors.
 

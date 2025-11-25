@@ -9,29 +9,10 @@ Multi-Agent Environments
    :undoc-members:
    :show-inheritance:
 
-Single-Agent Environments
--------------------------
+Multi-Agent Microgrids
+----------------------
 
-IEEE 13-Bus Microgrid
-~~~~~~~~~~~~~~~~~~~~~
-
-.. automodule:: powergrid.envs.single_agent.ieee13_mg
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-IEEE 34-Bus Microgrid
-~~~~~~~~~~~~~~~~~~~~~
-
-.. automodule:: powergrid.envs.single_agent.ieee34_mg
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-CIGRE MV Network
-~~~~~~~~~~~~~~~~
-
-.. automodule:: powergrid.envs.single_agent.cigre_mv
+.. automodule:: powergrid.envs.multi_agent.multi_agent_microgrids
    :members:
    :undoc-members:
    :show-inheritance:

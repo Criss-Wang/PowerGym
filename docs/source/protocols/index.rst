@@ -1,17 +1,21 @@
 Protocols
 =========
 
+.. toctree::
+   :hidden:
+
+   Vertical Protocols <vertical>
+   Horizontal Protocols <horizontal>
+   Custom Protocols <custom>
+
 Coordination protocols define how agents communicate and coordinate.
 
 Protocol Types
 --------------
 
-.. toctree::
-   :maxdepth: 1
-
-   vertical
-   horizontal
-   custom
+- :doc:`vertical` - Parent-subordinate coordination
+- :doc:`horizontal` - Peer-to-peer coordination
+- :doc:`custom` - Creating custom protocols
 
 Overview
 --------

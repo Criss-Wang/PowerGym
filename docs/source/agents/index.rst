@@ -1,16 +1,19 @@
 Agents
 ======
 
+.. toctree::
+   :hidden:
+
+   GridAgent <grid_agent>
+   DeviceAgent <device_agent>
+
 PowerGrid uses a hierarchical multi-agent architecture with GridAgents and DeviceAgents.
 
 Agent Types
 -----------
 
-.. toctree::
-   :maxdepth: 1
-
-   grid_agent
-   device_agent
+- :doc:`grid_agent` - Microgrid controller that coordinates devices
+- :doc:`device_agent` - Controls individual distributed energy resources
 
 Agent Hierarchy
 ---------------

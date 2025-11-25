@@ -1,19 +1,25 @@
 Devices
 =======
 
+.. toctree::
+   :hidden:
+
+   Energy Storage <storage>
+   Generator <generator>
+   Solar PV <solar>
+   Transformer <transformer>
+   Capacitor Bank <capacitor>
+
 PowerGrid includes models for various distributed energy resources (DER).
 
 Device Types
 ------------
 
-.. toctree::
-   :maxdepth: 1
-
-   storage
-   generator
-   solar
-   transformer
-   capacitor
+- :doc:`storage` - Battery energy storage systems
+- :doc:`generator` - Diesel generators
+- :doc:`solar` - Solar photovoltaic panels
+- :doc:`transformer` - Voltage regulation transformers
+- :doc:`capacitor` - Reactive power compensation
 
 Device Interface
 ----------------
