@@ -152,7 +152,7 @@ python examples/05_mappo_training.py --test
 ## 📚 Documentation
 
 - **[Getting Started](getting_started.md)**: Tutorials and examples
-- **[Protocol Guide](guides/protocols.md)**: Coordination protocols in depth
+- **[Protocol Guide](api/core/protocols)**: Coordination protocols in depth
 - **API Reference**: See docstrings in `powergrid/`
 
 ---

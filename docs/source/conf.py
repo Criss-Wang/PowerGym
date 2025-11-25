@@ -21,7 +21,6 @@ sys.path.insert(0, os.path.abspath('../..'))
 extensions = [
     'myst_parser',
     'sphinxcontrib.mermaid',
-    'sphinx_rtd_theme',
     'sphinx.ext.autodoc',
     'sphinx_autodoc_typehints',
 ]
@@ -42,10 +41,15 @@ exclude_patterns = []
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = 'sphinx_rtd_theme'
+html_theme = 'pydata_sphinx_theme'
 html_theme_options = {
-    'collapse_navigation': False,
-    'navigation_depth': 4,
+    "collapse_navigation": False,
+    "navigation_depth": 4,
+    "show_toc_level": 2,
+    "navbar_align": "left",
+    "logo": {
+        "text": "PowerGrid 2.0",
+    },
 }
 
 html_static_path = ['_static']
