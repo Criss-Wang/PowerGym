@@ -4,137 +4,125 @@
 
 .. toctree::
    :hidden:
+   :maxdepth: 1
 
-   README
-   getting_started
-   user_guide/installation
-   use_cases/index
-   examples/index
-   core/index
-   environments/index
-   agents/index
-   devices/index
-   protocols/index
-   user_guide/index
-   api/index
-   developer/index
+   Getting Started <getting_started>
+   Use Cases <use_cases/index>
+   Examples <examples/index>
+   Documentation <docs/index>
+   API Reference <api/index>
 
 Welcome to PowerGrid
 ====================
 
 An open-source framework to build and scale multi-agent reinforcement learning for smart grid control.
 
-.. raw:: html
+.. grid:: 1 2 2 3
+   :gutter: 3
+   :class-container: sd-text-center
 
-   <div class="container-fluid">
-      <div class="row">
-         <div class="col-md-4">
-            <div class="text-center p-3">
-               <h3>🚀 Get Started with PowerGrid</h3>
-               <p>Quick start guide to set up PowerGrid and run your first multi-agent simulation.</p>
-               <a href="getting_started.html" class="btn btn-primary">Get Started</a>
-            </div>
-         </div>
-         <div class="col-md-4">
-            <div class="text-center p-3">
-               <h3>📦 Install PowerGrid</h3>
-               <p>Install PowerGrid with pip and set up your development environment.</p>
-               <a href="user_guide/installation.html" class="btn btn-primary">Install</a>
-            </div>
-         </div>
-         <div class="col-md-4">
-            <div class="text-center p-3">
-               <h3>📚 PowerGrid Example Gallery</h3>
-               <p>Explore example networks, training scripts, and use cases.</p>
-               <a href="examples/index.html" class="btn btn-primary">Examples</a>
-            </div>
-         </div>
-      </div>
-   </div>
+   .. grid-item-card:: 🚀 Get Started with PowerGrid
+      :link: getting_started
+      :link-type: doc
+
+      Quick start guide to set up PowerGrid and run your first multi-agent simulation
+
+   .. grid-item-card:: 📦 Install PowerGrid
+      :link: user_guide/installation
+      :link-type: doc
+
+      Install PowerGrid with pip and set up your development environment
+
+   .. grid-item-card:: 📚 PowerGrid Example Gallery
+      :link: examples/index
+      :link-type: doc
+
+      Explore example networks, training scripts, and use cases
 
 Scale with PowerGrid
 --------------------
 
-**Multi-Agent Control**
+.. tab-set::
 
-.. code-block:: python
+   .. tab-item:: Multi-Agent Control
 
-   from powergrid.envs import NetworkedGridEnv
+      .. code-block:: python
 
-   # Create multi-agent environment
-   env = NetworkedGridEnv({
-       'env_name': 'ieee13_mg',
-       'mode': 'distributed',
-       'num_microgrids': 2
-   })
+         from powergrid.envs import NetworkedGridEnv
 
-   # Run episode with multiple GridAgents
-   observations, infos = env.reset()
-   for step in range(96):  # 24 hours
-       actions = {agent: policy(obs) for agent, obs in observations.items()}
-       observations, rewards, dones, truncs, infos = env.step(actions)
+         # Create multi-agent environment
+         env = NetworkedGridEnv({
+             'env_name': 'ieee13_mg',
+             'mode': 'distributed',
+             'num_microgrids': 2
+         })
 
-**Hierarchical Coordination**
+         # Run episode with multiple GridAgents
+         observations, infos = env.reset()
+         for step in range(96):  # 24 hours
+             actions = {agent: policy(obs) for agent, obs in observations.items()}
+             observations, rewards, dones, truncs, infos = env.step(actions)
 
-.. code-block:: python
+   .. tab-item:: Hierarchical Coordination
 
-   from powergrid.agents import GridAgent
-   from powergrid.core.protocols import PriceSignalProtocol
+      .. code-block:: python
 
-   # GridAgent coordinates subordinate devices
-   grid_agent = GridAgent(
-       agent_id='MG1',
-       subordinates=[battery, generator, solar],
-       vertical_protocol=PriceSignalProtocol(initial_price=50.0)
-   )
+         from powergrid.agents import GridAgent
+         from powergrid.core.protocols import PriceSignalProtocol
 
-**Peer-to-Peer Trading**
+         # GridAgent coordinates subordinate devices
+         grid_agent = GridAgent(
+             agent_id='MG1',
+             subordinates=[battery, generator, solar],
+             vertical_protocol=PriceSignalProtocol(initial_price=50.0)
+         )
 
-.. code-block:: python
+   .. tab-item:: Peer-to-Peer Trading
 
-   from powergrid.core.protocols import PeerToPeerTradingProtocol
+      .. code-block:: python
 
-   # Enable local energy markets between microgrids
-   env = NetworkedGridEnv({
-       'env_name': 'ieee13_mg',
-       'horizontal_protocol': PeerToPeerTradingProtocol(trading_fee=0.01)
-   })
+         from powergrid.core.protocols import PeerToPeerTradingProtocol
 
-**Training with RLlib**
+         # Enable local energy markets between microgrids
+         env = NetworkedGridEnv({
+             'env_name': 'ieee13_mg',
+             'horizontal_protocol': PeerToPeerTradingProtocol(trading_fee=0.01)
+         })
 
-.. code-block:: python
+   .. tab-item:: Training with RLlib
 
-   from ray.rllib.algorithms.ppo import PPOConfig
+      .. code-block:: python
 
-   config = (
-       PPOConfig()
-       .environment(NetworkedGridEnv, env_config={'env_name': 'ieee13_mg'})
-       .training(lr=3e-4, train_batch_size=4000)
-   )
-   trainer = config.build()
-   trainer.train()
+         from ray.rllib.algorithms.ppo import PPOConfig
+
+         config = (
+             PPOConfig()
+             .environment(NetworkedGridEnv, env_config={'env_name': 'ieee13_mg'})
+             .training(lr=3e-4, train_batch_size=4000)
+         )
+         trainer = config.build()
+         trainer.train()
 
 Beyond the Basics
 -----------------
 
-.. raw:: html
+.. grid:: 1 2 3 3
+   :gutter: 3
 
-   <div class="container-fluid">
-      <div class="row">
-         <div class="col-md-4">
-            <h4>⚡ PowerGrid Core</h4>
-            <p>Scale multi-agent control with hierarchical agents, flexible protocols, and realistic AC power flow physics.</p>
-            <a href="core/overview.html">Learn more about PowerGrid Core →</a>
-         </div>
-         <div class="col-md-4">
-            <h4>🌐 Environments</h4>
-            <p>Deploy on standard IEEE test feeders (13-bus, 34-bus) and CIGRE networks with distributed energy resources.</p>
-            <a href="environments/index.html">Learn more about Environments →</a>
-         </div>
-         <div class="col-md-4">
-            <h4>🤖 Multi-Agent RL</h4>
-            <p>Train coordinated policies with RLlib MAPPO, implement custom protocols, and scale to hundreds of agents.</p>
-            <a href="user_guide/training.html">Learn more about Training →</a>
-         </div>
-      </div>
-   </div>
+   .. grid-item-card:: ⚡ PowerGrid Core
+      :link: core/index
+      :link-type: doc
+
+      Scale multi-agent control with hierarchical agents, flexible protocols, and realistic AC power flow physics
+
+   .. grid-item-card:: 🌐 Environments
+      :link: environments/index
+      :link-type: doc
+
+      Deploy on standard IEEE test feeders (13-bus, 34-bus) and CIGRE networks with distributed energy resources
+
+   .. grid-item-card:: 🤖 Multi-Agent RL
+      :link: user_guide/training
+      :link-type: doc
+
+      Train coordinated policies with RLlib MAPPO, implement custom protocols, and scale to hundreds of agents

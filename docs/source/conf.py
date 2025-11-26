@@ -23,6 +23,9 @@ extensions = [
     'sphinxcontrib.mermaid',
     'sphinx.ext.autodoc',
     'sphinx_autodoc_typehints',
+    'sphinx_design',
+    'sphinx_copybutton',
+    'sphinx.ext.githubpages',  # Creates .nojekyll file for GitHub Pages
 ]
 
 myst_enable_extensions = [
@@ -47,27 +50,30 @@ html_theme_options = {
         "text": "PowerGrid 2.0",
     },
     "navbar_start": ["navbar-logo"],
-    "navbar_center": ["navbar-nav"],
-    "navbar_end": ["navbar-icon-links"],
-    "navbar_persistent": ["search-button"],
+    "navbar_center": ["navbar-nav"],  # Show navbar items
+    "navbar_end": ["navbar-icon-links", "theme-switcher"],
+    "navbar_align": "left",
     "primary_sidebar_end": [],
     "secondary_sidebar_items": ["page-toc"],
     "show_toc_level": 2,
     "navigation_depth": 4,
-    "show_nav_level": 2,
     "collapse_navigation": False,
-    "header_links_before_dropdown": 6,
+    "header_links_before_dropdown": 10,  # Show all items, no dropdown
     "icon_links": [
         {
             "name": "GitHub",
             "url": "https://github.com/yourusername/powergrid",
             "icon": "fab fa-github-square",
+            "type": "fontawesome",
         },
     ],
 }
+
+# Force global toctree in sidebar on all pages (like Ray)
 html_sidebars = {
-    "**": ["search-field", "sidebar-nav-bs"]
+    "**": ["main-sidebar"]
 }
+
 html_static_path = ['_static']
 
 # Custom CSS files
