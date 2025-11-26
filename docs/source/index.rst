@@ -12,35 +12,35 @@
    Documentation <docs/index>
    API Reference <api/index>
 
-Welcome to PowerGrid
-====================
+PowerGrid
+=========
 
-An open-source framework to build and scale multi-agent reinforcement learning for smart grid control.
+An open-source framework for multi-agent reinforcement learning in smart grid control.
 
 .. grid:: 1 2 2 3
    :gutter: 3
    :class-container: sd-text-center
 
-   .. grid-item-card:: 🚀 Get Started with PowerGrid
+   .. grid-item-card:: 🚀 Get Started
       :link: getting_started
       :link-type: doc
 
-      Quick start guide to set up PowerGrid and run your first multi-agent simulation
+      Set up PowerGrid and run your first simulation
 
-   .. grid-item-card:: 📦 Install PowerGrid
+   .. grid-item-card:: 📦 Installation
       :link: user_guide/installation
       :link-type: doc
 
-      Install PowerGrid with pip and set up your development environment
+      Install with pip or from source
 
-   .. grid-item-card:: 📚 PowerGrid Example Gallery
+   .. grid-item-card:: 📚 Examples
       :link: examples/index
       :link-type: doc
 
-      Explore example networks, training scripts, and use cases
+      Browse example networks and training scripts
 
-Scale with PowerGrid
---------------------
+Quick Examples
+--------------
 
 .. tab-set::
 
@@ -50,16 +50,14 @@ Scale with PowerGrid
 
          from powergrid.envs import NetworkedGridEnv
 
-         # Create multi-agent environment
          env = NetworkedGridEnv({
              'env_name': 'ieee13_mg',
              'mode': 'distributed',
              'num_microgrids': 2
          })
 
-         # Run episode with multiple GridAgents
          observations, infos = env.reset()
-         for step in range(96):  # 24 hours
+         for step in range(96):
              actions = {agent: policy(obs) for agent, obs in observations.items()}
              observations, rewards, dones, truncs, infos = env.step(actions)
 
@@ -70,26 +68,24 @@ Scale with PowerGrid
          from powergrid.agents import GridAgent
          from powergrid.core.protocols import PriceSignalProtocol
 
-         # GridAgent coordinates subordinate devices
          grid_agent = GridAgent(
              agent_id='MG1',
              subordinates=[battery, generator, solar],
              vertical_protocol=PriceSignalProtocol(initial_price=50.0)
          )
 
-   .. tab-item:: Peer-to-Peer Trading
+   .. tab-item:: P2P Trading
 
       .. code-block:: python
 
          from powergrid.core.protocols import PeerToPeerTradingProtocol
 
-         # Enable local energy markets between microgrids
          env = NetworkedGridEnv({
              'env_name': 'ieee13_mg',
              'horizontal_protocol': PeerToPeerTradingProtocol(trading_fee=0.01)
          })
 
-   .. tab-item:: Training with RLlib
+   .. tab-item:: RLlib Training
 
       .. code-block:: python
 
@@ -100,11 +96,11 @@ Scale with PowerGrid
              .environment(NetworkedGridEnv, env_config={'env_name': 'ieee13_mg'})
              .training(lr=3e-4, train_batch_size=4000)
          )
-         trainer = config.build()
-         trainer.train()
+         algo = config.build()
+         algo.train()
 
-Beyond the Basics
------------------
+Key Features
+------------
 
 .. grid:: 1 2 3 3
    :gutter: 3
@@ -113,16 +109,16 @@ Beyond the Basics
       :link: core/index
       :link-type: doc
 
-      Scale multi-agent control with hierarchical agents, flexible protocols, and realistic AC power flow physics
+      Hierarchical agents, flexible protocols, and AC power flow
 
    .. grid-item-card:: 🌐 Environments
       :link: environments/index
       :link-type: doc
 
-      Deploy on standard IEEE test feeders (13-bus, 34-bus) and CIGRE networks with distributed energy resources
+      IEEE test feeders and CIGRE networks with DERs
 
    .. grid-item-card:: 🤖 Multi-Agent RL
       :link: user_guide/training
       :link-type: doc
 
-      Train coordinated policies with RLlib MAPPO, implement custom protocols, and scale to hundreds of agents
+      RLlib integration with MAPPO and custom protocols
