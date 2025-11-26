@@ -564,7 +564,7 @@ class MyProtocol(VerticalProtocol):
         return signals
 ```
 
-See the [Protocol Guide](protocol_guide.md) for detailed instructions.
+See the [Protocol Guide](api/core/protocols) for detailed instructions.
 
 ### Q: Power flow doesn't converge. What should I do?
 
@@ -602,7 +602,7 @@ tensorboard --logdir ~/ray_results
 
 ## Next Steps
 
-- **Advanced Protocols**: Read the [Protocol Guide](protocol_guide.md)
+- **Advanced Protocols**: Read the [Protocol Guide](api/core/protocols)
 - **API Reference**: See docstrings in `powergrid.envs.multi_agent`
 - **Examples**: Explore `examples/multi_agent/`
 - **Research**: Implement your own coordination algorithms!
