@@ -12,7 +12,7 @@
    Documentation <docs/index>
    API Reference <api/index>
 
-PowerGrid
+PowerGrid 2.0
 =========
 
 An open-source framework for multi-agent reinforcement learning in smart grid control.
