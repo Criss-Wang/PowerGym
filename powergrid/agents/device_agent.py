@@ -13,7 +13,7 @@ from gymnasium.spaces import Box, Discrete, MultiDiscrete, Dict as SpaceDict
 from gymnasium.spaces import Space
 
 from powergrid.agents.base import Agent, Observation
-from powergrid.core.state import State
+from powergrid.core.state import DeviceState
 from powergrid.core.action import Action
 from powergrid.core.policies import Policy
 from powergrid.core.protocols import NoProtocol, Protocol
@@ -71,7 +71,7 @@ class DeviceAgent(Agent):
             env_id: Optional environment ID for multi-environment isolation
             device_config: Device configuration dict
         """
-        self.state: State = State()
+        self.state: DeviceState = DeviceState()
         self.action: Action = Action()
         self.cost: float = 0.0
         self.safety: float = 0.0
