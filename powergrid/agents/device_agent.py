@@ -5,17 +5,18 @@ new Agent abstraction, enabling devices to participate in multi-agent control.
 """
 
 from typing import Any, Dict, Optional
-
 from dataclasses import dataclass
-import gymnasium as gym
+
 import numpy as np
-from gymnasium.spaces import Box, Discrete, MultiDiscrete
+
+from gymnasium.spaces import Box, Discrete, MultiDiscrete, Dict as SpaceDict
+from gymnasium.spaces import Space
 
 from powergrid.agents.base import Agent, Observation
+from powergrid.core.state import State
 from powergrid.core.action import Action
 from powergrid.core.policies import Policy
 from powergrid.core.protocols import NoProtocol, Protocol
-from powergrid.core.state import DeviceState
 from powergrid.utils.typing import AgentID
 from powergrid.messaging.base import MessageBroker
 
@@ -70,7 +71,7 @@ class DeviceAgent(Agent):
             env_id: Optional environment ID for multi-environment isolation
             device_config: Device configuration dict
         """
-        self.state: DeviceState = DeviceState()
+        self.state: State = State()
         self.action: Action = Action()
         self.cost: float = 0.0
         self.safety: float = 0.0
@@ -83,100 +84,107 @@ class DeviceAgent(Agent):
             discrete_action=device_config.get("discrete_action", False),
             discrete_action_cats=device_config.get("discrete_action_cats", 2),
         )
-        
-        self._init_action_space()
-        self._init_device_state()
-        self._init_observation_space()
 
         super().__init__(
             agent_id=agent_id or self.config.name,
             level=DEVICE_LEVEL,
-            action_space=self._get_action_space(),
-            observation_space=self._get_observation_space(),
             message_broker=message_broker,
             upstream_id=upstream_id,
             env_id=env_id,
             subordinates={}  # Device agents have no subordinates
         )
 
+        self._init_device_action()
+        self._init_device_state()
+
+        self.action_space = self._get_action_space()
+        self.observation_space = self._get_observation_space()
+
     # ============================================
     # Initialization Methods
     # ============================================
 
-    def _init_action_space(self) -> None:
-        """Define action space based on underlying device action.
-
-        This method should be overridden by subclasses to define device-specific action spaces.
+    def _init_device_action(self) -> None:
+        """Initialize device-specific action space
         """
-        pass
+        self.set_device_action()
 
     def _init_device_state(self) -> None:
         """Initialize device-specific state attributes.
+        """
+        self.set_device_state()
 
-        This method can be overridden by subclasses to initialize device-specific state.
+    def set_device_action(self) -> None:
+        """Define/initialize the device-specific action.
+
+        To be overridden by subclasses.
         """
         pass
 
-    def _init_observation_space(self) -> None:
-        """Define observation space based on device state.
+    def set_device_state(self) -> None:
+        """Define/initialize device-specific state.
 
-        This method can be overridden by subclasses to define device-specific observation spaces.
+        To be overridden by subclasses.
         """
         pass
 
     # ============================================
-    # Space Construction Methods
+    # Space Getter Methods
     # ============================================
 
-    def _get_action_space(self) -> gym.Space:
-        """Construct Gymnasium action space from device action configuration.
-
+    def _get_action_space(self) -> Space:
+        """ Get action space based on device action.
         Returns:
-            Gymnasium space for device actions
-
-        Raises:
-            ValueError: If action configuration is invalid
+            - action_space: Gymnasium Space object
         """
-        action = self.action
+        return self.action.space
 
-        # Continuous actions
-        if action.dim_c > 0:
-            if action.range is None:
-                raise ValueError("Device action.range must be set for continuous actions.")
-            low, high = action.range
-            if self.config.discrete_action:
-                cats = self.config.discrete_action_cats
-                if low.size == 1:
-                    return Discrete(cats)
+    def _get_observation_space(self) -> Space:
+        """ Get observation space based on device state.
+        Returns:
+            - observation_space: Gymnasium Space object
+        """
+
+        if hasattr(self, "observation_space") and self.observation_space is not None:
+            return self.observation_space
+        else:
+            sample_obs = self._get_obs()
+            if len(sample_obs.shape) == 1: # Vector observation
+                return Box(
+                    low=-np.inf,
+                    high=np.inf,
+                    shape=sample_obs.shape,
+                    dtype=np.float32,
+                )
+            else:
+                raise NotImplementedError(
+                    "Extend _get_observation_space to handle images, discrete, "
+                    "or structured observations."
+                )
+
+    def _get_obs(self) -> np.ndarray:
+        """Build the current observation vector for this agent."""
+        obs_vec = self.state.observe_by(self)
+
+        # Observe other agents' state according to protocol
+        if hasattr(self.protocol, "other_agents"):
+            for other in self.protocol.other_agents():
+                obs_by_this = other.state.observe_by(self)
+                # Only support vector observations for now
+                if isinstance(obs_by_this, np.ndarray) and obs_by_this.ndim == 1:
+                    obs_vec = np.append(obs_vec, obs_by_this, dtype=np.float32)
+                # Future extension point: image / discrete / dict observations
                 else:
-                    return MultiDiscrete([cats] * low.size)
-            return Box(
-                low=low,
-                high=high,
-                dtype=np.float32,
-            )
+                    raise NotImplementedError(
+                        "observe_by returned non-vector/unsupported type. "
+                        "Extend _get_observation_space to handle images, discrete, "
+                        "or structured observations."
+                    )
 
-        # Discrete actions
-        if action.dim_d > 0:
-            if not action.ncats:
-                raise ValueError("Device action.ncats must be set to a positive integer for discrete actions.")
+        if obs_vec.size == 0:
+            raise ValueError("No observations available for the agent.")
 
-            return Discrete(action.ncats)
-
-        raise ValueError("Device must have either continuous or discrete actions defined.")
-
-    def _get_observation_space(self) -> gym.Space:
-        """Construct Gymnasium observation space from device state.
-
-        Returns:
-            Gymnasium space for device observations
-        """
-        return Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=self.state.vector().shape,
-            dtype=np.float32
-        )
+        return obs_vec
 
     # ============================================
     # Core Agent Lifecycle Methods
@@ -209,6 +217,7 @@ class DeviceAgent(Agent):
 
         # Local device state only
         obs.local['state'] = self.state.vector().astype(np.float32)
+        obs.local['observation'] = self._get_obs()
 
         # TODO: aggregate global info if needed
         obs.global_info = global_state
@@ -232,10 +241,9 @@ class DeviceAgent(Agent):
         else:
             raise ValueError("No action provided and no policy defined for DeviceAgent.")
 
-        self._set_device_action(action)
+        self.action.set_values(action)
         # TODO: Add communication logic (send/receive message) if needed
 
-    
     # ============================================
     # Abstract Methods for Hierarchical Execution
     # ============================================
@@ -256,7 +264,7 @@ class DeviceAgent(Agent):
 
         # Store action internally
         if action is not None:
-            self._set_device_action(action)
+            self.action.set_values(action)
 
         return action
 
@@ -311,22 +319,7 @@ class DeviceAgent(Agent):
     # ============================================
     # Device-Specific Methods (Abstract)
     # ============================================
-    def _set_device_action(self, action: Any) -> None:
-        """Set action on underlying device.
 
-        Args:
-            action: Action from policy (numpy array)
-        """
-        # TODO: verify action format matches policy forward output
-        assert action.size == self.action.dim_c + self.action.dim_d
-        self.action.c[:] = action[:self.action.c.size]
-        if self.config.discrete_action:
-            cats = self.config.discrete_action_cats
-            low, high = self.action.range
-            acts = np.linspace(low, high, cats).transpose()
-            self.action.c[:] = [a[action[i]] for i, a in enumerate(acts)]
-        self.action.d[:] = action[self.action.c.size:]
-    
     def reset_device(self, *args, **kwargs) -> None:
         """Reset device to initial state (to be implemented by subclasses).
 

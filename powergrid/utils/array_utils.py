@@ -5,9 +5,6 @@ import numpy as np
 from powergrid.utils.typing import Array
 
 
-def _as_f32(x: Sequence[float] | Array) -> Array:
-    return np.asarray(x, dtype=np.float32)
-
 def _cat_f32(parts: List[Array]) -> Array:
     return np.concatenate(parts, dtype=np.float32) if parts else np.zeros(0, np.float32)
 

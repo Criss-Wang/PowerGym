@@ -2,7 +2,7 @@ import math
 import numpy as np
 import pytest
 
-from powergrid.features.generator_limits import GeneratorLimits
+from powergrid.features.power_limits import PowerLimits
 
 
 def assert_f32(v: np.ndarray):
@@ -11,7 +11,7 @@ def assert_f32(v: np.ndarray):
 
 
 def test_vector_names_parity_and_dtype():
-    gl = GeneratorLimits(
+    gl = PowerLimits(
         s_rated_MVA=10.0,
         derate_frac=0.75,
         p_min_MW=1.0, p_max_MW=8.0,
@@ -33,14 +33,14 @@ def test_vector_names_parity_and_dtype():
     ]
 
 
-def test_clamp_swapped_bounds_and_derate():
-    gl = GeneratorLimits(
+def test_clip_swapped_bounds_and_derate():
+    gl = PowerLimits(
         s_rated_MVA=5.0,
         derate_frac=1.5,       # will clamp to 1.0
         p_min_MW=5.0, p_max_MW=2.0,   # swapped
         q_min_MVAr=3.0, q_max_MVAr=-1.0,  # swapped
     )
-    gl.clamp_()
+    gl.clip_()
     assert gl.derate_frac == 1.0
     assert gl.p_min_MW == 2.0 and gl.p_max_MW == 5.0
     assert gl.q_min_MVAr == -1.0 and gl.q_max_MVAr == 3.0
@@ -48,15 +48,15 @@ def test_clamp_swapped_bounds_and_derate():
 
 def test_pf_min_abs_validation():
     with pytest.raises(ValueError):
-        GeneratorLimits(pf_min_abs=0.0).clamp_()
+        PowerLimits(pf_min_abs=0.0).clip_()
     with pytest.raises(ValueError):
-        GeneratorLimits(pf_min_abs=1.01).clamp_()
+        PowerLimits(pf_min_abs=1.01).clip_()
     # valid edge
-    GeneratorLimits(pf_min_abs=1.0).clamp_()
+    PowerLimits(pf_min_abs=1.0).clip_()
 
 
 def test_effective_q_bounds_with_S_only():
-    gl = GeneratorLimits(s_rated_MVA=10.0)  # no derate, no static Q bounds
+    gl = PowerLimits(s_rated_MVA=10.0)  # no derate, no static Q bounds
     # at P=6, |Q| <= sqrt(10^2 - 6^2) = 8
     qmin, qmax = gl.effective_q_bounds(6.0)
     assert pytest.approx(qmin, rel=1e-6) == -8.0
@@ -65,7 +65,7 @@ def test_effective_q_bounds_with_S_only():
 
 def test_effective_q_bounds_with_PF_only():
     pf = 0.8
-    gl = GeneratorLimits(pf_min_abs=pf)
+    gl = PowerLimits(pf_min_abs=pf)
     # |Q| <= |P| * tan(arccos(pf))
     tanphi = math.sqrt(1.0 / (pf*pf) - 1.0)
     qmin, qmax = gl.effective_q_bounds(5.0)
@@ -74,7 +74,7 @@ def test_effective_q_bounds_with_PF_only():
 
 
 def test_effective_q_bounds_intersection_S_and_PF_and_static():
-    gl = GeneratorLimits(
+    gl = PowerLimits(
         s_rated_MVA=5.0,
         pf_min_abs=0.9,
         q_min_MVAr=-1.0,
@@ -97,7 +97,7 @@ def test_effective_q_bounds_intersection_S_and_PF_and_static():
 
 
 def test_feasible_reports_violations():
-    gl = GeneratorLimits(
+    gl = PowerLimits(
         s_rated_MVA=5.0,
         p_min_MW=1.0,
         p_max_MW=4.0,
@@ -116,7 +116,7 @@ def test_feasible_reports_violations():
 
 
 def test_project_pq_clips_static_ranges():
-    gl = GeneratorLimits(p_min_MW=1.0, p_max_MW=4.0, q_min_MVAr=-2.0, q_max_MVAr=2.0)
+    gl = PowerLimits(p_min_MW=1.0, p_max_MW=4.0, q_min_MVAr=-2.0, q_max_MVAr=2.0)
     # Below P min, above Q max -> clip both
     P2, Q2 = gl.project_pq(0.5, 3.0)
     assert P2 == 1.0
@@ -128,7 +128,7 @@ def test_project_pq_clips_static_ranges():
 
 
 def test_project_pq_respects_S_circle_and_pf_wedge():
-    gl = GeneratorLimits(s_rated_MVA=5.0, pf_min_abs=0.8)
+    gl = PowerLimits(s_rated_MVA=5.0, pf_min_abs=0.8)
     # pick P inside S but Q outside PF wedge
     tanphi = math.sqrt(1.0 / (0.8*0.8) - 1.0)
     P, Q = 3.0, 3.0  # this Q is likely above PF wedge at P=3
@@ -145,7 +145,7 @@ def test_project_pq_respects_S_circle_and_pf_wedge():
 
 
 def test_roundtrip_to_from_dict():
-    gl = GeneratorLimits(
+    gl = PowerLimits(
         s_rated_MVA=12.5,
         derate_frac=0.6,
         p_min_MW=1.5, p_max_MW=10.0,
@@ -153,7 +153,7 @@ def test_roundtrip_to_from_dict():
         pf_min_abs=0.85,
     )
     d = gl.to_dict()
-    gl2 = GeneratorLimits.from_dict(d)
+    gl2 = PowerLimits.from_dict(d)
     # Same configuration after round-trip
     assert gl2.to_dict() == d
     # Vectors/names identical
@@ -164,7 +164,7 @@ def test_roundtrip_to_from_dict():
 
 
 def test_effective_q_bounds_returns_none_when_unconstrained():
-    gl = GeneratorLimits()  # no S, no PF, no static Q
+    gl = PowerLimits()  # no S, no PF, no static Q
     qmin, qmax = gl.effective_q_bounds(0.0)
     assert qmin is None and qmax is None
     # project should then leave Q unchanged (except P clipping if set)
