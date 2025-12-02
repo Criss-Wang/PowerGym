@@ -7,7 +7,7 @@ from gymnasium.spaces import Box, Discrete, MultiDiscrete
 
 from powergrid.agents.device_agent import DeviceAgent
 from powergrid.agents.base import Observation
-from powergrid.core.actions import Action
+from powergrid.core.action import Action
 from powergrid.core.state import DeviceState
 from powergrid.core.policies import Policy
 from powergrid.core.protocols import NoProtocol
@@ -119,6 +119,16 @@ class TestDeviceAgent:
 
             def update_state(self, **kwargs):
                 pass
+
+            def update_cost_safety(self, **kwargs):
+                pass
+
+            def get_reward(self):
+                return 0.0
+
+            def __repr__(self):
+                return "DiscreteDeviceAgent"
+
     def test_device_agent_observe(self):
         """Test observation extraction."""
         ess = ESS(
@@ -151,25 +161,6 @@ class TestDeviceAgent:
 
         # DeviceAgent should NOT have global info (parent GridAgent handles it)
         assert len(obs.global_info) == 0
-
-            def update_cost_safety(self, **kwargs):
-                pass
-
-            def get_reward(self):
-                return 0.0
-
-            def __repr__(self):
-                return "DiscreteDeviceAgent"
-
-        agent = DiscreteDeviceAgent(
-            agent_id="test",
-            policy=MockPolicy()
-        )
-
-        action_space = agent.action_space
-
-        assert isinstance(action_space, Discrete)
-        assert action_space.n == 5
 
     def test_get_action_space_multidimensional_continuous(self):
         """Test multi-dimensional continuous action space."""

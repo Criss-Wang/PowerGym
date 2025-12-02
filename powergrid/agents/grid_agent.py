@@ -15,8 +15,10 @@ from powergrid.agents.base import Agent, AgentID, Observation
 from powergrid.agents.device_agent import DeviceAgent
 from powergrid.core.policies import Policy
 from powergrid.core.protocols import NoProtocol, Protocol
+from powergrid.core.state import GridState
 from powergrid.devices.generator import Generator
 from powergrid.devices.storage import ESS
+from powergrid.features.network import BusVoltages, LineFlows, NetworkMetrics
 from powergrid.messaging.base import ChannelManager, MessageBroker
 
 
@@ -63,10 +65,11 @@ class GridAgent(Agent):
         """
         self.protocol = protocol
         self.policy = policy
+        self.state = GridState()
 
         # Build device agents
         device_configs = grid_config.get('devices', [])
-        self.devices = self._build_device_agents(device_configs, message_broker, env_id, agent_id)
+        self.devices = self._build_device_agents(device_configs, message_broker)
 
         super().__init__(
             agent_id=agent_id,
@@ -153,7 +156,10 @@ class GridAgent(Agent):
         Returns:
             Aggregated local observation dictionary
         """
-        return {"device_obs": device_obs}
+        return {
+            "device_obs": device_obs,
+            "grid_state": self.state.vector()
+        }
 
     def act(self, observation: Observation, given_action: Any = None) -> None:
         """Compute coordination action and distribute to devices.
@@ -533,6 +539,9 @@ class PowerGridAgent(GridAgent):
         Returns:
             Local observation dictionary with device and network state
         """
+        # Update grid state from network results
+        self._update_grid_state(net)
+
         local = super()._build_local_observation(device_obs)
         local['state'] = self._get_obs(net, device_obs)
         return local
@@ -562,6 +571,71 @@ class PowerGridAgent(GridAgent):
         load_pq = net.res_load.iloc[local_load_ids].values
         obs = np.concatenate([obs, load_pq.ravel() / self.base_power])
         return obs.astype(np.float32)
+
+    def _update_grid_state(self, net) -> None:
+        """Update GridState features from PandaPower network results.
+
+        Args:
+            net: PandaPower network with power flow results
+        """
+        if not net.get("converged", False):
+            # If power flow didn't converge, keep previous state
+            return
+
+        # Extract local bus indices
+        local_bus_ids = pp.get_element_index(net, 'bus', self.name, False)
+        if len(local_bus_ids) == 0:
+            return
+
+        # Bus voltages
+        bus_vm = net.res_bus.loc[local_bus_ids, 'vm_pu'].values
+        bus_va = net.res_bus.loc[local_bus_ids, 'va_degree'].values
+        bus_names = net.bus.loc[local_bus_ids, 'name'].tolist()
+
+        # Line flows
+        local_line_ids = pp.get_element_index(net, 'line', self.name, False)
+        if len(local_line_ids) > 0:
+            line_p = net.res_line.loc[local_line_ids, 'p_from_mw'].values
+            line_q = net.res_line.loc[local_line_ids, 'q_from_mvar'].values
+            line_loading = net.res_line.loc[local_line_ids, 'loading_percent'].values
+            line_names = net.line.loc[local_line_ids, 'name'].tolist()
+        else:
+            line_p = np.array([])
+            line_q = np.array([])
+            line_loading = np.array([])
+            line_names = []
+
+        # Network metrics
+        local_sgen_ids = pp.get_element_index(net, 'sgen', self.name, False)
+        local_load_ids = pp.get_element_index(net, 'load', self.name, False)
+
+        total_gen_mw = net.res_sgen.loc[local_sgen_ids, 'p_mw'].sum() if len(local_sgen_ids) > 0 else 0.0
+        total_gen_mvar = net.res_sgen.loc[local_sgen_ids, 'q_mvar'].sum() if len(local_sgen_ids) > 0 else 0.0
+        total_load_mw = net.res_load.loc[local_load_ids, 'p_mw'].sum() if len(local_load_ids) > 0 else 0.0
+        total_load_mvar = net.res_load.loc[local_load_ids, 'q_mvar'].sum() if len(local_load_ids) > 0 else 0.0
+        total_loss_mw = total_gen_mw - total_load_mw
+
+        # Update GridState features
+        self.state.features = [
+            BusVoltages(
+                vm_pu=bus_vm,
+                va_deg=bus_va,
+                bus_names=bus_names,
+            ),
+            LineFlows(
+                p_from_mw=line_p,
+                q_from_mvar=line_q,
+                loading_percent=line_loading,
+                line_names=line_names,
+            ),
+            NetworkMetrics(
+                total_gen_mw=float(total_gen_mw),
+                total_load_mw=float(total_load_mw),
+                total_loss_mw=float(total_loss_mw),
+                total_gen_mvar=float(total_gen_mvar),
+                total_load_mvar=float(total_load_mvar),
+            ),
+        ]
 
     # ============================================
     # Space Construction Methods

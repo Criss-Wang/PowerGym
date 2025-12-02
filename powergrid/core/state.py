@@ -201,3 +201,92 @@ class DeviceState:
         ds._validate_phase_context_()
         ds._apply_phase_context_to_features_()
         return ds
+
+
+@provider()
+@dataclass(slots=True)
+class GridState:
+    """
+    GridState — container that aggregates grid-level feature providers
+    (BusVoltages, LineFlows, NetworkMetrics) into a unified observation
+    vector for grid agents.
+
+    Unlike DeviceState, GridState does not enforce phase context since
+    grid-level features are typically aggregated network observables.
+
+    Vector & names:
+      • vectors are concatenated in feature order; empty vectors are skipped.
+      • names are concatenated in the same order; 1:1 parity enforced per feature.
+      • prefix_names=True prepends '<ClassName>.' to each child's names.
+    """
+    features: List[FeatureProvider] = field(default_factory=list)
+    prefix_names: bool = False
+
+    def _iter_ready_features(self) -> Iterator[FeatureProvider]:
+        for f in self.features:
+            yield f
+
+    def vector(self) -> Array:
+        vecs: List[np.ndarray] = []
+        for f in self._iter_ready_features():
+            v, _ = _vec_names(f)
+            if v.size:
+                vecs.append(v)
+        if not vecs:
+            return np.zeros(0, np.float32)
+        return np.concatenate(vecs, dtype=np.float32)
+
+    def names(self) -> List[str]:
+        out: List[str] = []
+        for f in self._iter_ready_features():
+            _, n = _vec_names(f)
+            if self.prefix_names and n:
+                pref = f.__class__.__name__ + "."
+                n = [pref + s for s in n]
+            out += n
+        return out
+
+    def clamp_(self) -> None:
+        for f in self._iter_ready_features():
+            if hasattr(f, "clamp_"):
+                f.clamp_()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "prefix_names": self.prefix_names,
+            "features": [
+                {
+                    "kind": f.__class__.__name__,
+                    "payload": (
+                        f.to_dict() if hasattr(f, "to_dict") else asdict(f)
+                    ),
+                }
+                for f in self.features
+            ],
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        d: Dict[str, Any],
+        registry: Optional[Dict[str, Type[FeatureProvider]]] = None,
+    ) -> "GridState":
+        reg = registry or KNOWN_FEATURES
+        feats: List[FeatureProvider] = []
+        for item in d.get("features", []):
+            kind = item.get("kind")
+            payload = item.get("payload", {})
+            cls_ = reg.get(kind)
+            if cls_ is None:
+                raise ValueError(
+                    f"Unknown feature kind '{kind}'. Provide a registry mapping."
+                )
+            if hasattr(cls_, "from_dict"):
+                feats.append(cls_.from_dict(payload))  # type: ignore
+            else:
+                feats.append(cls_(**payload))          # type: ignore
+
+        return cls(
+            features=feats,
+            prefix_names=d.get("prefix_names", False),
+        )
