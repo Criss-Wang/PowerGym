@@ -1,21 +1,18 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
 
 from powergrid.agents.device_agent import DeviceAgent
-from powergrid.core.action import Action
 from powergrid.core.policies import Policy
 from powergrid.core.protocols import NoProtocol, Protocol
-from powergrid.core.state import DeviceState, PhaseModel, PhaseSpec
-from powergrid.features.connection import PhaseConnection
 from powergrid.features.electrical import ElectricalBasePh
-from powergrid.features.generator_limits import GeneratorLimits
+from powergrid.features.power_limits import PowerLimits
 from powergrid.features.status import StatusBlock
 from powergrid.messaging.base import ChannelManager, Message, MessageType
 from powergrid.utils.cost import cost_from_curve
-from powergrid.utils.safety import pf_penalty, s_over_rating
 from powergrid.utils.typing import float_if_not_none
+from powergrid.utils.phase import PhaseModel, PhaseSpec, check_phase_model_consistency
 
 
 @dataclass
@@ -30,11 +27,15 @@ class GeneratorConfig:
     q_min_MVAr: Optional[float] = None
     q_max_MVAr: Optional[float] = None
     pf_min_abs: Optional[float] = None
+    vm_min_pu: Optional[float] = None
+    vm_max_pu: Optional[float] = None
+    va_min_deg: Optional[float] = None
+    va_max_deg: Optional[float] = None
     derate_frac: float = 1.0
 
     # UC timings (in timesteps); if both None -> no UC head
-    startup_time: Optional[int] = None
-    shutdown_time: Optional[int] = None
+    startup_time_hr: Optional[int] = None
+    shutdown_time_hr: Optional[int] = None
     startup_cost: float = 0.0
     shutdown_cost: float = 0.0
 
@@ -45,9 +46,8 @@ class GeneratorConfig:
     type: str = "fossil"
     source: Optional[str] = None  # "solar", "wind", or None for dispatchable
 
-    # phase context
-    phase_model: str = "balanced_1ph"
-    phase_spec: Optional[Dict[str, Any]] = None
+    # PQ / PV / SLACK control mode
+    control_mode: str = "PQ"      # "PQ", "PV", or "SLACK"
 
 
 class Generator(DeviceAgent):
@@ -55,30 +55,37 @@ class Generator(DeviceAgent):
     Dispatchable Generator following DeviceAgent's lifecycle.
 
     Example device_config:
-    {
-      "device_state_config": {
-        "phase_model": "BALANCED_1PH" | "THREE_PHASE",
-        "phase_spec":  None or {
-            "phases": "ABC", "has_neutral": False, "earth_bond": True
+    device_config = {
+        "phase_model": "balanced_1ph",
+        "phase_spec":  {
+            "phases": "", 
+            "has_neutral": False, 
+            "earth_bond": False
         },
+        "device_state_config": {
+            "control_mode": "PQ",
 
-        "s_rated_MVA": 10.0,
-        "derate_frac": 1.0,
-        "p_min_MW": 1.0,
-        "p_max_MW": 8.0,
-        "q_min_MVAr": -3.0,
-        "q_max_MVAr":  3.0,
-        "pf_min_abs":  0.8,
+            "s_rated_MVA": 10.0,
+            "derate_frac": 1.0,
+            "p_min_MW": 1.0,
+            "p_max_MW": 8.0,
+            "q_min_MVAr": -3.0,
+            "q_max_MVAr":  3.0,
+            "pf_min_abs":  0.8,
+            "vm_min_pu": 0.95,
+            "vm_max_pu": 1.05,
+            "va_min_deg": -180.0,
+            "va_max_deg": 180.0,
 
-        "startup_time":  2,
-        "shutdown_time": 1,
-        "startup_cost":  5.0,
-        "shutdown_cost": 1.0,
+            "startup_time_hr":  2,
+            "shutdown_time_hr": 1,
+            "startup_cost":  5.0,
+            "shutdown_cost": 1.0,
 
-        "cost_curve_coefs": [0.01, 1.0, 0.0],
-        "dt_h": 1.0,
-        "min_pf": 0.8
-      }
+            "cost_curve_coefs": [0.01, 1.0, 0.0],
+            "dt_h": 1.0,
+            "min_pf": 0.8
+        }
     }
     """
 
@@ -93,31 +100,40 @@ class Generator(DeviceAgent):
         env_id: Optional[str] = None,
         device_config: Dict[str, Any] = {},
     ):
+        state_config = device_config.get("device_state_config", {})
 
-        config = device_config.get("device_state_config", {})
+        # phase model & spec
+        self.phase_model = PhaseModel(device_config.get("phase_model", "balanced_1ph"))
+        self.phase_spec = PhaseSpec().from_dict(device_config.get("phase_spec", {}))
+        check_phase_model_consistency(self.phase_model, self.phase_spec)
+
         self._generator_config = GeneratorConfig(
-            bus=config.get("bus", ""),
-            s_rated_MVA=float_if_not_none(config.get("s_rated_MVA", None)),
-            p_min_MW=float_if_not_none(config.get("p_min_MW", 0.0)),
-            p_max_MW=float_if_not_none(config.get("p_max_MW", 0.0)),
-            q_min_MVAr=float_if_not_none(config.get("q_min_MVAr", None)),
-            q_max_MVAr=float_if_not_none(config.get("q_max_MVAr", None)),
-            pf_min_abs=float_if_not_none(config.get("pf_min_abs", None)),
-            derate_frac=float_if_not_none(config.get("derate_frac", 1.0)),
+            bus=state_config.get("bus", ""),
+            s_rated_MVA=float_if_not_none(state_config.get("s_rated_MVA", None)),
+            p_min_MW=float_if_not_none(state_config.get("p_min_MW", 0.0)),
+            p_max_MW=float_if_not_none(state_config.get("p_max_MW", 0.0)),
+            q_min_MVAr=float_if_not_none(state_config.get("q_min_MVAr", None)),
+            q_max_MVAr=float_if_not_none(state_config.get("q_max_MVAr", None)),
+            pf_min_abs=float_if_not_none(state_config.get("pf_min_abs", None)),
+            vm_min_pu=float_if_not_none(state_config.get("vm_min_pu", 0.95)),
+            vm_max_pu=float_if_not_none(state_config.get("vm_max_pu", 1.05)),
+            va_min_deg=float_if_not_none(state_config.get("va_min_deg", -180.0)),
+            va_max_deg=float_if_not_none(state_config.get("va_max_deg", 180.0)),
+            derate_frac=float_if_not_none(state_config.get("derate_frac", 1.0)),
 
             # economics & UC params
-            cost_curve_coefs=config.get("cost_curve_coefs", (0.0, 0.0, 0.0)),
-            dt_h=float_if_not_none(config.get("dt_h", 1.0)),
-            startup_time=float_if_not_none(config.get("startup_time", None)),
-            shutdown_time=float_if_not_none(config.get("shutdown_time", None)),
-            startup_cost=float_if_not_none(config.get("startup_cost", 0.0)),
-            shutdown_cost=float_if_not_none(config.get("shutdown_cost", 0.0)),
-            min_pf=float_if_not_none(config.get("min_pf", None)),
-            type=config.get("type", "fossil"),
-            source=config.get("source", None),
+            cost_curve_coefs=state_config.get("cost_curve_coefs", (0.0, 0.0, 0.0)),
+            dt_h=float_if_not_none(state_config.get("dt_h", 1.0)),
+            startup_time_hr=float_if_not_none(state_config.get("startup_time_hr", None)),
+            shutdown_time_hr=float_if_not_none(state_config.get("shutdown_time_hr", None)),
+            startup_cost=float_if_not_none(state_config.get("startup_cost", 0.0)),
+            shutdown_cost=float_if_not_none(state_config.get("shutdown_cost", 0.0)),
+            min_pf=float_if_not_none(state_config.get("min_pf", None)),
+            type=state_config.get("type", "fossil"),
+            source=state_config.get("source", None),
 
-            phase_model=config.get("phase_model", "balanced_1ph"),
-            phase_spec=config.get("phase_spec", None),
+            # control mode
+            control_mode=state_config.get("control_mode", "PQ"),
         )
         super().__init__(
             agent_id=agent_id,
@@ -129,77 +145,136 @@ class Generator(DeviceAgent):
             device_config=device_config,
         )
 
-    def _init_action_space(self) -> None:
-        """Initialize action space - calls set_action_space()."""
-        self.set_action_space()
-
-    def _init_device_state(self) -> None:
-        """Initialize device state - calls set_device_state()."""
-        self.set_device_state()
-
-    def set_action_space(self) -> None:
+    def set_device_action(self) -> None:
         """
-        Define Action:
-          - continuous P (and optionally Q),
-          - optional discrete UC command d[0] in {off, on}.
+        Define Action depending on generator control model.
+
+        PQ model:
+        (1a) P-only:
+            - control_mode == "PQ"
+            - q_min_MVAr and q_max_MVAr are None
+            - pf_min_abs is None or s_rated_MVA is None
+            => action.c = [P]
+
+        (1b) P+Q with explicit limits:
+            - control_mode == "PQ"
+            - q_min_MVAr and q_max_MVAr are BOTH not None
+            => action.c = [P, Q] with box limits
+
+        (1c) P+Q with PF/S capability:
+            - control_mode == "PQ"
+            - q_min_MVAr and q_max_MVAr are None
+            - pf_min_abs and s_rated_MVA are BOTH not None
+            => action.c = [P, Q], Q limits derived from S & pf_min_abs
+                (further refined by PowerLimits.project_pq)
+
+        PV model:
+        (2) control_mode == "PV"
+            => action.c = [P, Vm_pu]
+
+        Slack model:
+        (3) control_mode == "SLACK"
+            => action.c = [Vm_pu, Va_deg]
+
+        UC head d[0] in {0=turn_off, 1=turn_on}.
         """
-        # determine action ranges
-        lows = [self._generator_config.p_min_MW]
-        highs = [self._generator_config.p_max_MW]
-        # if control reactive power
-        if self._generator_config.q_min_MVAr is not None and self._generator_config.q_max_MVAr is not None:
-            lows.append(self._generator_config.q_min_MVAr)
-            highs.append(self._generator_config.q_max_MVAr)
+        cfg = self._generator_config
+        mode = (cfg.control_mode or "PQ").upper()
 
-        # if control unit committement
-        have_uc = self._generator_config.startup_time is not None or self._generator_config.shutdown_time is not None
+        lows: list[float] = []
+        highs: list[float] = []
 
-        # Set action specs & sample
+        if mode == "PQ":
+            # --- P bounds (always present in PQ) ---
+            lows.append(cfg.p_min_MW)
+            highs.append(cfg.p_max_MW)
+
+            has_q_box = (
+                cfg.q_min_MVAr is not None and
+                cfg.q_max_MVAr is not None
+            )
+            has_pf_cap = (
+                cfg.pf_min_abs is not None and
+                cfg.s_rated_MVA is not None
+            )
+
+            if has_q_box:
+                # (1b) P+Q with explicit limits
+                lows.append(cfg.q_min_MVAr)
+                highs.append(cfg.q_max_MVAr)
+
+            elif has_pf_cap:
+                # (1c) P+Q with PF capability curve:
+                # approximate symmetric Q box from S & pf_min_abs
+                import math
+                S = cfg.s_rated_MVA * (cfg.derate_frac or 1.0)
+                pf = cfg.pf_min_abs
+                q_max_mag = S * math.sqrt(max(0.0, 1.0 - pf * pf))
+                lows.append(-q_max_mag)
+                highs.append(q_max_mag)
+
+            else:
+                # (1a) P-only: Q is not a control variable (e.g., fixed or 0)
+                pass
+
+        elif mode == "PV":
+            # (2) PV: action = [P, Vm]
+            lows.append(cfg.p_min_MW)
+            highs.append(cfg.p_max_MW)
+
+            vm_min = float(cfg.vm_min_pu)
+            vm_max = float(cfg.vm_max_pu)
+            lows.append(vm_min)
+            highs.append(vm_max)
+
+        elif mode == "SLACK":
+            # (3) Slack: action = [Vm, Va]
+            lows.append(cfg.vm_min_pu)
+            highs.append(cfg.vm_max_pu)
+            lows.append(np.deg2rad(cfg.va_min_deg))
+            highs.append(np.deg2rad(cfg.va_max_deg))
+
+        else:
+            raise ValueError(f"Unknown generator control_mode={mode!r}")
+
+        # --- Unit commitment discrete head ---
+        have_uc = (
+            cfg.startup_time_hr is not None or
+            cfg.shutdown_time_hr is not None
+        )
+
         self.action.set_specs(
             dim_c=len(lows),
             dim_d=(1 if have_uc else 0),
             ncats=(2 if have_uc else 0),
             range=(np.asarray(lows, np.float32), np.asarray(highs, np.float32)),
-            masks=(None if not have_uc else [np.array([True, True], bool)]),
         )
-        self.action.sample()
 
     def set_device_state(self) -> None:
-        # phase model & spec
-        pm = PhaseModel(self._generator_config.phase_model)
-        ps = PhaseSpec(
-            self._generator_config.phase_spec.get("phases", "ABC"),
-            self._generator_config.phase_spec.get("has_neutral", False),
-            self._generator_config.phase_spec.get("earth_bond", True),
-        ) if self._generator_config.phase_spec is not None else None
-
         # Electrical telemetry
         eletrical_telemetry = ElectricalBasePh(
+            phase_model=self.phase_model,
+            phase_spec=self.phase_spec,
             P_MW=0.0,
-            # Always initialize Q_MVAr to 0.0 for consistent observation space dimensions
             Q_MVAr=0.0,
+            Vm_pu=1.0,
+            Va_rad=0.0,
+            visibility=["owner"],
         )
 
         # Status / UC lifecycle
         status = StatusBlock(
             in_service=True,
-            out_service=None,
+            out_service=False,
             state="online",
             states_vocab=["offline", "startup", "online", "shutdown", "fault"],
             emit_state_one_hot=True,
             emit_state_index=False,
-        )
-
-        # Connection
-        conn = "ON" if pm == PhaseModel.BALANCED_1PH else "ABC"
-        connection = PhaseConnection(
-            phase_model=pm, 
-            phase_spec=ps, 
-            connection=conn
+            visibility=["owner"],
         )
 
         # Capability / limits
-        generatorlimits = GeneratorLimits(
+        power_limits = PowerLimits(
             s_rated_MVA=self._generator_config.s_rated_MVA,
             derate_frac=self._generator_config.derate_frac,
             p_min_MW=self._generator_config.p_min_MW,
@@ -209,150 +284,187 @@ class Generator(DeviceAgent):
             pf_min_abs=self._generator_config.pf_min_abs,
         )
 
-
-        self.state = DeviceState(
-            phase_model=pm,
-            phase_spec=ps,
-            features=[
-                eletrical_telemetry,
-                status,
-                connection,
-                generatorlimits,
-            ],
-            prefix_names=False,
-        )
-        self.state._apply_phase_context_to_features_()
-
+        self.state.features=[
+            eletrical_telemetry,
+            status,
+            power_limits,
+        ]
+        self.state.owner_id = self.agent_id
+        self.state.owner_level = self.level
 
     def reset_device(self, *args, **kwargs) -> None:
-        """Zero P/Q, set online (or offline if you pass online=False)."""
-        in_service = bool(kwargs.get("in_service", True))
-        online = bool(kwargs.get("online", True))
+        """Reset generator to a neutral operating point.
+        """
+        self.state.reset()
+        self.action.reset()
 
-        # reset electricals
-        electrical = self.electrical
-        electrical.P_MW = 0.0
-        if self.action.dim_c >= 2:
-            electrical.Q_MVAr = 0.0
-
-        # reset status block
-        status_block = self.status
-        status_block.state = "online" if online else "offline"
-        status_block.in_service = in_service
-        status_block.out_service = None
-        status_block.t_in_state_s = 0.0
-        status_block.t_to_next_s = None
-        status_block.progress_frac = None
-
-        # reset cost and safety
+        # Cost / safety bookkeeping
         self.cost = 0.0
         self.safety = 0.0
         self._uc_cost_step = 0.0
 
-        if self.action.dim_d:
-            self.action.masks = [np.array([True, True], dtype=bool)]
-
     def update_state(self, *args, **kwargs) -> None:
-        """
-        UC via discrete head (d[0]: 0=off, 1=on) with simple timers, then apply P/Q.
-        If not ONLINE, the unit produces no power (P=Q=0). When a transition
-        completes, apply the corresponding UC cost for this step.
-        """
-        status_block = self.status
-        electrical = self.electrical
-        generatorlimits = self.limits
+        self._update_uc_status()
+        self._update_power_outputs()
+        self._update_by_kwargs(**kwargs)
 
-        # UC timing & state progression (startup/shutdown only)
+    def _update_uc_status(self, **kwargs) -> None:
+        """Advance UC lifecycle in StatusBlock using d[0] ∈ {off, on}.
+        When a transition completes, apply the corresponding UC cost for 
+        this step.
+        """
         self._uc_cost_step = 0.0
 
-        # Advance time-in-state (reuse seconds field as "steps * dt_h" proxy)
-        status_block.t_in_state_s = (
-            0.0 
-            if status_block.t_in_state_s is None 
-            else float(status_block.t_in_state_s + self._generator_config.dt_h)
-        )
+        # 1) Base timing: advance time in current state
+        t_in_state_s = self.status.t_in_state_s or 0.0
+        t_to_next_s = self.status.t_to_next_s
+        progress_frac = self.status.progress_frac
+        dt = self._generator_config.dt_h
+        t_in_state_s += dt
 
-        # Read discrete UC command if present
+        # 2) UC command: 0=request_off, 1=request_on
         uc_cmd = None
         if self.action.dim_d > 0 and self.action.d.size > 0:
-            uc_cmd = int(self.action.d[0])  # 0=request_off, 1=request_on
+            uc_cmd = int(self.action.d[0])
 
-        t_start = int(self._generator_config.startup_time or 0)
-        t_stop = int(self._generator_config.shutdown_time or 0)
+        t_start = self._generator_config.startup_time_hr
+        t_stop = self._generator_config.shutdown_time_hr
 
-        # Trigger transitions only when not already transitioning
-        if uc_cmd is not None and status_block.t_to_next_s is None:
-            if status_block.state == "online" and uc_cmd == 0 and t_stop > 0:
-                status_block.state = "shutdown"
-                status_block.t_to_next_s = t_stop * self._generator_config.dt_h
-                status_block.progress_frac = 0.0
-            elif status_block.state == "offline" and uc_cmd == 1 and t_start > 0:
-                status_block.state = "startup"
-                status_block.t_to_next_s = t_start * self._generator_config.dt_h
-                status_block.progress_frac = 0.0
+        # 3) Handle UC command
+        #    - If not in transition: react to UC
+        #    - startup_time_hr / shutdown_time_hr == 0 => immediate transition
+        state = self.status.state
+        if uc_cmd is not None and t_to_next_s is None:
+            # Request OFF from ONLINE
+            if state == "online" and uc_cmd == 0:
+                if t_stop <= 0:
+                    # Immediate shutdown
+                    state = "offline"
+                    t_in_state_s = 0.0
+                    t_to_next_s = None
+                    progress_frac = None
+                    self._uc_cost_step = self._generator_config.shutdown_cost
+                else:
+                    # Begin shutdown transition
+                    state = "shutdown"
+                    t_in_state_s = 0.0
+                    t_to_next_s = t_stop * dt
+                    progress_frac = 0.0
 
-        # Count down transitional states
-        if status_block.t_to_next_s is not None:
-            status_block.t_to_next_s = max(0.0, float(status_block.t_to_next_s - self._generator_config.dt_h))
-            total = t_start if status_block.state == "startup" else t_stop
+            # Request ON from OFFLINE
+            elif state == "offline" and uc_cmd == 1:
+                if t_start <= 0:
+                    # Immediate startup
+                    state = "online"
+                    t_in_state_s = 0.0
+                    t_to_next_s = None
+                    progress_frac = None
+                    self._uc_cost_step = self._generator_config.startup_cost
+                else:
+                    # Begin startup transition
+                    state = "startup"
+                    t_in_state_s = 0.0
+                    t_to_next_s = t_start * dt
+                    progress_frac = 0.0
+
+        # 4) Progress transitional states (startup/shutdown with timers)
+        if t_to_next_s is not None and state in ("startup", "shutdown"):
+            t_to_next_s = max(0.0, t_to_next_s - dt)
+
+            total = t_start if state == "startup" else t_stop
             if total > 0:
-                denom = max(total * self._generator_config.dt_h, 1e-9)
-                status_block.progress_frac = float(1.0 - status_block.t_to_next_s / denom)
+                denom = max(total * dt, 1e-9)
+                progress_frac = 1.0 - t_to_next_s / denom
 
-            # Finish transition at zero
-            if status_block.state == "startup" and status_block.t_to_next_s == 0.0:
-                status_block.state = "online"
-                status_block.t_in_state_s = 0.0
-                status_block.t_to_next_s = None
-                status_block.progress_frac = None
-                self._uc_cost_step = self._generator_config.startup_cost
+            # Finish transition
+            if t_to_next_s == 0.0:
+                if state == "startup":
+                    state = "online"
+                    t_in_state_s = 0.0
+                    t_to_next_s = None
+                    progress_frac = None
+                    self._uc_cost_step = self._generator_config.startup_cost
+                elif state == "shutdown":
+                    state = "offline"
+                    t_in_state_s = 0.0
+                    t_to_next_s = None
+                    progress_frac = None
+                    self._uc_cost_step = self._generator_config.shutdown_cost
 
-            elif status_block.state == "shutdown" and status_block.t_to_next_s == 0.0:
-                status_block.state = "offline"
-                status_block.t_in_state_s = 0.0
-                status_block.t_to_next_s = None
-                status_block.progress_frac = None
-                self._uc_cost_step = self._generator_config.shutdown_cost
+        # Apply updates to features
+        status_updates: Dict[str, Any] = {
+            "state": state, 
+            "t_in_state_s": t_in_state_s,
+            "t_to_next_s": t_to_next_s,
+            "progress_frac": progress_frac,
+        }
 
-        # Continuous P/Q control (projected); zero when not online
-        P_req = (
-            float(self.action.c[0])
-            if self.action.c.size >= 1 else float(electrical.P_MW or 0.0)
-        )
-        Q_req = (
-            float(self.action.c[1])
-            if self.action.c.size >= 2 else float(electrical.Q_MVAr or 0.0)
-        )
+        # Allowed keys for StatusBlock
+        status_keys = {f.name for f in fields(StatusBlock)}
 
-        if status_block.state != "online":
-            P_req, Q_req = 0.0, 0.0
+        for k, v in kwargs.items():
+            if k in status_keys:
+                status_updates[k] = v
+    
+        self.state.update_feature(StatusBlock, **status_updates)
 
-        P_eff, Q_eff = generatorlimits.project_pq(P_req, Q_req)
-        electrical.P_MW = P_eff
+    def _update_power_outputs(self, **kwargs) -> None:
+        """Apply continuous P/Q control from action.c, projected to limits.
+        """
+        electrical = self.electrical
+
+        # Continuous P/Q control
+        P_req = self.action.c[0] if self.action.c.size >=1 else electrical.P_MW
+        Q_req = self.action.c[1] if self.action.c.size >=2 else electrical.Q_MVAr
+        P_eff, Q_eff = self.limits.project_pq(P_req, Q_req)
+
+        # Apply updates to features
+        elec_updates: Dict[str, Any] = {"P_MW": P_eff}
         if self.action.c.size >= 2:
-            electrical.Q_MVAr = Q_eff
+            elec_updates["Q_MVAr"] = Q_eff
 
-        # Defensive clamp on all child features
-        self.state.clamp_()
+        # Allowed keys for ElectricalBasePh
+        electrical_keys = {f.name for f in fields(ElectricalBasePh)}
+
+        for k, v in kwargs.items():
+            if k in electrical_keys:
+                elec_updates[k] = v
+
+        self.state.update_feature(ElectricalBasePh, **elec_updates)
+
+    def _update_by_kwargs(self, **kwargs) -> None:
+        updates = {
+            "ElectricalBasePh": {},
+            "StatusBlock": {},
+            "PowerLimits": {},
+        }
+        electrical_keys = {f.name for f in fields(ElectricalBasePh)}
+        status_keys = {f.name for f in fields(StatusBlock)}
+        power_limits_keys = {f.name for f in fields(PowerLimits)}
+        for k, v in kwargs.items():
+            if k in electrical_keys:
+                updates["ElectricalBasePh"] = v
+            elif k in status_keys:
+                updates["status_keys"] = v
+            elif k in power_limits_keys:
+                updates["PowerLimits"] = v
+        self.state.update(updates)
 
     def update_cost_safety(self, *args, **kwargs) -> None:
         """Economic cost + S/PF penalties + UC start/stop cost."""
-        electrical = self.electrical
-        P = float(electrical.P_MW or 0.0)
-        Q = float(electrical.Q_MVAr or 0.0)
-
+        P = self.electrical.P_MW or 0.0
+        Q = self.electrical.Q_MVAr or 0.0
         on = 1.0 if self.status.state == "online" else 0.0
-        self.cost = (
-            on * cost_from_curve(P, self._generator_config.cost_curve_coefs) * self._generator_config.dt_h
-            + getattr(self, "_uc_cost_step", 0.0) * self._generator_config.dt_h
-        )
+        dt = self._generator_config.dt_h
 
-        safety = 0.0
-        S = self.limits.s_rated_MVA
-        if self.action.dim_c >= 2 and S is not None:
-            safety += s_over_rating(P, Q, S)
-            safety += pf_penalty(P, Q, self._generator_config.min_pf)
-        self.safety = safety * self._generator_config.dt_h
+        # Cost
+        fuel_cost = cost_from_curve(P, self._generator_config.cost_curve_coefs)
+        uc_cost = self._uc_cost_step
+        self.cost = fuel_cost * on * dt + uc_cost
+
+        # Safety violations
+        violations = self.limits.feasible(P, Q)
+        self.safety = np.sum(list(violations.values())) * on * dt
 
     def _publish_state_updates(self) -> None:
         """Publish electrical state to environment for pandapower sync.
@@ -380,85 +492,31 @@ class Generator(DeviceAgent):
         )
         self.message_broker.publish(channel, message)
 
-    def feasible_action(self) -> None:
-        """Optionally clip action.c to feasible set before use."""
-        if self.action.dim_c:
-            P = float(self.action.c[0])
-            Q = float(self.action.c[1]) if self.action.c.size >= 2 else 0.0
-            P2, Q2 = self.limits.project_pq(P, Q)
-            self.action.c[0] = P2
-            if self.action.c.size >= 2:
-                self.action.c[1] = Q2
-
-    def _advance_uc(self) -> None:
-        """Advance UC lifecycle in StatusBlock using d[0] ∈ {off, on}."""
-        status_block = self.status
-        a = int(self.action.d[0]) if self.action.d.size else 1
-        self._uc_cost_step = 0.0
-
-        status_block.t_in_state_s = (
-            0.0 
-            if status_block.t_in_state_s is None 
-            else float(status_block.t_in_state_s + self._generator_config.dt_h)
-        )
-
-        t_start = int(self._generator_config.startup_time or 0)
-        t_stop = int(self._generator_config.shutdown_time or 0)
-
-        if status_block.state == "online" and a == 0 and t_stop > 0:
-            status_block.state = "shutdown"
-            status_block.t_to_next_s = t_stop * self._generator_config.dt_h
-            status_block.progress_frac = 0.0
-        elif status_block.state == "offline" and a == 1 and t_start > 0:
-            status_block.state = "startup"
-            status_block.t_to_next_s = t_start * self._generator_config.dt_h
-            status_block.progress_frac = 0.0
-
-        if status_block.t_to_next_s is not None:
-            status_block.t_to_next_s = max(0.0, status_block.t_to_next_s - self._generator_config.dt_h)
-            total = t_start if status_block.state == "startup" else t_stop
-            if total > 0:
-                denom = max(total * self._generator_config.dt_h, 1e-9)
-                status_block.progress_frac = float(1.0 - status_block.t_to_next_s / denom)
-
-        if status_block.state == "startup" and status_block.t_to_next_s == 0.0:
-            status_block.state = "online"
-            status_block.t_in_state_s = 0.0
-            status_block.t_to_next_s = None
-            status_block.progress_frac = None
-            self._uc_cost_step = self._generator_config.startup_cost
-
-        if status_block.state == "shutdown" and status_block.t_to_next_s == 0.0:
-            status_block.state = "offline"
-            status_block.t_in_state_s = 0.0
-            status_block.t_to_next_s = None
-            status_block.progress_frac = None
-            self._uc_cost_step = self._generator_config.shutdown_cost
-
     @property
     def electrical(self) -> ElectricalBasePh:
         for f in self.state.features:
             if isinstance(f, ElectricalBasePh):
                 return f
-        raise ValueError("ElectricalBasePh feature not found")
 
     @property
     def status(self) -> StatusBlock:
         for f in self.state.features:
             if isinstance(f, StatusBlock):
                 return f
-        raise ValueError("StatusBlock feature not found")
 
     @property
-    def limits(self) -> GeneratorLimits:
+    def limits(self) -> PowerLimits:
         for f in self.state.features:
-            if isinstance(f, GeneratorLimits):
+            if isinstance(f, PowerLimits):
                 return f
-        raise ValueError("GeneratorLimits feature not found")
 
     @property
     def bus(self) -> str:
         return self._generator_config.bus
+
+    @property
+    def name(self) -> str:
+        return self.agent_id
 
     @property
     def source(self) -> Optional[str]:

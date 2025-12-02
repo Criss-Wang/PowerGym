@@ -4,11 +4,14 @@ from typing import Dict, Iterable, Tuple
 
 import numpy as np
 
-class CollapsePolicy(Enum):
-    """How to collapse 3φ → 1φ for voltage."""
-    SUM_PQ_MEAN_V = "sum_pq_mean_v"       # P,Q sum; |V| mean; θ circular mean
-    SUM_PQ_POSSEQ_V = "sum_pq_posseq_v"   # P,Q sum; positive-sequence |V|,∠ (needs 3 phases)
-
+def remove_duplicate_chars_keep_order(input_string):
+    seen_chars = set()
+    result_chars = []
+    for char in input_string.upper():
+        if char not in seen_chars and char in "ABC":
+            seen_chars.add(char)
+            result_chars.append(char)
+    return "".join(result_chars)
 
 class PhaseModel(Enum):
     BALANCED_1PH = "balanced_1ph"
@@ -18,39 +21,29 @@ class PhaseModel(Enum):
 @dataclass(slots=True)
 class PhaseSpec:
     phases: str = ""  # e.g. "A", "AB", "ABC" (order matters in names/arrays)
-    has_neutral: bool = True
-    earth_bond: bool = True
+    has_neutral: bool = False
+    earth_bond: bool = False
 
     def __post_init__(self):
         # sanitize phases: uppercase, keep subset of ABC, canonical ABC order
-        s = "".join([p for p in self.phases.upper() if p in "ABC"])
-        ordered = "".join([p for p in "ABC" if p in s])
-        self.phases = ordered or "A"
+        self.phases = remove_duplicate_chars_keep_order(self.phases)
         # if no neutral, cannot have earth bond
         if not self.has_neutral and self.earth_bond:
             self.earth_bond = False
 
+    @property
     def nph(self) -> int:
         return len(self.phases)
 
     def index(self, ph: str) -> int:
         return self.phases.index(ph)
 
-    # Normalization helper used by DeviceState
-    def normalized_for_model(self, model: "PhaseModel") -> "PhaseSpec":
-        if model == PhaseModel.BALANCED_1PH:
-            # Balanced -> 1φ (pick first available phase)
-            return PhaseSpec(
-                self.phases[0], 
-                has_neutral=self.has_neutral, 
-                earth_bond=self.earth_bond
-            )
-
-        # THREE_PHASE keeps as-is (canonicalized in __post_init__)
-        return PhaseSpec(
-            self.phases, 
-            has_neutral=self.has_neutral, 
-            earth_bond=self.earth_bond
+    @classmethod
+    def from_dict(cls, d: Dict) -> "PhaseSpec":
+        return cls(
+            d.get("phases", ""), 
+            d.get("has_neutral", False), 
+            d.get("earth_bond", False)
         )
 
     def to_dict(self) -> Dict:
@@ -59,14 +52,6 @@ class PhaseSpec:
             "has_neutral": self.has_neutral, 
             "earth_bond": self.earth_bond,
         }
-
-    @classmethod
-    def from_dict(cls, d: Dict) -> "PhaseSpec":
-        return cls(
-            d.get("phases", "ABC"), 
-            d.get("has_neutral", True), 
-            d.get("earth_bond", True)
-        )
 
     def index_map_to(self, other: "PhaseSpec") -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -82,9 +67,10 @@ class PhaseSpec:
         src_idx, dst_idx = zip(*pairs)
         return np.asarray(src_idx, np.int32), np.asarray(dst_idx, np.int32)
 
-    def align_array(
-            self, arr: Iterable[float], 
+    def align_with(
+            self, 
             other: "PhaseSpec", 
+            arr: Iterable[float], 
             fill: float = 0.0, 
             dtype=np.float32
     ) -> np.ndarray:
@@ -93,49 +79,47 @@ class PhaseSpec:
         Missing phases are filled with `fill`; extra phases are dropped.
         """
         a = np.asarray(arr, dtype=dtype).ravel()
-        if a.size != self.nph():
+        if a.size != self.nph:
             raise ValueError(
-                f"align_array: expected shape ({self.nph()},), got {a.shape}"
+                f"align_array: expected shape ({self.nph},), got {a.shape}"
             )
     
-        out = np.full(other.nph(), fill, dtype)
+        out = np.full(other.nph, fill, dtype)
         si, di = self.index_map_to(other)
         if si.size:
             out[di] = a[si]
     
         return out
 
-def ensure_phase_context(
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}"
+            f"(phases={self.phases!r}, has_neutral={self.has_neutral}, earth_bond={self.earth_bond})"
+        )
+
+def check_phase_model_consistency(
     model: PhaseModel,
     spec: PhaseSpec,
-    *,
-    strict: bool = True
 ) -> PhaseSpec:
     """
-    Return a PhaseSpec consistent with `model`. If `strict` is True,
-    raise ValueError instead of normalizing.
+    Return a PhaseSpec consistent with `model`.
     """
+    if model is None or spec is None:
+        raise ValueError("phase_model and phase_spec cannot be None")
+
+    if isinstance(model, str):
+        model = PhaseModel(model)
+
     # Balanced must be 1φ
     if model == PhaseModel.BALANCED_1PH:
-        if spec.nph() == 1:
-            # also sanitize neutral/bond for 1φ
-            if not spec.has_neutral and spec.earth_bond:
-                return replace(spec, earth_bond=False)
-            return spec
-        if strict:
+        if spec.nph:
             raise ValueError(
-                f"BALANCED_1PH requires 1 phase, got '{spec.phases}'"
+                f"BALANCED_1PH requires nph = 0, got '{spec.nph}'"
             )
-        # normalize: keep the first listed phase, sanitize earth_bond if no neutral
-        first = spec.phases[0]
-        eb = spec.earth_bond if spec.has_neutral else False
-        return PhaseSpec(first, has_neutral=spec.has_neutral, earth_bond=eb)
+
+        return
 
     # THREE_PHASE: allow A, AB, ABC (1–3 conductors out of ABC)
-    # Just sanitize ordering; leave neutral/bond as provided.
     s = "".join([p for p in "ABC" if p in spec.phases.upper()])
     if not s:
-        if strict:
-            raise ValueError("THREE_PHASE requires at least one of A/B/C")
-        s = "A"
-    return PhaseSpec(s, has_neutral=spec.has_neutral, earth_bond=spec.earth_bond)
+        raise ValueError("THREE_PHASE requires at least one of A/B/C")

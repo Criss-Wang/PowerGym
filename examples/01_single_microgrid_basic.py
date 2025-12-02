@@ -68,13 +68,13 @@ class SingleMicrogridEnv(NetworkedGridEnv):
                 "name": "ess1",
                 "device_state_config": {
                     "bus": "Bus 634",  # Will become "MG1 Bus 634" after add_storage
-                    "capacity_MWh": 5.0,  # 5 MWh capacity
-                    "max_e_MWh": 4.5,  # 90% usable
-                    "min_e_MWh": 0.5,  # 10% minimum
-                    "max_p_MW": 1.0,  # 1 MW charging/discharging
-                    "min_p_MW": -1.0,
-                    "max_q_MVAr": 0.5,
-                    "min_q_MVAr": -0.5,
+                    "e_capacity_MWh": 5.0,  # 5 MWh capacity
+                    "soc_max": 0.9,  # 90% usable
+                    "soc_min": 0.1,  # 10% minimum
+                    "p_max_MW": 1.0,  # 1 MW charging/discharging
+                    "p_min_MW": -1.0,
+                    "q_max_MVAr": 0.5,
+                    "q_min_MVAr": -0.5,
                     "s_rated_MVA": 1.2,
                     "init_soc": 0.5,  # Start at 50%
                     "ch_eff": 0.95,

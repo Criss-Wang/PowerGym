@@ -1,12 +1,12 @@
-from dataclasses import asdict, dataclass, field
-from typing import Dict, List, Optional
+from dataclasses import field, dataclass
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from powergrid.core.state import PhaseModel, PhaseSpec
+from powergrid.utils.phase import PhaseModel, PhaseSpec, check_phase_model_consistency
 from powergrid.features.base import FeatureProvider
-from powergrid.utils.array_utils import _as_f32, _cat_f32
 from powergrid.utils.registry import provider
+from powergrid.utils.array_utils import _cat_f32
 from powergrid.utils.typing import Array
 
 
@@ -17,56 +17,51 @@ class ElectricalBasePh(FeatureProvider):
     Phase-aware electrical fundamentals at a connection point.
 
     BALANCED_1PH:
-      - Scalars only: P_MW, Q_MVAr, V_pu, theta_rad.
+      - Scalars only: P_MW, Q_MVAr, Vm_pu, Va_rad.
 
     THREE_PHASE:
       - Per-phase arrays only: *_ph with shape (3,) in spec order.
       - Neutral telemetry allowed only if spec.has_neutral is True.
     """
+    visibility: List[str] = field(default_factory=list)
+
     phase_model: PhaseModel = PhaseModel.BALANCED_1PH
-    phase_spec: Optional[PhaseSpec] = field(default_factory=PhaseSpec)
+    phase_spec: PhaseSpec = field(default_factory=PhaseSpec)
 
     # Balanced scalars
     P_MW: Optional[float] = None
     Q_MVAr: Optional[float] = None
-    V_pu: Optional[float] = None
-    theta_rad: Optional[float] = None
+    Vm_pu: Optional[float] = None
+    Va_rad: Optional[float] = None
 
     # Three-phase arrays
     P_MW_ph: Optional[Array] = None
     Q_MVAr_ph: Optional[Array] = None
-    V_pu_ph: Optional[Array] = None
-    theta_rad_ph: Optional[Array] = None
+    Vm_pu_ph: Optional[Array] = None
+    Va_rad_ph: Optional[Array] = None
 
     # Neutral telemetry (needs has_neutral=True)
     I_neutral_A: Optional[float] = None
     Vn_earth_V: Optional[float] = None
 
-    def __post_init__(self):
-        if self.phase_model == PhaseModel.BALANCED_1PH:
-            self.phase_spec = None
-        elif self.phase_model == PhaseModel.THREE_PHASE:
-            if not isinstance(self.phase_spec, PhaseSpec):
-                raise ValueError("THREE_PHASE requires a PhaseSpec.")
-            n = self.phase_spec.nph()
-            if n not in (1, 2, 3):
-                raise ValueError(
-                    "THREE_PHASE requires PhaseSpec with 1, 2, or 3 phases "
-                    "(e.g., 'A', 'BC', or 'ABC')."
-                )
-        else:
-            raise ValueError(f"Unsupported phase model: {self.phase_model}")
+    # ------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------
 
+    def __post_init__(self):
+        check_phase_model_consistency(self.phase_model, self.phase_spec)
         self._validate_inputs_()
         self._ensure_shapes_()
 
+    # ------------------------------------------------------------
+    # Validation / shapes
+    # ------------------------------------------------------------
+
     def _validate_inputs_(self) -> None:
         if self.phase_model == PhaseModel.BALANCED_1PH:
-            # Balanced: ignore spec (already set to None in __post_init__)
-
             # 1) Forbid any per-phase arrays
             bad = []
-            for name in ("P_MW_ph", "Q_MVAr_ph", "V_pu_ph", "theta_rad_ph"):
+            for name in ("P_MW_ph", "Q_MVAr_ph", "Vm_pu_ph", "Va_rad_ph"):
                 if getattr(self, name) is not None:
                     bad.append(name)
             if bad:
@@ -81,11 +76,11 @@ class ElectricalBasePh(FeatureProvider):
             # 3) Require at least one scalar present
             if all(
                 getattr(self, k) is None
-                for k in ("P_MW", "Q_MVAr", "V_pu", "theta_rad")
+                for k in ("P_MW", "Q_MVAr", "Vm_pu", "Va_rad")
             ):
                 raise ValueError(
                     "BALANCED_1PH requires at least one of "
-                    "P_MW, Q_MVAr, V_pu, or theta_rad."
+                    "P_MW, Q_MVAr, Vm_pu, or Va_rad."
                 )
             return
 
@@ -94,18 +89,18 @@ class ElectricalBasePh(FeatureProvider):
             k for k, v in {
                 "P_MW": self.P_MW,
                 "Q_MVAr": self.Q_MVAr,
-                "V_pu": self.V_pu,
-                "theta_rad": self.theta_rad,
+                "Vm_pu": self.Vm_pu,
+                "Va_rad": self.Va_rad,
             }.items() if v is not None
         ]
         if bad:
             raise ValueError("THREE_PHASE forbids scalar fields: " + ", ".join(bad))
 
         if all(x is None for x in
-            (self.P_MW_ph, self.Q_MVAr_ph, self.V_pu_ph, self.theta_rad_ph)):
+            (self.P_MW_ph, self.Q_MVAr_ph, self.Vm_pu_ph, self.Va_rad_ph)):
             raise ValueError(
                 "THREE_PHASE requires at least one per-phase array: "
-                "P_MW_ph, Q_MVAr_ph, V_pu_ph, or theta_rad_ph."
+                "P_MW_ph, Q_MVAr_ph, Vm_pu_ph, or Va_rad_ph."
             )
 
         # Neutral only if spec.has_neutral
@@ -116,132 +111,315 @@ class ElectricalBasePh(FeatureProvider):
                 )
 
     def _ensure_shapes_(self) -> None:
+        """Normalize internal shapes for balanced vs three-phase models.
+
+        BALANCED_1PH:
+            - Scalars (P_MW, Q_MVAr, Vm_pu, Va_rad) must be scalar-like or None.
+
+        THREE_PHASE:
+            - Per-phase arrays (*_ph) must be 1D with length == phase_spec.nph().
+        """
+        # BALANCED_1PH
+        if self.phase_model == PhaseModel.BALANCED_1PH:
+            for name in ("P_MW", "Q_MVAr", "Vm_pu", "Va_rad"):
+                val = getattr(self, name)
+                if val is None:
+                    continue
+                # Accept anything scalar-like, but normalize to a Python float
+                arr = np.asarray(val, dtype=np.float32)
+                if arr.size != 1:
+                    raise ValueError(
+                        f"{name} must be scalar-like for BALANCED_1PH, "
+                        f"got shape {arr.shape}"
+                    )
+                setattr(self, name, float(arr.item()))
+            # Per-phase arrays are already forbidden in _validate_inputs_
+            return
+
+        # THREE_PHASE
         if self.phase_model == PhaseModel.THREE_PHASE:
-            n = self.phase_spec.nph()
-            def chk(name: str):
-                arr = getattr(self, name)
+            if self.phase_spec is None:
+                raise ValueError("THREE_PHASE requires a PhaseSpec for shape checks.")
+            nph = self.phase_spec.nph
+
+            def _check_ph_array(field_name: str) -> None:
+                arr = getattr(self, field_name)
                 if arr is None:
                     return
-                a = _as_f32(arr).ravel()
-                if a.shape != (n,):
-                    raise ValueError(f"{name} must have shape ({n},), got {a.shape}")
-                setattr(self, name, a)
-            for nm in ("P_MW_ph", "Q_MVAr_ph", "V_pu_ph", "theta_rad_ph"):
-                chk(nm)
+                a = np.asarray(arr, dtype=np.float32).ravel()
+                if a.shape[0] != nph:
+                    raise ValueError(
+                        f"{field_name} must have shape ({nph},), got {a.shape}"
+                    )
+                setattr(self, field_name, a)
 
-    def vector(self) -> Array:
-        parts: List[Array] = []
+            for nm in ("P_MW_ph", "Q_MVAr_ph", "Vm_pu_ph", "Va_rad_ph"):
+                _check_ph_array(nm)
+
+            return
+
+        # Unknown model
+        raise ValueError(f"Unsupported phase model: {self.phase_model}")
+
+    # ------------------------------------------------------------
+    # FeatureProvider API
+    # ------------------------------------------------------------
+
+    def reset(self, **overrides: Any) -> "ElectricalBasePh":
+        """
+        Reset electrical telemetry to neutral values, optionally applying
+        overrides afterward.
+
+        Default behavior (no overrides):
+
+          BALANCED_1PH:
+            - P_MW, Q_MVAr, Va_rad -> 0.0 (if not None)
+            - Vm_pu                -> 1.0 (if not None)
+
+          THREE_PHASE:
+            - P_MW_ph, Q_MVAr_ph, Va_rad_ph -> zeros_like (if not None)
+            - Vm_pu_ph                      -> ones_like  (if not None)
+            - I_neutral_A, Vn_earth_V       -> 0.0        (if not None)
+
+        Overrides:
+            Any keyword arguments are merged on top of the neutral reset and
+            forwarded to `set_values(**...)`, e.g.:
+
+                electrical.reset(P_MW=5.0, Q_MVAr=1.0)
+                electrical.reset(P_MW_ph=[1.0, 1.0, 1.0])
+        """
+        updates: Dict[str, Any] = {}
+
+        # Neutral reset, only for fields that are currently active
         if self.phase_model == PhaseModel.BALANCED_1PH:
-            for v in (self.P_MW, self.Q_MVAr, self.V_pu, self.theta_rad):
+            if self.P_MW is not None:
+                updates["P_MW"] = 0.0
+            if self.Q_MVAr is not None:
+                updates["Q_MVAr"] = 0.0
+            if self.Va_rad is not None:
+                updates["Va_rad"] = 0.0
+            if self.Vm_pu is not None:
+                updates["Vm_pu"] = 1.0
+
+        elif self.phase_model == PhaseModel.THREE_PHASE:
+            for name in ("P_MW_ph", "Q_MVAr_ph", "Va_rad_ph", "Vm_pu_ph"):
+                arr = getattr(self, name)
+                if arr is None:
+                    continue
+
+                if name == "Vm_pu_ph":
+                    updates[name] = np.ones_like(arr, dtype=np.float32)
+                else:
+                    updates[name] = np.zeros_like(arr, dtype=np.float32)
+
+            if self.I_neutral_A is not None:
+                updates["I_neutral_A"] = 0.0
+            if self.Vn_earth_V is not None:
+                updates["Vn_earth_V"] = 0.0
+
+        else:
+            raise ValueError(f"Unsupported phase model in reset(): {self.phase_model}")
+
+        # User overrides on top of neutral reset
+        if overrides:
+            updates.update(overrides)
+
+        if updates:
+            self.set_values(**updates)
+
+        return self
+
+    def set_values(self, **kwargs: Any) -> None:
+        """
+        Update one or more electrical fields and re-validate.
+
+        Example:
+            electrical.set_values(P_MW=5.0, Q_MVAr=1.0)
+
+            electrical.set_values(
+                P_MW_ph=[1.0, 1.0, 1.0],
+                Vm_pu_ph=[1.0, 0.99, 1.01],
+            )
+
+        This will:
+            - assign the given attributes
+            - check phase_model/phase_spec consistency
+            - run _validate_inputs_() and _ensure_shapes_()
+        """
+        # Allowed public fields that describe the electrical state
+        allowed_keys = {
+            "phase_model",
+            "phase_spec",
+            "P_MW",
+            "Q_MVAr",
+            "Vm_pu",
+            "Va_rad",
+            "P_MW_ph",
+            "Q_MVAr_ph",
+            "Vm_pu_ph",
+            "Va_rad_ph",
+            "I_neutral_A",
+            "Vn_earth_V",
+        }
+
+        unknown = set(kwargs.keys()) - allowed_keys
+        if unknown:
+            raise AttributeError(
+                f"ElectricalBasePh.set_values got unknown fields: {sorted(unknown)}"
+            )
+
+        # Assign raw values
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        # Re-check consistency and normalize
+        check_phase_model_consistency(self.phase_model, self.phase_spec)
+        self._validate_inputs_()
+        self._ensure_shapes_()
+
+    def as_vector(self) -> Array:
+        parts = []
+        # BALANCED_1PH
+        if self.phase_model == PhaseModel.BALANCED_1PH:
+            for v in (self.P_MW, self.Q_MVAr, self.Vm_pu, self.Va_rad):
                 if v is not None:
-                    parts.append(np.array([float(v)], np.float32))
+                    parts.append(np.array([v], np.float32))
             return _cat_f32(parts)
 
         # THREE_PHASE
-        def push(a: Optional[Array]) -> None:
-            if a is not None:
-                parts.append(_as_f32(a).ravel())
-        push(self.P_MW_ph)
-        push(self.Q_MVAr_ph)
-        push(self.V_pu_ph)
-        push(self.theta_rad_ph)
-        return _cat_f32(parts)
+        if self.phase_model == PhaseModel.THREE_PHASE:
+            for arr in (self.P_MW_ph, self.Q_MVAr_ph, self.Vm_pu_ph, self.Va_rad_ph):
+                if arr is not None:
+                    parts.append(arr.ravel())
+            return _cat_f32(parts)
+
+        raise ValueError(f"Unsupported phase model: {self.phase_model}")
+
+    def vector(self) -> Array:  # pragma: no cover
+        return self.as_vector()
 
     def names(self) -> List[str]:
-        out: List[str] = []
+        out = []
+        # BALANCED_1PH
         if self.phase_model == PhaseModel.BALANCED_1PH:
             if self.P_MW is not None:
                 out.append("P_MW")
             if self.Q_MVAr is not None:
                 out.append("Q_MVAr")
-            if self.V_pu is not None:
-                out.append("V_pu")
-            if self.theta_rad is not None:
-                out.append("theta_rad")
+            if self.Vm_pu is not None:
+                out.append("Vm_pu")
+            if self.Va_rad is not None:
+                out.append("Va_rad")
             return out
 
         # THREE_PHASE
-        assert self.phase_spec is not None
-        phases = self.phase_spec.phases
-        def per(prefix: str) -> List[str]:
-            return [f"{prefix}_{ph}" for ph in phases]
-        if self.P_MW_ph is not None:
-            out += per("P_MW")
-        if self.Q_MVAr_ph is not None:
-            out += per("Q_MVAr")
-        if self.V_pu_ph is not None:
-            out += per("V_pu")
-        if self.theta_rad_ph is not None:
-            out += per("theta_rad")
-        return out
+        if self.phase_model == PhaseModel.THREE_PHASE:
+            phases = self.phase_spec.phases
+            def per(prefix: str) -> List[str]:
+                return [f"{prefix}_{ph}" for ph in phases]
+            if self.P_MW_ph is not None:
+                out += per("P_MW")
+            if self.Q_MVAr_ph is not None:
+                out += per("Q_MVAr")
+            if self.Vm_pu_ph is not None:
+                out += per("Vm_pu")
+            if self.Va_rad_ph is not None:
+                out += per("Va_rad")
+            return out
 
-    def clamp_(self) -> None:
-        if self.I_neutral_A is not None:
-            self.I_neutral_A = float(max(0.0, self.I_neutral_A))
-        if self.Vn_earth_V is not None:
-            self.Vn_earth_V = float(max(0.0, self.Vn_earth_V))
-
-    def to_dict(self) -> Dict:
-        d = asdict(self)
-
-        # numpy → list for JSON
-        for k in ("P_MW_ph", "Q_MVAr_ph", "V_pu_ph", "theta_rad_ph"):
-            v = d.get(k)
-            if isinstance(v, np.ndarray):
-                d[k] = v.astype(np.float32).tolist()
-
-        ps = d.pop("phase_spec", None)
-        if ps is None:
-            d["phase_spec"] = None
-        elif isinstance(ps, dict):
-            d["phase_spec"] = {
-                "phases": ps.get("phases", "ABC"),
-                "has_neutral": ps.get("has_neutral", False),
-                "earth_bond": ps.get("earth_bond", True),
-            }
-        else:
-            d["phase_spec"] = {
-                "phases": ps.phases,
-                "has_neutral": ps.has_neutral,
-                "earth_bond": ps.earth_bond,
-            }
-
-        pm = self.phase_model
-        d["phase_model"] = pm.value if isinstance(pm, PhaseModel) else str(pm)
-        return d
+        raise ValueError(f"Unsupported phase model: {self.phase_model}")
 
     @classmethod
-    def from_dict(cls, d: Dict) -> "ElectricalBasePh":
-        pm = d.get("phase_model", PhaseModel.BALANCED_1PH)
-        pm = pm if isinstance(pm, PhaseModel) else PhaseModel(pm)
+    def from_dict(cls, d: Dict[str, Any]) -> "ElectricalBasePh":
+        """
+        Construct ElectricalBasePh from a serialized dict.
 
-        psd = d.get("phase_spec", None)
-        if psd is None:
-            ps = None
-        elif isinstance(psd, PhaseSpec):
-            ps = psd
+        Expected keys (all optional except at least one electrical value):
+          - phase_model: str | PhaseModel
+          - phase_spec: dict | PhaseSpec
+          - P_MW, Q_MVAr, Vm_pu, Va_rad
+          - P_MW_ph, Q_MVAr_ph, Vm_pu_ph, Va_rad_ph
+          - I_neutral_A, Vn_earth_V
+        """
+        flat = cls._flatten_dict(d)
+        return cls(**flat)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Simple explicit serialization; avoids surprises from asdict()."""
+        ps_dict = {
+            "phases": self.phase_spec.phases,
+            "has_neutral": self.phase_spec.has_neutral,
+            "earth_bond": self.phase_spec.earth_bond,
+        }
+
+        return {
+            "phase_model": self.phase_model.value,
+            "phase_spec": ps_dict,
+            "P_MW": self.P_MW,
+            "Q_MVAr": self.Q_MVAr,
+            "Vm_pu": self.Vm_pu,
+            "Va_rad": self.Va_rad,
+            "P_MW_ph": self.P_MW_ph,
+            "Q_MVAr_ph": self.Q_MVAr_ph,
+            "Vm_pu_ph": self.Vm_pu_ph,
+            "Va_rad_ph": self.Va_rad_ph,
+            "I_neutral_A": self.I_neutral_A,
+            "Vn_earth_V": self.Vn_earth_V,
+        }
+
+    # ------------------------------------------------------------
+    # Serialization helpers
+    # ------------------------------------------------------------
+
+    @staticmethod
+    def _flatten_dict(d: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normalize a raw dict into ctor kwargs:
+          - phase_model: string → PhaseModel
+          - phase_spec: dict → PhaseSpec
+          - leave numerical fields as-is
+        """
+        out: Dict[str, Any] = dict(d)
+
+        # phase_model
+        pm = out.get("phase_model", PhaseModel.BALANCED_1PH)
+        if not isinstance(pm, PhaseModel):
+            out["phase_model"] = PhaseModel(pm)
+
+        # phase_spec
+        psd = out.get("phase_spec", None)
+        if psd is None or isinstance(psd, PhaseSpec):
+            # leave as is
+            pass
         else:
-            ps = PhaseSpec(
-                psd.get("phases", "ABC"),
-                psd.get("has_neutral", False),
-                psd.get("earth_bond", True),
+            out["phase_spec"] = PhaseSpec(
+                phases=psd.get("phases", ""),
+                has_neutral=psd.get("has_neutral", False),
+                earth_bond=psd.get("earth_bond", False),
             )
 
-        def arr(key: str):
-            v = d.get(key)
-            return None if v is None else _as_f32(v)
+        return out
 
-        return cls(
-            phase_model=pm,
-            phase_spec=ps,
-            P_MW=d.get("P_MW"),
-            Q_MVAr=d.get("Q_MVAr"),
-            V_pu=d.get("V_pu"),
-            theta_rad=d.get("theta_rad"),
-            P_MW_ph=arr("P_MW_ph"),
-            Q_MVAr_ph=arr("Q_MVAr_ph"),
-            V_pu_ph=arr("V_pu_ph"),
-            theta_rad_ph=arr("theta_rad_ph"),
-            I_neutral_A=d.get("I_neutral_A"),
-            Vn_earth_V=d.get("Vn_earth_V"),
+    # ------------------------------------------------------------
+    # Representation
+    # ------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        if self.phase_model == PhaseModel.BALANCED_1PH:
+            return (
+                f"ElectricalBasePh(phase_model=BALANCED_1PH, phases='', "
+                f"visibility={self.visibility}, "
+                f"P_MW={self.P_MW}, Q_MVAr={self.Q_MVAr}, "
+                f"Vm_pu={self.Vm_pu}, Va_rad={self.Va_rad})"
+            )
+
+        return (
+            "ElectricalBasePh("
+            f"phase_model=THREE_PHASE, phases={self.phase_spec.phases}, "
+            f"visibility={self.visibility}, "
+            f"P_MW_ph={self.P_MW_ph}, "
+            f"Q_MVAr_ph={self.Q_MVAr_ph}, "
+            f"Vm_pu_ph={self.Vm_pu_ph}, "
+            f"Va_rad_ph={self.Va_rad_ph}, "
+            f"I_neutral_A={self.I_neutral_A}, Vn_earth_V={self.Vn_earth_V})"
         )
