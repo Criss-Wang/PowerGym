@@ -1,4 +1,4 @@
-from abc import ABC
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Type, Tuple, Optional
 
@@ -6,9 +6,22 @@ import numpy as np
 
 from powergrid.features.base import FeatureProvider, AgentLike
 from powergrid.utils.typing import Array
+from powergrid.utils.registry import provider
 from powergrid.utils.array_utils import _cat_f32
 
+KNOWN_FEATURES: Dict[str, Type[FeatureProvider]] = {}
 
+def _vec_names(feat: FeatureProvider) -> Tuple[np.ndarray, List[str]]:
+    v = np.asarray(feat.vector(), np.float32).ravel()
+    n = feat.names()
+    if len(n) != v.size:
+        raise ValueError(
+            f"{feat.__class__.__name__}: names ({len(n)}) != vector size ({v.size})."
+        )
+    return v, n
+
+
+@provider()
 @dataclass(slots=True)
 class State(ABC):
     """Generic agent state, defined by a list of feature providers."""
@@ -52,26 +65,22 @@ class State(ABC):
         if overrides is not None:
             self.update(overrides)
 
-    def update(self, updates: Dict[str, Dict[str, Any]]) -> None:
+    @abstractmethod
+    def update(self, *args: Any, **kwargs: Any) -> None:
         """
-        Apply a batch of updates to features.
+        Abstract state-update hook.
 
-        `updates` is a mapping:
+        Subclasses (DeviceState, GridState, ...) must implement this with
+        their own semantics, e.g.:
 
-            {
-                ElectricalBasePh: {"P_MW": 5.0, "Q_MVAr": 1.0},
-                StatusBlock:      {"state": "online"},
-                ...
-            }
+            - DeviceState.update(...)        -> device-level feature updates
+            - GridState.update(...)          -> grid-wide feature updates
+            - GridState.update_local_device(...)
 
-        For each feature in `self.features`, if its class appears as a key in
-        `updates`, we forward the corresponding dict to feature.set_values(**...).
+        For convenience, subclasses can reuse `_apply_feature_updates(...)`
+        to apply batched `FeatureProvider.set_values(...)` calls.
         """
-        for feat in self.features:
-            data = updates.get(type(feat).__name__)
-            if data:
-                # FeatureProvider is assumed to implement set_values(**kwargs)
-                feat.set_values(**data)
+        raise NotImplementedError
 
     def update_feature(self, feature_type: Type[FeatureProvider], **values: Any) -> None:
         """
@@ -80,7 +89,7 @@ class State(ABC):
         Example:
             state.update_feature(ElectricalBasePh, P_MW=10.0, Q_MVAr=2.0)
         """
-        for feat in self.features:
+        for feat in self._iter_features():
             if isinstance(feat, feature_type):
                 feat.set_values(**values)
                 # If you might have multiple of the same type, either:
@@ -105,7 +114,7 @@ class State(ABC):
         """
         vecs: List[np.ndarray] = []
 
-        for feat in self.features:
+        for feat in self._iter_features():
             if "public" in feat.visibility:
                 vecs.append(feat.vector())
             if "owner" in feat.visibility:
@@ -148,21 +157,35 @@ class State(ABC):
             feat_dict[key] = feat.to_dict()
 
         return feat_dict
-            if hasattr(cls_, "from_dict"):
-                feats.append(cls_.from_dict(payload))  # type: ignore
-            else:
-                feats.append(cls_(**payload))          # type: ignore
 
-        ds = cls(
-            phase_model=pm,
-            phase_spec=ps,
-            features=feats,
-            prefix_names=d.get("prefix_names", False),
-        )
-        # Defensive: apply again post-build
-        ds._validate_phase_context_()
-        ds._apply_phase_context_to_features_()
-        return ds
+
+@dataclass(slots=True)
+class DeviceState(State):
+
+    def update(self, updates: Dict[Optional[str, FeatureProvider], Dict[str, Any]]) -> None:
+        """
+        Apply a batch of updates to features.
+
+        `updates` is a mapping:
+
+            {
+                ElectricalBasePh: {"P_MW": 5.0, "Q_MVAr": 1.0},
+                StatusBlock:      {"state": "online"},
+                ...
+            }
+
+        For each feature in `self.features`, if its class appears as a key in
+        `updates`, we forward the corresponding dict to feature.set_values(**...).
+        """
+        for feat in self._iter_features():
+            feature_type = type(feat)
+            values = {}
+            if feature_type in updates:
+                values = updates.get(feature_type)
+            if feature_type.__name__ in updates:
+                values = updates.get(feature_type)
+
+            self.update_feature(feature_type, values)
 
 
 @provider()
