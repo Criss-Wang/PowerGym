@@ -160,4 +160,5 @@ checkpoints/*
 */paper_related/*
 
 # preparation docs (not for remote)
-docs/prep/*
+docs/source/internal/prep/*
+docs/source/internal/design/*
