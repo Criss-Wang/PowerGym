@@ -171,4 +171,21 @@ class DeviceState(State):
 
 @dataclass(slots=True)
 class GridState(State):
-    pass
+    def update(self, updates: Dict[str, Dict[str, Any]]) -> None:
+        """Apply batch updates to grid-level features.
+
+        Args:
+            updates: Dict mapping feature names to field updates:
+                {
+                    "ElectricalBasePh": {"P_MW": 5.0, "Q_MVAr": 1.0},
+                    "StatusBlock": {"state": "online"},
+                    ...
+                }
+
+        Each feature in self.features that matches a key in updates will have
+        its corresponding field values updated via feature.set_values(**values).
+        """
+        for feature in self.features:
+            if feature.feature_name in updates:
+                values = updates.get(feature.feature_name)
+                self.update_feature(feature.feature_name, **values)

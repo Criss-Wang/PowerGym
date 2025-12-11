@@ -49,14 +49,14 @@ class ElectricalBasePh(FeatureProvider):
 
     def __post_init__(self):
         check_phase_model_consistency(self.phase_model, self.phase_spec)
-        self._validate_inputs_()
+        self._validate_inputs()
         self._ensure_shapes_()
 
     # ------------------------------------------------------------
     # Validation / shapes
     # ------------------------------------------------------------
 
-    def _validate_inputs_(self) -> None:
+    def _validate_inputs(self) -> None:
         if self.phase_model == PhaseModel.BALANCED_1PH:
             # 1) Forbid any per-phase arrays
             bad = []
@@ -132,7 +132,7 @@ class ElectricalBasePh(FeatureProvider):
                         f"got shape {arr.shape}"
                     )
                 setattr(self, name, float(arr.item()))
-            # Per-phase arrays are already forbidden in _validate_inputs_
+            # Per-phase arrays are already forbidden in _validate_inputs
             return
 
         # THREE_PHASE
@@ -243,7 +243,7 @@ class ElectricalBasePh(FeatureProvider):
         This will:
             - assign the given attributes
             - check phase_model/phase_spec consistency
-            - run _validate_inputs_() and _ensure_shapes_()
+            - run _validate_inputs() and _ensure_shapes_()
         """
         # Allowed public fields that describe the electrical state
         allowed_keys = {
@@ -273,7 +273,7 @@ class ElectricalBasePh(FeatureProvider):
 
         # Re-check consistency and normalize
         check_phase_model_consistency(self.phase_model, self.phase_spec)
-        self._validate_inputs_()
+        self._validate_inputs()
         self._ensure_shapes_()
 
     def vector(self) -> np.ndarray:

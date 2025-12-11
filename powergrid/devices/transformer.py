@@ -4,7 +4,7 @@ from typing import Any, Optional, Dict
 from powergrid.agents.device_agent import DeviceAgent
 from powergrid.core.protocols import NoProtocol, Protocol
 from powergrid.core.policies import Policy
-from powergrid.features.tap_changer import TapChangerBlock
+from powergrid.features.tap_changer import TapChangerPh
 from powergrid.messaging.base import MessageBroker
 from powergrid.utils.cost import tap_change_cost
 from powergrid.utils.safety import loading_over_pct
@@ -87,12 +87,10 @@ class Transformer(DeviceAgent):
     def set_device_state(self) -> None:
         """Define device state with tap changer block."""
         cfg = self._transformer_config
-        tap_changer = TapChangerBlock(
+        tap_changer = TapChangerPh(
             tap_position=cfg.tap_min if cfg.tap_min is not None else 0,
             tap_min=cfg.tap_min or 0,
             tap_max=cfg.tap_max or 0,
-            loading_percentage=0.0,
-            visibility=["owner"],
         )
         self.state.features = [tap_changer]
         self.state.owner_id = self.agent_id
@@ -134,13 +132,10 @@ class Transformer(DeviceAgent):
             **kwargs: Optional keyword arguments:
                 loading_percentage: Transformer loading percentage
         """
-        loading_percentage = kwargs.get("loading_percentage", self.tap_changer.loading_percentage)
-
-        # Update loading percentage in state
-        self.tap_changer.set_values(loading_percentage=float(loading_percentage))
+        loading_percentage = kwargs.get("loading_percentage", 0.0)
 
         # Safety: loading-derived penalty
-        self.safety = loading_over_pct(self.tap_changer.loading_percentage)
+        self.safety = loading_over_pct(loading_percentage)
 
         # Cost: tap change operations
         delta = abs(self.tap_changer.tap_position - self._last_tap_position)
@@ -148,10 +143,10 @@ class Transformer(DeviceAgent):
         self._last_tap_position = self.tap_changer.tap_position
 
     @property
-    def tap_changer(self) -> TapChangerBlock:
+    def tap_changer(self) -> TapChangerPh:
         """Get tap changer feature block."""
         for f in self.state.features:
-            if isinstance(f, TapChangerBlock):
+            if isinstance(f, TapChangerPh):
                 return f
 
     @property

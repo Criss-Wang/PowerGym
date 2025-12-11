@@ -192,3 +192,31 @@ class PhaseConnection(FeatureProvider):
             phase_spec=ps,
             connection=d.get("connection"),
         )
+
+    def set_values(self, **kwargs) -> None:
+        """Update connection field and re-validate.
+
+        Args:
+            **kwargs: Field names and values to update
+
+        Example:
+            connection.set_values(connection="ON")
+            connection.set_values(connection="BC")
+        """
+        allowed_keys = {"connection"}
+
+        unknown = set(kwargs.keys()) - allowed_keys
+        if unknown:
+            raise AttributeError(
+                f"PhaseConnection.set_values got unknown fields: {sorted(unknown)}"
+            )
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        # Re-apply validation logic based on current phase model
+        if self.phase_model == PhaseModel.BALANCED_1PH:
+            self._normalize_conn_balanced_defer_()
+        elif self.phase_model == PhaseModel.THREE_PHASE:
+            if self.connection is not None:
+                self._validate_conn_three_phase_(self.connection, self.phase_spec)

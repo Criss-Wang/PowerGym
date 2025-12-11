@@ -100,14 +100,14 @@ class StorageBlock(FeatureProvider):
     # ------------------------------------------------------------
 
     def __post_init__(self) -> None:
-        self._validate_inputs_()
+        self._validate_inputs()
         self.clip_()
 
     # ------------------------------------------------------------
     # Validation / clamp
     # ------------------------------------------------------------
 
-    def _validate_inputs_(self) -> None:
+    def _validate_inputs(self) -> None:
         # SOC bounds
         for v, nm in (
             (self.soc_min, "soc_min"),
@@ -285,7 +285,7 @@ class StorageBlock(FeatureProvider):
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-        self._validate_inputs_()
+        self._validate_inputs()
         self.clip_()
 
     # ------------------------------------------------------------

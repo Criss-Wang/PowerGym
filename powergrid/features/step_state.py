@@ -45,3 +45,22 @@ class StepState(FeatureProvider):
 
     def to_phase_model(self, model: PhaseModel, spec: PhaseSpec, policy=None) -> "StepState":
         return self
+
+    def set_values(self, **kwargs) -> None:
+        """Update step state fields.
+
+        Args:
+            **kwargs: Field names and values to update
+        """
+        allowed_keys = {"max_step", "step"}
+
+        unknown = set(kwargs.keys()) - allowed_keys
+        if unknown:
+            raise AttributeError(
+                f"StepState.set_values got unknown fields: {sorted(unknown)}"
+            )
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        self.clamp_()

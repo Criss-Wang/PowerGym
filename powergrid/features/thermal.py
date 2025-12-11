@@ -50,10 +50,10 @@ class ThermalLoading(FeatureProvider):
         else:
             raise ValueError(f"Unsupported phase model: {self.phase_model}")
 
-        self._validate_inputs_()
+        self._validate_inputs()
         self._ensure_shapes_()
 
-    def _validate_inputs_(self) -> None:
+    def _validate_inputs(self) -> None:
         if self.phase_model == PhaseModel.BALANCED_1PH:
             if self.loading_percentage_ph is not None:
                 raise ValueError(
@@ -167,3 +167,28 @@ class ThermalLoading(FeatureProvider):
             loading_percentage=d.get("loading_percentage"),
             loading_percentage_ph=arr("loading_percentage_ph"),
         )
+
+    def set_values(self, **kwargs) -> None:
+        """Update thermal loading fields and re-validate.
+
+        Args:
+            **kwargs: Field names and values to update
+
+        Example:
+            thermal.set_values(loading_percentage=75.0)
+            thermal.set_values(loading_percentage_ph=np.array([70.0, 80.0, 75.0]))
+        """
+        allowed_keys = {"loading_percentage", "loading_percentage_ph"}
+
+        unknown = set(kwargs.keys()) - allowed_keys
+        if unknown:
+            raise AttributeError(
+                f"ThermalLoading.set_values got unknown fields: {sorted(unknown)}"
+            )
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        self._validate_inputs()
+        self._ensure_shapes_()
+        self.clamp_()

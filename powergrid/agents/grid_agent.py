@@ -65,7 +65,7 @@ class GridAgent(Agent):
         """
         self.protocol = protocol
         self.policy = policy
-        self.state = GridState()
+        self.state = GridState(agent_id, GRID_LEVEL)
 
         # Build device agents
         device_configs = grid_config.get('devices', [])

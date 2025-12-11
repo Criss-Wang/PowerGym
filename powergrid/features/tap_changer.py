@@ -44,7 +44,7 @@ class TapChangerPh(FeatureProvider):
         else:
             raise ValueError(f"Unsupported phase model: {self.phase_model}")
 
-        self._validate_inputs_()
+        self._validate_inputs()
         self.clamp_()  # keep invariants
 
     def _nsteps(self) -> int:
@@ -52,7 +52,7 @@ class TapChangerPh(FeatureProvider):
             return 0
         return int(self.tap_max - self.tap_min + 1)
 
-    def _validate_inputs_(self) -> None:
+    def _validate_inputs(self) -> None:
         # require a valid tap range
         if self.tap_min is None or self.tap_max is None:
             raise ValueError("Provide 'tap_min' and 'tap_max'.")
@@ -206,3 +206,33 @@ class TapChangerPh(FeatureProvider):
             tap_position=d.get("tap_position"),
             tap_pos_ph=arr,
         )
+
+    def set_values(self, **kwargs) -> None:
+        """Update tap changer fields and re-validate.
+
+        Args:
+            **kwargs: Field names and values to update
+
+        Example:
+            tap_changer.set_values(tap_position=5)
+            tap_changer.set_values(tap_pos_ph=np.array([3, 4, 5]))
+        """
+        allowed_keys = {
+            "tap_position",
+            "tap_pos_ph",
+            "tap_min",
+            "tap_max",
+            "one_hot",
+        }
+
+        unknown = set(kwargs.keys()) - allowed_keys
+        if unknown:
+            raise AttributeError(
+                f"TapChangerPh.set_values got unknown fields: {sorted(unknown)}"
+            )
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        self._validate_inputs()
+        self.clamp_()

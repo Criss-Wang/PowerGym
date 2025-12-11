@@ -92,6 +92,26 @@ class BusVoltages(FeatureProvider):
             bus_names=d.get("bus_names", []),
         )
 
+    def set_values(self, **kwargs) -> None:
+        """Update bus voltage fields.
+
+        Args:
+            **kwargs: Field names and values to update
+        """
+        allowed_keys = {"vm_pu", "va_deg", "bus_names"}
+
+        unknown = set(kwargs.keys()) - allowed_keys
+        if unknown:
+            raise AttributeError(
+                f"BusVoltages.set_values got unknown fields: {sorted(unknown)}"
+            )
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        self.__post_init__()
+        self.clamp_()
+
 
 @provider()
 @dataclass(slots=True)
@@ -187,6 +207,26 @@ class LineFlows(FeatureProvider):
             line_names=d.get("line_names", []),
         )
 
+    def set_values(self, **kwargs) -> None:
+        """Update line flow fields.
+
+        Args:
+            **kwargs: Field names and values to update
+        """
+        allowed_keys = {"p_from_mw", "q_from_mvar", "loading_percent", "line_names"}
+
+        unknown = set(kwargs.keys()) - allowed_keys
+        if unknown:
+            raise AttributeError(
+                f"LineFlows.set_values got unknown fields: {sorted(unknown)}"
+            )
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        self.__post_init__()
+        self.clamp_()
+
 
 @provider()
 @dataclass(slots=True)
@@ -231,3 +271,28 @@ class NetworkMetrics(FeatureProvider):
     @classmethod
     def from_dict(cls, d: Dict) -> "NetworkMetrics":
         return cls(**d)
+
+    def set_values(self, **kwargs) -> None:
+        """Update network metrics fields.
+
+        Args:
+            **kwargs: Field names and values to update
+        """
+        allowed_keys = {
+            "total_gen_mw",
+            "total_load_mw",
+            "total_loss_mw",
+            "total_gen_mvar",
+            "total_load_mvar",
+        }
+
+        unknown = set(kwargs.keys()) - allowed_keys
+        if unknown:
+            raise AttributeError(
+                f"NetworkMetrics.set_values got unknown fields: {sorted(unknown)}"
+            )
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        self.clamp_()

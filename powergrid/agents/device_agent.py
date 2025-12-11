@@ -71,7 +71,7 @@ class DeviceAgent(Agent):
             env_id: Optional environment ID for multi-environment isolation
             device_config: Device configuration dict
         """
-        self.state: DeviceState = DeviceState()
+        self.state: DeviceState = DeviceState(agent_id, DEVICE_LEVEL)
         self.action: Action = Action()
         self.cost: float = 0.0
         self.safety: float = 0.0
