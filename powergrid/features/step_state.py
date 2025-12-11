@@ -6,7 +6,7 @@ from typing import List, Optional
 import numpy as np
 
 from powergrid.features.base import FeatureProvider
-from powergrid.core.state import PhaseModel, PhaseSpec
+from powergrid.utils.phase import PhaseModel, PhaseSpec
 from powergrid.utils.registry import provider
 
 @provider()

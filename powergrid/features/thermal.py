@@ -3,9 +3,9 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from powergrid.core.state import PhaseModel, PhaseSpec
 from powergrid.features.base import FeatureProvider
 from powergrid.utils.array_utils import as_f32
+from powergrid.utils.phase import PhaseModel, PhaseSpec
 from powergrid.utils.registry import provider
 
 

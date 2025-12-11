@@ -468,12 +468,23 @@ class PowerGridAgent(GridAgent):
         for device_config in device_configs:
             device_type = device_config.get('type', None)
 
+            # Wrap YAML config in device_state_config if not already wrapped
+            # Keep name and type at top level
+            if 'device_state_config' not in device_config:
+                wrapped_config = {
+                    'name': device_config.get('name', 'device_agent'),
+                    'type': device_type,
+                    'device_state_config': device_config
+                }
+            else:
+                wrapped_config = device_config
+
             if device_type == 'Generator':
                 generator = Generator(
                     message_broker=message_broker,
                     upstream_id=upstream_id,
                     env_id=env_id,
-                    device_config=device_config,
+                    device_config=wrapped_config,
                 )
                 devices[generator.agent_id] = generator
                 generators.append(generator)
@@ -482,7 +493,7 @@ class PowerGridAgent(GridAgent):
                     message_broker=message_broker,
                     upstream_id=upstream_id,
                     env_id=env_id,
-                    device_config=device_config,
+                    device_config=wrapped_config,
                 )
                 devices[ess.agent_id] = ess
                 ess_devices.append(ess)
@@ -830,8 +841,11 @@ class PowerGridAgent(GridAgent):
             # Handle both scalar and array cases
             p_mw = p_mw_val if np.isscalar(p_mw_val) else p_mw_val.values[0]
             q_mvar = q_mvar_val if np.isscalar(q_mvar_val) else q_mvar_val.values[0]
-            dg.electrical.P_MW = p_mw
-            dg.electrical.Q_MVAr = q_mvar
+            # Handle NaN values (can occur if power flow didn't converge properly)
+            if not np.isnan(p_mw):
+                dg.electrical.P_MW = p_mw
+            if not np.isnan(q_mvar):
+                dg.electrical.Q_MVAr = q_mvar
 
     def update_cost_safety(self, net):
         """Update cost and safety metrics for the grid.

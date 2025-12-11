@@ -173,7 +173,10 @@ def get_policy_configs(env, args):
         Tuple of (policies dict, policy_mapping_fn)
     """
     # Get possible agents - handle wrapped env
-    if hasattr(env, 'possible_agents'):
+    if hasattr(env, 'par_env') and hasattr(env.par_env, 'possible_agents'):
+        # ParallelPettingZooEnv wrapper - get from inner env
+        possible_agents = env.par_env.possible_agents
+    elif hasattr(env, 'possible_agents') and len(env.possible_agents) > 0:
         possible_agents = env.possible_agents
     elif hasattr(env, 'env') and hasattr(env.env, 'possible_agents'):
         possible_agents = env.env.possible_agents
@@ -268,6 +271,10 @@ def main():
     # Configure PPO algorithm
     config = (
         PPOConfig()
+        .api_stack(
+            enable_rl_module_and_learner=False,
+            enable_env_runner_and_connector_v2=False,
+        )
         .environment(
             env="multi_agent_microgrids",
             env_config=env_config,
@@ -275,27 +282,16 @@ def main():
         )
         .framework("torch")
         .training(
-            train_batch_size=args.train_batch_size,
-            sgd_minibatch_size=args.sgd_minibatch_size,
-            num_sgd_iter=args.num_sgd_iter,
             lr=args.lr,
             gamma=args.gamma,
             lambda_=args.lambda_,
             vf_clip_param=10.0,
             entropy_coeff=0.01,
             clip_param=0.3,
-            model={
-                "fcnet_hiddens": [args.hidden_dim, args.hidden_dim],
-                "fcnet_activation": "relu",
-            },
         )
         .multi_agent(
             policies=policies,
             policy_mapping_fn=policy_mapping_fn,
-        )
-        .rollouts(
-            num_rollout_workers=args.num_workers,
-            num_envs_per_worker=args.num_envs_per_worker,
         )
         .resources(
             num_gpus=0 if args.no_cuda else 1,
@@ -304,6 +300,21 @@ def main():
             seed=args.seed,
         )
     )
+
+    # Set these parameters directly on config object (not supported in method chaining)
+    config.train_batch_size = args.train_batch_size
+    config.sgd_minibatch_size = args.sgd_minibatch_size
+    config.num_sgd_iter = args.num_sgd_iter
+    config.num_rollout_workers = args.num_workers
+    config.num_envs_per_worker = args.num_envs_per_worker
+    config.model = {
+        "fcnet_hiddens": [args.hidden_dim, args.hidden_dim],
+        "fcnet_activation": "relu",
+        "max_seq_len": 20,  # Required by PPO torch policy
+    }
+    # Disable observation preprocessing to avoid validation issues with PettingZoo wrapper
+    config.preprocessor_pref = None
+    config.enable_connectors = False
 
     # Setup W&B logging if requested
     if args.wandb:
