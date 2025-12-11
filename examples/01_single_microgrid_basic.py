@@ -41,62 +41,52 @@ class SingleMicrogridEnv(NetworkedGridEnv):
         # Create IEEE 13-bus network
         net = IEEE13Bus("MG1")
 
-        # Create devices
-        # Note: bus names should be just "Bus XXX" without MG1 prefix
-        # The PowerGridAgent._add_sgen will prepend the microgrid name
-        generator = Generator(
-            agent_id="gen1",
-            device_config={
-                "name": "gen1",
-                "device_state_config": {
-                    "bus": "Bus 633",  # Will become "MG1 Bus 633" after _add_sgen
-                    "p_max_MW": 2.0,
-                    "p_min_MW": 0.5,
-                    "q_max_MVAr": 1.0,
-                    "q_min_MVAr": -1.0,
-                    "s_rated_MVA": 2.5,
-                    "startup_time_hr": 1.0,
-                    "shutdown_time_hr": 1.0,
-                    "cost_curve_coefs": [0.02, 10.0, 0.0],  # quadratic cost
-                },
-            },
-        )
-
-        ess = ESS(
-            agent_id="ess1",
-            device_config={
-                "name": "ess1",
-                "device_state_config": {
-                    "bus": "Bus 634",  # Will become "MG1 Bus 634"
-                    "e_capacity_MWh": 5.0,  # 5 MWh capacity
-                    "soc_max": 0.9,  # 90% usable
-                    "soc_min": 0.1,  # 10% minimum
-                    "p_max_MW": 1.0,  # 1 MW charging/discharging
-                    "p_min_MW": -1.0,
-                    "q_max_MVAr": 0.5,
-                    "q_min_MVAr": -0.5,
-                    "s_rated_MVA": 1.2,
-                    "init_soc": 0.5,  # Start at 50%
-                    "ch_eff": 0.95,
-                    "dsc_eff": 0.95,
-                },
-            },
-        )
-
-        # Create GridAgent with centralized control
+        # Create GridAgent with centralized control using full grid_config
+        # Note: Devices are now automatically created from grid_config
         mg_agent = PowerGridAgent(
             net=net,
             grid_config={
                 "name": "MG1",
                 "base_power": 1.0,
                 "load_scale": 1.0,
+                "devices": [
+                    {
+                        "type": "Generator",
+                        "name": "gen1",
+                        "device_state_config": {
+                            "bus": "Bus 633",
+                            "p_max_MW": 2.0,
+                            "p_min_MW": 0.5,
+                            "q_max_MVAr": 1.0,
+                            "q_min_MVAr": -1.0,
+                            "s_rated_MVA": 2.5,
+                            "startup_time_hr": 1.0,
+                            "shutdown_time_hr": 1.0,
+                            "cost_curve_coefs": [0.02, 10.0, 0.0],
+                        },
+                    },
+                    {
+                        "type": "ESS",
+                        "name": "ess1",
+                        "device_state_config": {
+                            "bus": "Bus 634",
+                            "e_capacity_MWh": 5.0,
+                            "soc_max": 0.9,
+                            "soc_min": 0.1,
+                            "p_max_MW": 1.0,
+                            "p_min_MW": -1.0,
+                            "q_max_MVAr": 0.5,
+                            "q_min_MVAr": -0.5,
+                            "s_rated_MVA": 1.2,
+                            "init_soc": 0.5,
+                            "ch_eff": 0.95,
+                            "dsc_eff": 0.95,
+                        },
+                    },
+                ],
             },
-            protocol=CentralizedSetpointProtocol(),  # Direct action distribution
+            protocol=CentralizedSetpointProtocol(),
         )
-
-        # Manually register devices to the agent
-        mg_agent.devices[generator.agent_id] = generator
-        mg_agent.devices[ess.agent_id] = ess
 
         # Add dataset (simple synthetic data)
         dataset = self._create_synthetic_dataset()
@@ -106,24 +96,14 @@ class SingleMicrogridEnv(NetworkedGridEnv):
         self.data_size = len(dataset["load"])
         self._total_days = self.data_size // self.max_episode_steps
 
-        # Add devices to pandapower network
-        mg_agent._add_sgen([generator])
-        # Note: There is no _add_storage method yet, ESS devices need to be added manually to pandapower
-        # For now, we'll need to add storage devices to the network ourselves
-        bus_id = pp.get_element_index(net, 'bus', mg_agent.name + ' ' + ess.bus)
-        pp.create_storage(
-            net,
-            bus_id,
-            name=mg_agent.name + ' ' + ess.config.name,
-            p_mw=ess.electrical.P_MW,
-            max_e_mwh=ess.storage.e_capacity_MWh,
-            soc_percent=ess.storage.soc * 100,
-            max_p_mw=ess.storage.p_ch_max_MW,
-            min_p_mw=-ess.storage.p_dsc_max_MW,
-            max_q_mvar=ess.limits.q_max_MVAr if ess.limits else 0.0,
-            min_q_mvar=ess.limits.q_min_MVAr if ess.limits else 0.0,
-        )
-        mg_agent.storage[ess.config.name] = ess
+        # Add devices to pandapower network (automatically created from grid_config)
+        generators = [dev for dev in mg_agent.devices.values() if isinstance(dev, Generator)]
+        ess_devices = [dev for dev in mg_agent.devices.values() if isinstance(dev, ESS)]
+
+        if generators:
+            mg_agent._add_sgen(generators)
+        if ess_devices:
+            mg_agent._add_storage(ess_devices)
 
         # Store agents
         self.possible_agents = ["MG1"]

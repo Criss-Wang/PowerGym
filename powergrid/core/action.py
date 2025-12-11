@@ -7,7 +7,6 @@ import gymnasium as gym
 from gymnasium.spaces import Box, Discrete, MultiDiscrete, Dict as SpaceDict
 
 from powergrid.utils.array_utils import cat_f32
-from powergrid.utils.typing import Array, FloatArray, IntArray
 
 
 @dataclass(slots=True)
@@ -23,13 +22,13 @@ class Action:
     Use `scale()` / `unscale()` for continuous normalization [-1, 1].
     """
 
-    c: FloatArray = field(default_factory=lambda: np.array([], dtype=np.float32))
-    d: IntArray   = field(default_factory=lambda: np.array([], dtype=np.int32))
+    c: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.float32))
+    d: np.ndarray   = field(default_factory=lambda: np.array([], dtype=np.int32))
 
     dim_c: int = 0
     dim_d: int = 0
 
-    range: Optional[Tuple[FloatArray, FloatArray]] = None
+    range: Optional[Tuple[np.ndarray, np.ndarray]] = None
     ncats: Sequence[int] = field(default_factory=list)
 
     _space: Optional[gym.Space] = None
@@ -96,7 +95,7 @@ class Action:
         dim_c: int = 0,
         dim_d: int = 0,
         ncats: Optional[Sequence[int]] = [],
-        range: Optional[Tuple[Array, Array]] = None,
+        range: Optional[Tuple[np.ndarray, np.ndarray]] = None,
     ) -> None:
         self.dim_c, self.dim_d = int(dim_c), int(dim_d)
         if isinstance(ncats, int):
@@ -316,7 +315,7 @@ class Action:
                 elif self.d[i] >= K:
                     self.d[i] = K - 1
 
-    def scale(self) -> FloatArray:
+    def scale(self) -> np.ndarray:
         """Return normalized [-1, 1] copy of `c`. Zero-span axes → 0."""
         if self.range is None or self.c.size == 0:
             return self.c.astype(np.float32, copy=True)
@@ -328,7 +327,7 @@ class Action:
             x[mask] = 2.0 * (self.c[mask] - lb[mask]) / span[mask] - 1.0
         return x
 
-    def unscale(self, x: Sequence[float]) -> FloatArray:
+    def unscale(self, x: Sequence[float]) -> np.ndarray:
         """Set `c` from normalized [-1, 1] vector `x` (physical units). 
            Zero-span axes → lb.
         """
@@ -348,21 +347,21 @@ class Action:
             self.c[~mask] = lb[~mask]
         return self.c
 
-    def as_vector(self) -> FloatArray:
+    def as_vector(self) -> np.ndarray:
         """Flatten to `[c..., d...]` (float32) for logging/export."""
         if self.dim_d:
             parts = [self.c.astype(np.float32), self.d.astype(np.int32)]
             return cat_f32(parts)
         return self.c.astype(np.float32, copy=True)
 
-    def vector(self) -> FloatArray:
+    def vector(self) -> np.ndarray:
         """Flatten to `[c..., d...]` (float32) for logging/export."""
         if self.dim_d:
             parts = [self.c.astype(np.float32), self.d.astype(np.int32)]
             return cat_f32(parts)
         return self.c.astype(np.float32, copy=True)
 
-    def vector(self) -> Array:
+    def vector(self) -> np.ndarray:
         return self.as_vector()
 
     @classmethod
@@ -372,7 +371,7 @@ class Action:
         dim_c: int,
         dim_d: int,
         ncats: Optional[Sequence[int]] = [],
-        range: Optional[Tuple[Array, Array]] = None,
+        range: Optional[Tuple[np.ndarray, np.ndarray]] = None,
     ) -> "Action":
         """Create an Action from a flat vector `[c..., d...]` (d length = dim_d)."""
         vec = np.asarray(vec, dtype=np.float32)

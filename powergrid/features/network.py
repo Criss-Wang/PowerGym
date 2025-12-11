@@ -12,7 +12,6 @@ import numpy as np
 from powergrid.features.base import FeatureProvider
 from powergrid.utils.array_utils import as_f32, cat_f32
 from powergrid.utils.registry import provider
-from powergrid.utils.typing import Array
 
 
 @provider()
@@ -23,8 +22,8 @@ class BusVoltages(FeatureProvider):
     Captures voltage state at all buses, which is essential for
     monitoring system stability and voltage regulation.
     """
-    vm_pu: Optional[Array] = None  # Voltage magnitudes (p.u.)
-    va_deg: Optional[Array] = None  # Voltage angles (degrees)
+    vm_pu: Optional[np.ndarray] = None  # Voltage magnitudes (p.u.)
+    va_deg: Optional[np.ndarray] = None  # Voltage angles (degrees)
     bus_names: List[str] = field(default_factory=list)
 
     def __post_init__(self):
@@ -45,8 +44,8 @@ class BusVoltages(FeatureProvider):
         if sizes and len(set(sizes)) > 1:
             raise ValueError(f"Inconsistent bus voltage array sizes: {sizes}")
 
-    def vector(self) -> Array:
-        parts: List[Array] = []
+    def vector(self) -> np.ndarray:
+        parts: List[np.ndarray] = []
         if self.vm_pu is not None:
             parts.append(self.vm_pu)
         if self.va_deg is not None:
@@ -102,9 +101,9 @@ class LineFlows(FeatureProvider):
     Monitors line utilization and power transfer, critical for
     identifying congestion and ensuring thermal limits.
     """
-    p_from_mw: Optional[Array] = None  # Active power from "from" bus (MW)
-    q_from_mvar: Optional[Array] = None  # Reactive power from "from" bus (MVAr)
-    loading_percent: Optional[Array] = None  # Line loading (%)
+    p_from_mw: Optional[np.ndarray] = None  # Active power from "from" bus (MW)
+    q_from_mvar: Optional[np.ndarray] = None  # Reactive power from "from" bus (MVAr)
+    loading_percent: Optional[np.ndarray] = None  # Line loading (%)
     line_names: List[str] = field(default_factory=list)
 
     def __post_init__(self):
@@ -129,8 +128,8 @@ class LineFlows(FeatureProvider):
         if sizes and len(set(sizes)) > 1:
             raise ValueError(f"Inconsistent line flow array sizes: {sizes}")
 
-    def vector(self) -> Array:
-        parts: List[Array] = []
+    def vector(self) -> np.ndarray:
+        parts: List[np.ndarray] = []
         if self.p_from_mw is not None:
             parts.append(self.p_from_mw)
         if self.q_from_mvar is not None:
@@ -203,7 +202,7 @@ class NetworkMetrics(FeatureProvider):
     total_gen_mvar: float = 0.0
     total_load_mvar: float = 0.0
 
-    def vector(self) -> Array:
+    def vector(self) -> np.ndarray:
         return np.array([
             self.total_gen_mw,
             self.total_load_mw,

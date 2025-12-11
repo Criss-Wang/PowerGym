@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from gymnasium.spaces import Box, Discrete, MultiDiscrete, Dict as SpaceDict
+from gymnasium.spaces import Box
 from gymnasium.spaces import Space
 
 from powergrid.agents.base import Agent, Observation
@@ -164,22 +164,17 @@ class DeviceAgent(Agent):
 
     def _get_obs(self) -> np.ndarray:
         """Build the current observation vector for this agent."""
-        obs_vec = self.state.observe_by(self)
+        obs_vec = self.state.vector()
 
-        # Observe other agents' state according to protocol
-        if hasattr(self.protocol, "other_agents"):
-            for other in self.protocol.other_agents():
-                obs_by_this = other.state.observe_by(self)
-                # Only support vector observations for now
-                if isinstance(obs_by_this, np.ndarray) and obs_by_this.ndim == 1:
-                    obs_vec = np.append(obs_vec, obs_by_this, dtype=np.float32)
-                # Future extension point: image / discrete / dict observations
-                else:
-                    raise NotImplementedError(
-                        "observe_by returned non-vector/unsupported type. "
-                        "Extend _get_observation_space to handle images, discrete, "
-                        "or structured observations."
-                    )
+        # Observe other agents' states via a communication protocol
+        if self.protocol.communication_protocol:
+            for other_device in self.protocol.communication_protocol.neighbors:
+                assert isinstance(other_device, DeviceAgent)
+                other_device_obs_dict = other_device.state.observed_by(self.agent_id, self.level)
+                other_device_obs = np.concatenate(
+                    list(other_device_obs_dict.values()), dtype=np.float32
+                )
+                obs_vec = np.concatenate([obs_vec, other_device_obs], dtype=np.float32)
 
         if obs_vec.size == 0:
             raise ValueError("No observations available for the agent.")
@@ -211,38 +206,34 @@ class DeviceAgent(Agent):
         Returns:
             Structured observation for this device
         """
-        obs = Observation(
+        # TODO: aggregate global info if needed
+        return Observation(
             timestamp=self._timestep,
+            local={
+                'state': self.state.vector(),
+                'observation': self._get_obs()
+            }
         )
 
-        # Local device state only
-        obs.local['state'] = self.state.vector().astype(np.float32)
-        obs.local['observation'] = self._get_obs()
-
-        # TODO: aggregate global info if needed
-        obs.global_info = global_state
-
-        return obs
-
-    def act(self, observation: Observation, given_action: Any = None) -> None:
+    def act(self, observation: Observation, upstream_action: Any = None) -> None:
         """Compute action using policy.
 
         Args:
             observation: Structured observation
-            given_action: Action provided by the parent grid agent
+            upstream_action: Action provided by the parent grid agent
 
         Returns:
             Action in format defined by action_space
         """
-        if given_action:
-            action = given_action
+        if upstream_action:
+            action = upstream_action
         elif self.policy is not None:
             action = self.policy.forward(observation)
         else:
             raise ValueError("No action provided and no policy defined for DeviceAgent.")
 
-        self.action.set_values(action)
         # TODO: Add communication logic (send/receive message) if needed
+        self.action.set_values(action)
 
     # ============================================
     # Abstract Methods for Hierarchical Execution
@@ -260,8 +251,8 @@ class DeviceAgent(Agent):
             Local action to execute
         """
         if self.policy is not None:
-            obs = self.observe()
-            action = self.policy.forward(obs)
+            observation = self.observe()
+            action = self.policy.forward(observation)
         else:
             action = upstream_action
 

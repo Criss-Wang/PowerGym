@@ -4,8 +4,8 @@ from typing import Any, Dict, Iterator, List, Type, Tuple, Optional, Union
 
 import numpy as np
 
-from powergrid.features.base import FeatureProvider, AgentLike
-from powergrid.utils.typing import Array
+from powergrid.agents.base import Agent
+from powergrid.features.base import FeatureProvider
 from powergrid.utils.registry import provider
 from powergrid.utils.array_utils import cat_f32
 
@@ -20,36 +20,22 @@ def _vec_names(feat: FeatureProvider) -> Tuple[np.ndarray, List[str]]:
         )
     return v, n
 
-
-@provider()
 @dataclass(slots=True)
 class State(ABC):
     """Generic agent state, defined by a list of feature providers."""
-
-    # Which agent "owns" this state (typically the agent that holds it)
-    owner_id: str = ""
-    owner_level: int = 0
+    owner_id: str
+    owner_level: int
 
     # Raw features that make up this state
     features: List[FeatureProvider] = field(default_factory=list)
 
-    def _iter_features(self) -> Iterator[FeatureProvider]:
-        """Hook for subclasses that want to filter or reorder features."""
-        for f in self.features:
-            yield f
-
-    def as_vector(self) -> Array:
+    def vector(self) -> np.ndarray:
         """Concatenate all feature vectors into an array."""
-        vecs: List[np.ndarray] = []
-        for f in self._iter_features():
-            vecs.append(f.as_vector())
-        if not vecs:
-            return np.zeros(0, np.float32)
+        feature_vectors: List[np.ndarray] = []
+        for feature in self.features:
+            feature_vectors.append(feature.vector())
 
-        return np.concatenate(vecs, dtype=np.float32)
-
-    def vector(self) -> Array:  # pragma: no cover
-        return self.as_vector()
+        return cat_f32(feature_vectors)
 
     def reset(self, overrides: Optional[Dict[str, Dict[str, Any]]] = None) -> None:
         """
@@ -59,8 +45,8 @@ class State(ABC):
         This does *not* recreate the feature list; it just forwards
         the reset to each feature that supports it.
         """
-        for feat in self._iter_features():
-            feat.reset()
+        for feature in self.features:
+            feature.reset()
 
         if overrides is not None:
             self.update(overrides)
@@ -82,86 +68,80 @@ class State(ABC):
         """
         raise NotImplementedError
 
-    def update_feature(self, feature_type: Type[FeatureProvider], **values: Any) -> None:
+    def update_feature(self, feature_name: str, **values: Any) -> None:
         """
         Update a single feature identified by its class.
 
         Example:
             state.update_feature(ElectricalBasePh, P_MW=10.0, Q_MVAr=2.0)
         """
-        for feat in self._iter_features():
-            if isinstance(feat, feature_type):
-                feat.set_values(**values)
+        for feature in self.features:
+            if feature.feature_name == feature_name:
+                feature.set_values(**values)
                 # If you might have multiple of the same type, either:
                 # - break after first, or
                 # - remove this break to update all of them.
                 break
 
-    def observe_by(self, agent: AgentLike) -> Tuple[np.ndarray, List[str]]:
-        """
-        Build an observation (vector, names) as visible to `agent`,
-        based on each feature's observability and the agent's identity/authority.
+    def observed_by(self, requestor_id: str, requestor_level: int) -> Dict[str, np.ndarray]:
+        """Build observation dictionary visible to the requesting agent.
 
-        Contract with features:
-            - If a feature implements `is_observable_by(agent, owner_id=...) -> bool`,
-              that is used.
-            - Otherwise, default policy:
-                • owner can see it (agent.agent_id == owner_id or owner_id is None)
-                • non-owner cannot.
+        Filters state features based on visibility rules. Each feature's `is_observable_by()`
+        method determines if the requestor can see it.
+
+        Args:
+            requestor_id: ID of agent requesting observation
+            requestor_level: Hierarchy level of requesting agent (1=device, 2=grid, 3=system)
 
         Returns:
-            (obs_vector, obs_names)
+            Dict mapping feature names to observation vectors (float32 numpy arrays).
+            Only includes features the requestor is allowed to observe.
+
+        Example:
+            >>> state = DeviceState(owner_id="device1", owner_level=1)
+            >>> # Owner observes own state
+            >>> obs = state.observed_by("device1", requestor_level=1)
+            >>> # {"ElectricalBasePh": array([1.0, 0.5, ...]), ...}
+            >>>
+            >>> # Non-owner with insufficient permissions
+            >>> obs = state.observed_by("device2", requestor_level=1)
+            >>> # {} (empty - no observable features)
         """
-        vecs: List[np.ndarray] = []
+        observable_feature_dict = {}
 
-        for feat in self._iter_features():
-            if "public" in feat.visibility:
-                vecs.append(feat.vector())
-            if "owner" in feat.visibility:
-                if agent.agent_id == self.owner_id:
-                    vecs.append(feat.vector())
-            if "system" in feat.visibility:
-                if agent.level >= 3:
-                    vecs.append(feat.vector())
-            if "upper_level" in feat.visibility:
-                if agent.level == self.owner_level + 1:
-                    vecs.append(feat.vector())
+        for feature in self.features:
+            if feature.is_observable_by(requestor_id, requestor_level, self.owner_id, self.owner_level):
+                observable_feature_dict[feature.feature_name] = cat_f32(feature.vector())
+        
+        self.validate_observation_dict(observable_feature_dict)
+        return observable_feature_dict
 
-        return cat_f32(vecs)
-
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> Dict[str, Dict[str, Any]]:
         """
         Serialize the State into a plain dict.
 
         Structure:
             {
-                "owner_id": str,
-                "owner_level": int,
                 "features": {
                     "<FeatureClassName>": { ... feature.to_dict() ... },
                     ...
                 }
             }
-
-        Note:
-            Assumes each FeatureProvider in `features` implements `to_dict()`.
         """
-        feat_dict: Dict[str, Any] = {}
+        feature_dict: Dict[str, Any] = {}
 
-        for feat in self._iter_features():
-            key = type(feat).__name__
-            if not hasattr(feat, "to_dict"):
-                raise AttributeError(
-                    f"Feature {key} does not implement to_dict()."
-                )
-            feat_dict[key] = feat.to_dict()
+        for feature in self.features:
+            feature_dict[feature.feature_name] = feature.to_dict()
 
-        return feat_dict
+        return feature_dict
 
+    def validate_observation_dict(self, obs_dict: Dict[str, np.ndarray]) -> None:
+        """Validate the collected feature vectors for consistency."""
+        pass
 
 @dataclass(slots=True)
 class DeviceState(State):
-    def update(self, updates: Dict[Union[str, Type[FeatureProvider]], Dict[str, Any]]) -> None:
+    def update(self, updates: Dict[str, Dict[str, Any]]) -> None:
         """
         Apply a batch of updates to features.
 
@@ -176,99 +156,19 @@ class DeviceState(State):
         For each feature in `self.features`, if its class appears as a key in
         `updates`, we forward the corresponding dict to feature.set_values(**...).
         """
-        for feat in self._iter_features():
-            feature_type = type(feat)
-            values = {}
-            if feature_type in updates:
-                values = updates.get(feature_type)
-            if feature_type.__name__ in updates:
-                values = updates.get(feature_type.__name__)
-            self.update_feature(feature_type, **values)
+        for feature in self.features:
+            if feature.feature_name in updates:
+                values = updates.get(feature.feature_name)
+                self.update_feature(feature.feature_name, **values)
 
-@provider()
-@dataclass(slots=True)
-class GridState:
-    """
-    GridState — container that aggregates grid-level feature providers
-    (BusVoltages, LineFlows, NetworkMetrics) into a unified observation
-    vector for grid agents.
-
-    Unlike DeviceState, GridState does not enforce phase context since
-    grid-level features are typically aggregated network observables.
-
-    Vector & names:
-      • vectors are concatenated in feature order; empty vectors are skipped.
-      • names are concatenated in the same order; 1:1 parity enforced per feature.
-      • prefix_names=True prepends '<ClassName>.' to each child's names.
-    """
-    features: List[FeatureProvider] = field(default_factory=list)
-    prefix_names: bool = False
-
-    def _iter_ready_features(self) -> Iterator[FeatureProvider]:
-        for f in self.features:
-            yield f
-
-    def vector(self) -> Array:
-        vecs: List[np.ndarray] = []
-        for f in self._iter_ready_features():
-            v, _ = _vec_names(f)
-            if v.size:
-                vecs.append(v)
-        if not vecs:
-            return np.zeros(0, np.float32)
-        return np.concatenate(vecs, dtype=np.float32)
-
-    def names(self) -> List[str]:
-        out: List[str] = []
-        for f in self._iter_ready_features():
-            _, n = _vec_names(f)
-            if self.prefix_names and n:
-                pref = f.__class__.__name__ + "."
-                n = [pref + s for s in n]
-            out += n
-        return out
-
-    def clamp_(self) -> None:
-        for f in self._iter_ready_features():
-            if hasattr(f, "clamp_"):
-                f.clamp_()
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "prefix_names": self.prefix_names,
-            "features": [
-                {
-                    "kind": f.__class__.__name__,
-                    "payload": (
-                        f.to_dict() if hasattr(f, "to_dict") else asdict(f)
-                    ),
-                }
-                for f in self.features
-            ],
-        }
-
-    @classmethod
-    def from_dict(
-        cls,
-        d: Dict[str, Any],
-        registry: Optional[Dict[str, Type[FeatureProvider]]] = None,
-    ) -> "GridState":
-        reg = registry or KNOWN_FEATURES
-        feats: List[FeatureProvider] = []
-        for item in d.get("features", []):
-            kind = item.get("kind")
-            payload = item.get("payload", {})
-            cls_ = reg.get(kind)
-            if cls_ is None:
-                raise ValueError(
-                    f"Unknown feature kind '{kind}'. Provide a registry mapping."
+    def validate_observation_dict(self, obs_dict: Dict[str, np.ndarray]) -> None:
+        for vector in obs_dict.values():
+            if not (isinstance(vector, np.ndarray) and vector.ndim == 1):
+                raise NotImplementedError(
+                    "Only 1D vector observations supported. "
+                    "Got: " + str(type(vector))
                 )
-            if hasattr(cls_, "from_dict"):
-                feats.append(cls_.from_dict(payload))  # type: ignore
-            else:
-                feats.append(cls_(**payload))          # type: ignore
 
-        return cls(
-            features=feats,
-            prefix_names=d.get("prefix_names", False),
-        )
+@dataclass(slots=True)
+class GridState(State):
+    pass

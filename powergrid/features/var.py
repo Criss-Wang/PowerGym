@@ -7,7 +7,6 @@ from powergrid.features.base import FeatureProvider
 from powergrid.utils.array_utils import as_f32, cat_f32
 from powergrid.utils.phase import PhaseModel, PhaseSpec
 from powergrid.utils.registry import provider
-from powergrid.utils.typing import Array
 
 
 @provider()
@@ -35,13 +34,13 @@ class ShuntCapacitorBlock(FeatureProvider):
     # Aggregate (1φ only)
     kvar_total: Optional[float] = None
     n_stages: Optional[int] = None
-    stage_enabled: Optional[Array] = None
-    stage_kvar_total: Optional[Array] = None
+    stage_enabled: Optional[np.ndarray] = None
+    stage_kvar_total: Optional[np.ndarray] = None
 
     # Per-phase (3φ only)
-    kvar_ph: Optional[Array] = None
-    stage_enabled_ph: Optional[Array] = None
-    stage_kvar_ph: Optional[Array] = None
+    kvar_ph: Optional[np.ndarray] = None
+    stage_enabled_ph: Optional[np.ndarray] = None
+    stage_kvar_ph: Optional[np.ndarray] = None
 
     def __post_init__(self):
         if self.phase_model == PhaseModel.BALANCED_1PH:
@@ -265,7 +264,7 @@ class ShuntCapacitorBlock(FeatureProvider):
                     raise ValueError(f"'kvar_ph' must have shape ({n},), got {a.shape}")
                 self.kvar_ph = a
 
-            def fix_2d(name: str, A: Optional[Array], m_eff: Optional[int]) -> Optional[Array]:
+            def fix_2d(name: str, A: Optional[np.ndarray], m_eff: Optional[int]) -> Optional[np.ndarray]:
                 if A is None:
                     return None
                 X = as_f32(A)
@@ -289,9 +288,9 @@ class ShuntCapacitorBlock(FeatureProvider):
         if m is not None and self.n_stages is None:
             self.n_stages = int(m)
 
-    def vector(self) -> Array:
+    def vector(self) -> np.ndarray:
         self._ensure_shapes_()
-        parts: List[Array] = []
+        parts: List[np.ndarray] = []
 
         # Aggregate scalar (allowed in both)
         if self.kvar_total is not None:
@@ -397,7 +396,7 @@ class ShuntCapacitorBlock(FeatureProvider):
                 psd.get("earth_bond", True),
             )
 
-        def arr(k: str) -> Optional[Array]:
+        def arr(k: str) -> Optional[np.ndarray]:
             v = d.get(k)
             return None if v is None else as_f32(v)
 
@@ -425,13 +424,13 @@ class VoltVarCurve(FeatureProvider):
 
     # Shared curve (phase-agnostic)
     enabled: Optional[bool] = None
-    v_points_pu: Optional[Array] = None     # (k,)
-    q_points_pu: Optional[Array] = None     # (k,)
+    v_points_pu: Optional[np.ndarray] = None     # (k,)
+    q_points_pu: Optional[np.ndarray] = None     # (k,)
 
     # Per-phase optional
-    enabled_ph: Optional[Array] = None      # (nph,)
-    v_points_pu_ph: Optional[Array] = None  # (nph, k)
-    q_points_pu_ph: Optional[Array] = None  # (nph, k)
+    enabled_ph: Optional[np.ndarray] = None      # (nph,)
+    v_points_pu_ph: Optional[np.ndarray] = None  # (nph, k)
+    q_points_pu_ph: Optional[np.ndarray] = None  # (nph, k)
 
     def __post_init__(self):
         if self.phase_model == PhaseModel.BALANCED_1PH and self.phase_spec.nph() != 1:
@@ -462,7 +461,7 @@ class VoltVarCurve(FeatureProvider):
                 raise ValueError(f"enabled_ph must have shape ({n},), got {e.shape}")
             self.enabled_ph = np.where(e >= 0.5, 1.0, 0.0).astype(np.float32)
 
-        def fix_2d(a: Optional[Array]) -> Optional[Array]:
+        def fix_2d(a: Optional[np.ndarray]) -> Optional[np.ndarray]:
             if a is None: return None
             A = as_f32(a)
             if A.ndim != 2 or A.shape[0] != n:
@@ -488,10 +487,10 @@ class VoltVarCurve(FeatureProvider):
 
         self.v_points_pu_ph, self.q_points_pu_ph = V, Q
 
-    def vector(self) -> Array:
+    def vector(self) -> np.ndarray:
         self._ensure_shared_()
         self._ensure_per_phase_()
-        parts: List[Array] = []
+        parts: List[np.ndarray] = []
 
         # Shared first (balanced or three-phase)
         if self.enabled is not None:
@@ -612,7 +611,7 @@ class VoltVarCurve(FeatureProvider):
 
         # THREE_PHASE target: remap per-phase matrices to new spec
         n = spec.nph()
-        def remap1d(a: Optional[Array]) -> Optional[Array]:
+        def remap1d(a: Optional[np.ndarray]) -> Optional[np.ndarray]:
             if a is None:
                 return None
 
@@ -620,7 +619,7 @@ class VoltVarCurve(FeatureProvider):
             k = min(n, a.size); out[:k] = a[:k]
             return out
 
-        def remap2d(A: Optional[Array]) -> Optional[Array]:
+        def remap2d(A: Optional[np.ndarray]) -> Optional[np.ndarray]:
             if A is None: return None
             A = as_f32(A); k = A.shape[1] if A.ndim == 2 else 0
             out = np.zeros((n, k), np.float32)
@@ -666,13 +665,13 @@ class VoltVarCurve(FeatureProvider):
 
     # Shared curve
     enabled: Optional[bool] = None
-    v_points_pu: Optional[Array] = None
-    q_points_pu: Optional[Array] = None
+    v_points_pu: Optional[np.ndarray] = None
+    q_points_pu: Optional[np.ndarray] = None
 
     # Per-phase curve (THREE_PHASE only)
-    enabled_ph: Optional[Array] = None        # (nph,)
-    v_points_pu_ph: Optional[Array] = None    # (nph, k)
-    q_points_pu_ph: Optional[Array] = None    # (nph, k)
+    enabled_ph: Optional[np.ndarray] = None        # (nph,)
+    v_points_pu_ph: Optional[np.ndarray] = None    # (nph, k)
+    q_points_pu_ph: Optional[np.ndarray] = None    # (nph, k)
 
     def __post_init__(self):
         # Balanced must be single-phase; keep first listed phase.
@@ -733,7 +732,7 @@ class VoltVarCurve(FeatureProvider):
         V = None if self.v_points_pu_ph is None else as_f32(self.v_points_pu_ph)
         Q = None if self.q_points_pu_ph is None else as_f32(self.q_points_pu_ph)
 
-        def _check_2d(name: str, A: Array) -> None:
+        def _check_2d(name: str, A: np.ndarray) -> None:
             if A.ndim != 2:
                 raise ValueError(f"{name} must be 2D (nph, k), got {A.shape}")
             if A.shape[0] != nph:
@@ -773,11 +772,11 @@ class VoltVarCurve(FeatureProvider):
         self.v_points_pu_ph = V
         self.q_points_pu_ph = Q
 
-    def vector(self) -> Array:
+    def vector(self) -> np.ndarray:
         self._ensure_shared_()
         self._ensure_per_phase_()
 
-        parts: List[Array] = []
+        parts: List[np.ndarray] = []
 
         # Shared first
         if self.enabled is not None:
@@ -875,7 +874,7 @@ class VoltVarCurve(FeatureProvider):
             psd.get("earth_bond", True),
         ))
 
-        def arr(k: str) -> Optional[Array]:
+        def arr(k: str) -> Optional[np.ndarray]:
             v = d.get(k)
             return None if v is None else as_f32(v)
 
@@ -922,7 +921,7 @@ class VoltVarCurve(FeatureProvider):
         # remap per-phase matrices to new nph via pad/truncate rows.
         nph_new = spec.nph()
 
-        def remap_row(a: Optional[Array]) -> Optional[Array]:
+        def remap_row(a: Optional[np.ndarray]) -> Optional[np.ndarray]:
             if a is None:
                 return None
             a = as_f32(a).ravel()
@@ -932,7 +931,7 @@ class VoltVarCurve(FeatureProvider):
                 out[:k] = a[:k]
             return out
 
-        def remap_mat(A: Optional[Array]) -> Optional[Array]:
+        def remap_mat(A: Optional[np.ndarray]) -> Optional[np.ndarray]:
             if A is None:
                 return None
             X = as_f32(A)

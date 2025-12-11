@@ -7,7 +7,6 @@ from powergrid.utils.phase import PhaseModel, PhaseSpec, check_phase_model_consi
 from powergrid.features.base import FeatureProvider
 from powergrid.utils.registry import provider
 from powergrid.utils.array_utils import cat_f32
-from powergrid.utils.typing import Array
 
 
 @provider()
@@ -35,10 +34,10 @@ class ElectricalBasePh(FeatureProvider):
     Va_rad: Optional[float] = None
 
     # Three-phase arrays
-    P_MW_ph: Optional[Array] = None
-    Q_MVAr_ph: Optional[Array] = None
-    Vm_pu_ph: Optional[Array] = None
-    Va_rad_ph: Optional[Array] = None
+    P_MW_ph: Optional[np.ndarray] = None
+    Q_MVAr_ph: Optional[np.ndarray] = None
+    Vm_pu_ph: Optional[np.ndarray] = None
+    Va_rad_ph: Optional[np.ndarray] = None
 
     # Neutral telemetry (needs has_neutral=True)
     I_neutral_A: Optional[float] = None
@@ -277,7 +276,7 @@ class ElectricalBasePh(FeatureProvider):
         self._validate_inputs_()
         self._ensure_shapes_()
 
-    def as_vector(self) -> Array:
+    def as_vector(self) -> np.ndarray:
         parts = []
         # BALANCED_1PH
         if self.phase_model == PhaseModel.BALANCED_1PH:
@@ -295,7 +294,7 @@ class ElectricalBasePh(FeatureProvider):
 
         raise ValueError(f"Unsupported phase model: {self.phase_model}")
 
-    def vector(self) -> Array:  # pragma: no cover
+    def vector(self) -> np.ndarray:  # pragma: no cover
         return self.as_vector()
 
     def names(self) -> List[str]:

@@ -4,11 +4,6 @@ import numpy as np
 from typing import Any, Literal
 
 
-# Array types
-Array = np.ndarray
-FloatArray = np.ndarray
-IntArray = np.ndarray
-
 # Agent and control types
 AgentID = str
 

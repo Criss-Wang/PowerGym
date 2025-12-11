@@ -6,7 +6,6 @@ import numpy as np
 from powergrid.features.base import FeatureProvider
 from powergrid.utils.phase import PhaseModel, PhaseSpec
 from powergrid.utils.registry import provider
-from powergrid.utils.typing import Array, CtrlMode
 
 
 @provider()
@@ -21,7 +20,7 @@ class InverterBasedSource(FeatureProvider):
     # Phase context
     phase_model: PhaseModel = PhaseModel.THREE_PHASE
     phase_spec: Optional[PhaseSpec] = field(default_factory=PhaseSpec)
-    alloc_frac_ph: Optional[Array] = None
+    alloc_frac_ph: Optional[np.ndarray] = None
 
     # Ratings / limits
     s_rated_MVA: Optional[float] = None

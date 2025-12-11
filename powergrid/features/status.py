@@ -5,7 +5,6 @@ import numpy as np
 
 from powergrid.features.base import FeatureProvider
 from powergrid.utils.registry import provider
-from powergrid.utils.typing import Array
 from powergrid.utils.array_utils import cat_f32
 
 
@@ -295,7 +294,7 @@ class StatusBlock(FeatureProvider):
         self._prime_schema_()
         self.clip_()
 
-    def as_vector(self) -> Array:
+    def as_vector(self) -> np.ndarray:
         """
         Return a flat numeric representation of the status block.
         """
@@ -359,7 +358,7 @@ class StatusBlock(FeatureProvider):
 
         return cat_f32(parts)
 
-    def vector(self) -> Array:  # pragma: no cover
+    def vector(self) -> np.ndarray:  # pragma: no cover
         return self.as_vector()
 
     def names(self) -> List[str]:

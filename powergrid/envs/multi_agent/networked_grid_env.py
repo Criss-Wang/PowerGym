@@ -300,12 +300,19 @@ class NetworkedGridEnv(ParallelEnv):
                     # Get observation for this agent
                     obs = self.actionable_agents[name].observe()
                     # Compute and set actions on devices
-                    self.actionable_agents[name].act(obs, given_action=action)
+                    self.actionable_agents[name].act(obs, upstream_action=action)
         else:
-            for agent_id, action in action_n.items():
-                if agent_id in self.actionable_agents:
-                    self._send_actions_to_agent(agent_id, action)
-                    self.actionable_agents[agent_id].step_distributed()
+            # Distributed mode: run agent steps concurrently
+            import asyncio
+            async def run_distributed_steps():
+                tasks = []
+                for agent_id, action in action_n.items():
+                    if agent_id in self.actionable_agents:
+                        self._send_actions_to_agent(agent_id, action)
+                        tasks.append(self.actionable_agents[agent_id].step_distributed())
+                await asyncio.gather(*tasks)
+
+            asyncio.run(run_distributed_steps())
 
         # Update network states based on agent actions
         self._update_net()

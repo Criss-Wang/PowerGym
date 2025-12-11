@@ -48,8 +48,16 @@ from powergrid.networks.ieee13 import IEEE13Bus
 class MultiMicrogridP2PEnv(NetworkedGridEnv):
     """Environment with 3 microgrids using P2P energy trading."""
 
+    def _build_agents(self):
+        """Build grid agents for each microgrid."""
+        return {}  # Will be populated in _build_net
+
     def _build_net(self):
         """Build network with 3 microgrids."""
+        # Initialize agent dict
+        if not hasattr(self, 'agent_dict') or self.agent_dict is None:
+            self.agent_dict = {}
+
         # Create main network (just a placeholder bus)
         net = pp.create_empty_network(name="P2P_Network")
         pp.create_bus(net, vn_kv=4.16, name="Main Bus")
@@ -88,72 +96,68 @@ class MultiMicrogridP2PEnv(NetworkedGridEnv):
         # Build each microgrid
         for i, config in enumerate(mg_configs):
             mg_net = IEEE13Bus(config["name"])
-            devices = []
 
-            # Create generator
+            # Extract device configs
             gen_config = config["devices"][0]
-            generator = Generator(
-                agent_id=f"{config['name']}_gen",
-                device_config={
-                    "name": f"{config['name']}_gen",
-                    "device_state_config": {
-                        "bus": "Bus 633",
-                        "p_max_MW": gen_config["p_max"],
-                        "p_min_MW": gen_config["p_min"],
-                        "q_max_MVAr": gen_config["p_max"] * 0.5,
-                        "q_min_MVAr": -gen_config["p_max"] * 0.5,
-                        "s_rated_MVA": gen_config["p_max"] * 1.2,
-                        "startup_time_hr": 1.0,
-                        "shutdown_time_hr": 1.0,
-                        "cost_curve_coefs": [gen_config["cost"], 10.0, 0.0],
-                    },
-                },
-            )
-            devices.append(generator)
-
-            # Create ESS
             ess_config = config["devices"][1]
-            ess = ESS(
-                agent_id=f"{config['name']}_ess",
-                device_config={
-                    "name": f"{config['name']}_ess",
-                    "device_state_config": {
-                        "bus": "Bus 634",
-                        "e_capacity_MWh": ess_config["capacity"],
-                        "soc_max": 0.9,
-                        "soc_min": 0.1,
-                        "p_max_MW": ess_config["p_max"],
-                        "p_min_MW": -ess_config["p_max"],
-                        "q_max_MVAr": ess_config["p_max"] * 0.4,
-                        "q_min_MVAr": -ess_config["p_max"] * 0.4,
-                        "s_rated_MVA": ess_config["p_max"] * 1.2,
-                        "init_soc": 0.5,
-                        "ch_eff": 0.95,
-                        "dsc_eff": 0.95,
-                    },
-                },
-            )
-            devices.append(ess)
 
-            # Create microgrid agent
+            # Create microgrid agent with full grid_config
             mg_agent = PowerGridAgent(
                 net=mg_net,
                 grid_config={
                     "name": config["name"],
                     "base_power": 1.0,
                     "load_scale": 1.0,
+                    "devices": [
+                        {
+                            "type": "Generator",
+                            "name": f"{config['name']}_gen",
+                            "device_state_config": {
+                                "bus": "Bus 633",
+                                "p_max_MW": gen_config["p_max"],
+                                "p_min_MW": gen_config["p_min"],
+                                "q_max_MVAr": gen_config["p_max"] * 0.5,
+                                "q_min_MVAr": -gen_config["p_max"] * 0.5,
+                                "s_rated_MVA": gen_config["p_max"] * 1.2,
+                                "startup_time_hr": 1.0,
+                                "shutdown_time_hr": 1.0,
+                                "cost_curve_coefs": [gen_config["cost"], 10.0, 0.0],
+                            },
+                        },
+                        {
+                            "type": "ESS",
+                            "name": f"{config['name']}_ess",
+                            "device_state_config": {
+                                "bus": "Bus 634",
+                                "e_capacity_MWh": ess_config["capacity"],
+                                "soc_max": 0.9,
+                                "soc_min": 0.1,
+                                "p_max_MW": ess_config["p_max"],
+                                "p_min_MW": -ess_config["p_max"],
+                                "q_max_MVAr": ess_config["p_max"] * 0.4,
+                                "q_min_MVAr": -ess_config["p_max"] * 0.4,
+                                "s_rated_MVA": ess_config["p_max"] * 1.2,
+                                "init_soc": 0.5,
+                                "ch_eff": 0.95,
+                                "dsc_eff": 0.95,
+                            },
+                        },
+                    ],
                 },
-                devices=devices,
                 protocol=CentralizedSetpointProtocol(),  # Vertical protocol for internal coordination
-                centralized=True,
             )
 
             # Add microgrid-specific dataset
             mg_agent.add_dataset(dataset[config["name"]])
 
-            # Add devices to pandapower
-            mg_agent.add_sgen([generator])
-            mg_agent.add_storage([ess])
+            # Add devices to pandapower network (automatically registered from grid_config)
+            generators = [dev for dev in mg_agent.devices.values() if isinstance(dev, Generator)]
+            ess_devices = [dev for dev in mg_agent.devices.values() if isinstance(dev, ESS)]
+
+            if generators:
+                mg_agent._add_sgen(generators)
+            if ess_devices:
+                mg_agent._add_storage(ess_devices)
 
             # Store agent
             self.agent_dict[config["name"]] = mg_agent
@@ -163,6 +167,10 @@ class MultiMicrogridP2PEnv(NetworkedGridEnv):
                 net = mg_net
             else:
                 net = pp.merge_nets(net, mg_net, validate=False)
+
+        # Update all agents to reference the merged network
+        for agent in self.agent_dict.values():
+            agent.net = net
 
         # Set environment attributes
         self.possible_agents = list(self.agent_dict.keys())
@@ -244,6 +252,7 @@ def main():
     env_config = {
         "max_episode_steps": 24,
         "train": True,
+        "centralized": True,  # Use centralized execution mode
         "protocol": PeerToPeerTradingProtocol(
             trading_fee=0.02,  # 2% transaction fee
         ),
@@ -254,7 +263,6 @@ def main():
 
     print(f"    Number of microgrids: {len(env.possible_agents)}")
     print(f"    Agents: {env.possible_agents}")
-    print(f"    Protocol: {env.protocol.__class__.__name__}")
     print(f"    Action spaces:")
     for agent_id, space in env.action_spaces.items():
         print(f"      {agent_id}: {space}")
@@ -328,8 +336,8 @@ def main():
 
     # Print P2P trading info
     print("\n[5] P2P Trading Protocol Info:")
-    print(f"    Protocol type: {env.protocol.__class__.__name__}")
-    print(f"    Trading fee: {env.protocol.trading_fee * 100:.1f}%")
+    print(f"    Protocol type: PeerToPeerTradingProtocol")
+    print(f"    Trading fee: 2.0%")
     print(f"    Market mechanism: Bid-offer matching with fee")
     print(f"    Coordination: Horizontal (environment-owned)")
 

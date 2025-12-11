@@ -161,19 +161,19 @@ class GridAgent(Agent):
             "grid_state": self.state.vector()
         }
 
-    def act(self, observation: Observation, given_action: Any = None) -> None:
+    def act(self, observation: Observation, upstream_action: Any = None) -> None:
         """Compute coordination action and distribute to devices.
 
         Args:
             observation: Aggregated observation
-            given_action: Pre-computed action (if any)
+            upstream_action: Pre-computed action (if any)
 
         Raises:
             NotImplementedError: If using decentralized mode (not yet implemented)
         """
         # Get coordinator action from policy if available
-        if given_action is not None:
-            action = given_action
+        if upstream_action is not None:
+            action = upstream_action
         elif self.policy is not None:
             action = self.policy.forward(observation)
         else:
@@ -447,9 +447,17 @@ class PowerGridAgent(GridAgent):
                 )
                 # Don't add to network here - that's done separately via _add_sgen()
                 devices[generator.agent_id] = generator
+            elif device_type == 'ESS':
+                ess = ESS(
+                    message_broker=message_broker,
+                    upstream_id=upstream_id,
+                    env_id=env_id,
+                    device_config=device_config,
+                )
+                # Don't add to network here - that's done separately
+                devices[ess.agent_id] = ess
             else:
-                # Only 'Generator' type is supported
-                # ESS and other device types are not yet implemented for distributed mode
+                # Other device types not yet implemented
                 pass
 
         return devices
@@ -483,6 +491,33 @@ class PowerGridAgent(GridAgent):
             )
             self.sgen[sgen.config.name] = sgen
             self.devices[sgen.config.name] = sgen
+
+    def _add_storage(self, storages: Iterable[ESS] | ESS):
+        """Add energy storage systems to the network.
+
+        Args:
+            storages: Single ESS instance or iterable of ESS instances
+        """
+        if not isinstance(storages, Iterable):
+            storages = [storages]
+
+        for ess in storages:
+            bus_id = pp.get_element_index(self.net, 'bus', self.name + ' ' + ess.bus)
+            pp.create_storage(
+                self.net,
+                bus_id,
+                name=self.name + ' ' + ess.config.name,
+                index=None,  # Let pandapower auto-assign to avoid collisions during fuse
+                p_mw=ess.electrical.P_MW,
+                max_e_mwh=ess.storage.e_capacity_MWh,
+                soc_percent=ess.storage.soc * 100,
+                max_p_mw=ess.storage.p_ch_max_MW,
+                min_p_mw=-ess.storage.p_dsc_max_MW,
+                max_q_mvar=ess.limits.q_max_MVAr if ess.limits else 0.0,
+                min_q_mvar=ess.limits.q_min_MVAr if ess.limits else 0.0,
+            )
+            self.storage[ess.config.name] = ess
+            self.devices[ess.config.name] = ess
 
     def add_dataset(self, dataset):
         """Add time-series dataset for loads and renewables.

@@ -7,7 +7,6 @@ from powergrid.features.base import FeatureProvider
 from powergrid.utils.array_utils import as_f32, one_hot
 from powergrid.utils.phase import PhaseModel, PhaseSpec
 from powergrid.utils.registry import provider
-from powergrid.utils.typing import Array
 
 
 @provider()
@@ -28,7 +27,7 @@ class TapChangerPh(FeatureProvider):
     tap_position: Optional[int] = None
 
     # per-phase positions (shape (nph,), int)
-    tap_pos_ph: Optional[Array] = None
+    tap_pos_ph: Optional[np.ndarray] = None
 
     def __post_init__(self):
         # model/spec checks (subset phases allowed)

@@ -7,7 +7,6 @@ from powergrid.core.state import PhaseModel, PhaseSpec
 from powergrid.features.base import FeatureProvider
 from powergrid.utils.array_utils import as_f32
 from powergrid.utils.registry import provider
-from powergrid.utils.typing import Array
 
 
 @provider()
@@ -34,7 +33,7 @@ class ThermalLoading(FeatureProvider):
     loading_percentage: Optional[float] = None
 
     # Per-phase (percent) — THREE_PHASE only; shape (nph,)
-    loading_percentage_ph: Optional[Array] = None
+    loading_percentage_ph: Optional[np.ndarray] = None
 
     def __post_init__(self):
         if self.phase_model == PhaseModel.BALANCED_1PH:
@@ -87,7 +86,7 @@ class ThermalLoading(FeatureProvider):
                 )
             self.loading_percentage_ph = arr
 
-    def vector(self) -> Array:
+    def vector(self) -> np.ndarray:
         if self.phase_model == PhaseModel.BALANCED_1PH:
             val = float(self.loading_percentage) / 100.0
             return np.array([val], np.float32)
