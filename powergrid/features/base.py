@@ -21,7 +21,7 @@ class FeatureProvider(ABC):
     - Serialization for communication/logging
 
     Subclasses must implement:
-        - as_vector(): Convert state to numpy array
+        - vector(): Convert state to numpy array
         - names(): Get field names corresponding to vector elements
         - to_dict(): Serialize to dictionary
         - from_dict(): Deserialize from dictionary
@@ -35,21 +35,13 @@ class FeatureProvider(ABC):
     visibility: ClassVar[Sequence[str]]
 
     @abstractmethod
-    def as_vector(self) -> np.ndarray:
+    def vector(self) -> np.ndarray:
         """Convert feature state to numpy array for observations.
 
         Returns:
             1D numpy array of feature values
         """
         pass
-
-    def vector(self) -> np.ndarray:
-        """Alias for as_vector() for backward compatibility.
-
-        Returns:
-            1D numpy array of feature values
-        """
-        return self.as_vector()
 
     @abstractmethod
     def names(self) -> List[str]:

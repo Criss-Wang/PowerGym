@@ -348,7 +348,7 @@ class StorageBlock(FeatureProvider):
     # Vectorization
     # ------------------------------------------------------------
 
-    def as_vector(self) -> np.ndarray:
+    def vector(self) -> np.ndarray:
         """
         Flatten to a numeric feature vector.
 
@@ -383,12 +383,9 @@ class StorageBlock(FeatureProvider):
 
         return cat_f32(parts)
 
-    def vector(self) -> np.ndarray:  # pragma: no cover
-        return self.as_vector()
-
     def names(self) -> List[str]:
         """
-        Return feature names aligned with as_vector().
+        Return feature names aligned with vector().
         """
         out: List[str] = []
 

@@ -28,7 +28,7 @@ class Observation:
     messages: List['Message'] = field(default_factory=list)
     timestamp: float = 0.0
 
-    def as_vector(self) -> np.ndarray:
+    def vector(self) -> np.ndarray:
         """Convert observation to flat numpy array for RL algorithms.
 
         Returns:

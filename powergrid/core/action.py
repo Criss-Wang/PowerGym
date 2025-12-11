@@ -347,13 +347,6 @@ class Action:
             self.c[~mask] = lb[~mask]
         return self.c
 
-    def as_vector(self) -> np.ndarray:
-        """Flatten to `[c..., d...]` (float32) for logging/export."""
-        if self.dim_d:
-            parts = [self.c.astype(np.float32), self.d.astype(np.int32)]
-            return cat_f32(parts)
-        return self.c.astype(np.float32, copy=True)
-
     def vector(self) -> np.ndarray:
         """Flatten to `[c..., d...]` (float32) for logging/export."""
         if self.dim_d:
@@ -362,7 +355,11 @@ class Action:
         return self.c.astype(np.float32, copy=True)
 
     def vector(self) -> np.ndarray:
-        return self.as_vector()
+        """Flatten to `[c..., d...]` (float32) for logging/export."""
+        if self.dim_d:
+            parts = [self.c.astype(np.float32), self.d.astype(np.int32)]
+            return cat_f32(parts)
+        return self.c.astype(np.float32, copy=True)
 
     @classmethod
     def from_vector(

@@ -294,7 +294,7 @@ class StatusBlock(FeatureProvider):
         self._prime_schema_()
         self.clip_()
 
-    def as_vector(self) -> np.ndarray:
+    def vector(self) -> np.ndarray:
         """
         Return a flat numeric representation of the status block.
         """
@@ -358,12 +358,9 @@ class StatusBlock(FeatureProvider):
 
         return cat_f32(parts)
 
-    def vector(self) -> np.ndarray:  # pragma: no cover
-        return self.as_vector()
-
     def names(self) -> List[str]:
         """
-        Return names aligned with as_vector().
+        Return names aligned with vector().
         """
         out: List[str] = []
 

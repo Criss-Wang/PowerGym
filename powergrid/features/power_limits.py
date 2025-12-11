@@ -153,7 +153,7 @@ class PowerLimits(FeatureProvider):
         self._validate()
         self.clip_()
 
-    def as_vector(self) -> np.ndarray:
+    def vector(self) -> np.ndarray:
         """
         Return a flat numeric representation of the limits.
         """
@@ -182,12 +182,9 @@ class PowerLimits(FeatureProvider):
 
         return cat_f32(parts)
 
-    def vector(self) -> np.ndarray:
-        return self.as_vector()
-
     def names(self) -> List[str]:
         """
-        Return feature names aligned with as_vector().
+        Return feature names aligned with vector().
         """
         out: List[str] = []
 

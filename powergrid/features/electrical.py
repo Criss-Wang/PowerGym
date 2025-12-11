@@ -276,7 +276,7 @@ class ElectricalBasePh(FeatureProvider):
         self._validate_inputs_()
         self._ensure_shapes_()
 
-    def as_vector(self) -> np.ndarray:
+    def vector(self) -> np.ndarray:
         parts = []
         # BALANCED_1PH
         if self.phase_model == PhaseModel.BALANCED_1PH:
@@ -293,9 +293,6 @@ class ElectricalBasePh(FeatureProvider):
             return cat_f32(parts)
 
         raise ValueError(f"Unsupported phase model: {self.phase_model}")
-
-    def vector(self) -> np.ndarray:  # pragma: no cover
-        return self.as_vector()
 
     def names(self) -> List[str]:
         out = []
