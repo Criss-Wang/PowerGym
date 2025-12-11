@@ -250,6 +250,9 @@ class DeviceAgent(Agent):
     def _derive_local_action(self, upstream_action: Optional[Any]) -> Optional[Any]:
         """Derive local action from upstream action.
 
+        If a RL policy is defined, use it to compute the local action based on observation.
+        Otherwise, pass through the upstream action.
+
         Args:
             upstream_action: Action received from upstream agent
 

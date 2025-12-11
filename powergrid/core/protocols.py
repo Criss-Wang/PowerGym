@@ -410,8 +410,11 @@ class CentralizedSetpointProtocol(VerticalProtocol):
             # Get device action size
             action_size = device.action.dim_c + device.action.dim_d
             device_action = action[offset:offset + action_size]
-            # Set action directly via _set_device_action (bypass observation requirement)
-            device._set_device_action(device_action)
+            # Set action directly on the action object
+            if device.action.dim_c > 0:
+                device.action.c = device_action[:device.action.dim_c]
+            if device.action.dim_d > 0:
+                device.action.d = device_action[device.action.dim_c:].astype(np.int32)
             offset += action_size
 
 

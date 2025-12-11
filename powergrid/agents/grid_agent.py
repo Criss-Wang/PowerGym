@@ -529,16 +529,20 @@ class PowerGridAgent(GridAgent):
     # Observation Methods
     # ============================================
 
-    def _build_local_observation(self, device_obs: DictType[AgentID, Observation], net) -> Any:
+    def _build_local_observation(self, device_obs: DictType[AgentID, Observation], *args, **kwargs) -> Any:
         """Build local observation including device states and network results.
 
         Args:
             device_obs: Device observations dictionary
-            net: PandaPower network with power flow results
+            *args: Additional positional arguments
+            **kwargs: Additional keyword arguments (can include 'net')
 
         Returns:
             Local observation dictionary with device and network state
         """
+        # Use provided net or fall back to self.net
+        net = kwargs.get('net', self.net)
+
         # Update grid state from network results
         self._update_grid_state(net)
 

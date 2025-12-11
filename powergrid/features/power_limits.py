@@ -151,7 +151,7 @@ class PowerLimits(FeatureProvider):
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-        self._validate_()
+        self._validate()
         self.clip_()
 
     def as_vector(self) -> Array:

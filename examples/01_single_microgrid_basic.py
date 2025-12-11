@@ -43,13 +43,13 @@ class SingleMicrogridEnv(NetworkedGridEnv):
 
         # Create devices
         # Note: bus names should be just "Bus XXX" without MG1 prefix
-        # The PowerGridAgent.add_sgen/add_storage will prepend the microgrid name
+        # The PowerGridAgent._add_sgen will prepend the microgrid name
         generator = Generator(
             agent_id="gen1",
             device_config={
                 "name": "gen1",
                 "device_state_config": {
-                    "bus": "Bus 633",  # Will become "MG1 Bus 633" after add_sgen
+                    "bus": "Bus 633",  # Will become "MG1 Bus 633" after _add_sgen
                     "p_max_MW": 2.0,
                     "p_min_MW": 0.5,
                     "q_max_MVAr": 1.0,
@@ -67,7 +67,7 @@ class SingleMicrogridEnv(NetworkedGridEnv):
             device_config={
                 "name": "ess1",
                 "device_state_config": {
-                    "bus": "Bus 634",  # Will become "MG1 Bus 634" after add_storage
+                    "bus": "Bus 634",  # Will become "MG1 Bus 634"
                     "e_capacity_MWh": 5.0,  # 5 MWh capacity
                     "soc_max": 0.9,  # 90% usable
                     "soc_min": 0.1,  # 10% minimum
@@ -91,10 +91,12 @@ class SingleMicrogridEnv(NetworkedGridEnv):
                 "base_power": 1.0,
                 "load_scale": 1.0,
             },
-            devices=[generator, ess],
             protocol=CentralizedSetpointProtocol(),  # Direct action distribution
-            centralized=True,
         )
+
+        # Manually register devices to the agent
+        mg_agent.devices[generator.agent_id] = generator
+        mg_agent.devices[ess.agent_id] = ess
 
         # Add dataset (simple synthetic data)
         dataset = self._create_synthetic_dataset()
@@ -105,8 +107,23 @@ class SingleMicrogridEnv(NetworkedGridEnv):
         self._total_days = self.data_size // self.max_episode_steps
 
         # Add devices to pandapower network
-        mg_agent.add_sgen([generator])
-        mg_agent.add_storage([ess])
+        mg_agent._add_sgen([generator])
+        # Note: There is no _add_storage method yet, ESS devices need to be added manually to pandapower
+        # For now, we'll need to add storage devices to the network ourselves
+        bus_id = pp.get_element_index(net, 'bus', mg_agent.name + ' ' + ess.bus)
+        pp.create_storage(
+            net,
+            bus_id,
+            name=mg_agent.name + ' ' + ess.config.name,
+            p_mw=ess.electrical.P_MW,
+            max_e_mwh=ess.storage.e_capacity_MWh,
+            soc_percent=ess.storage.soc * 100,
+            max_p_mw=ess.storage.p_ch_max_MW,
+            min_p_mw=-ess.storage.p_dsc_max_MW,
+            max_q_mvar=ess.limits.q_max_MVAr if ess.limits else 0.0,
+            min_q_mvar=ess.limits.q_min_MVAr if ess.limits else 0.0,
+        )
+        mg_agent.storage[ess.config.name] = ess
 
         # Store agents
         self.possible_agents = ["MG1"]
@@ -164,6 +181,7 @@ def main():
     env_config = {
         "max_episode_steps": 24,  # 24-hour simulation
         "train": True,
+        "centralized": True,  # Use centralized execution mode
         "protocol": CentralizedSetpointProtocol(),  # No horizontal protocol needed
     }
 

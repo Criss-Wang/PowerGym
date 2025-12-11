@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Type, Tuple, Optional
+from typing import Any, Dict, Iterator, List, Type, Tuple, Optional, Union
 
 import numpy as np
 
@@ -161,7 +161,7 @@ class State(ABC):
 
 @dataclass(slots=True)
 class DeviceState(State):
-    def update(self, updates: Dict[str, Dict[str, Any]]) -> None:
+    def update(self, updates: Dict[Union[str, Type[FeatureProvider]], Dict[str, Any]]) -> None:
         """
         Apply a batch of updates to features.
 
@@ -182,10 +182,8 @@ class DeviceState(State):
             if feature_type in updates:
                 values = updates.get(feature_type)
             if feature_type.__name__ in updates:
-                values = updates.get(feature_type)
-
-            self.update_feature(feature_type, values)
-
+                values = updates.get(feature_type.__name__)
+            self.update_feature(feature_type, **values)
 
 @provider()
 @dataclass(slots=True)
