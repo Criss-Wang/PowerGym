@@ -5,7 +5,7 @@ import numpy as np
 
 from powergrid.features.base import FeatureProvider
 from powergrid.utils.registry import provider
-from powergrid.utils.array_utils import _cat_f32
+from powergrid.utils.array_utils import cat_f32
 from powergrid.utils.typing import Array
 
 
@@ -382,7 +382,7 @@ class StorageBlock(FeatureProvider):
         # add(self.degr_cost_per_cycle)
         # add(self.degr_cost_cum)
 
-        return _cat_f32(parts)
+        return cat_f32(parts)
 
     def vector(self) -> Array:  # pragma: no cover
         return self.as_vector()

@@ -7,7 +7,7 @@ import numpy as np
 from powergrid.features.base import FeatureProvider, AgentLike
 from powergrid.utils.typing import Array
 from powergrid.utils.registry import provider
-from powergrid.utils.array_utils import _cat_f32
+from powergrid.utils.array_utils import cat_f32
 
 KNOWN_FEATURES: Dict[str, Type[FeatureProvider]] = {}
 
@@ -127,7 +127,7 @@ class State(ABC):
                 if agent.level == self.owner_level + 1:
                     vecs.append(feat.vector())
 
-        return _cat_f32(vecs)
+        return cat_f32(vecs)
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -161,16 +161,15 @@ class State(ABC):
 
 @dataclass(slots=True)
 class DeviceState(State):
-
-    def update(self, updates: Dict[Optional[str, FeatureProvider], Dict[str, Any]]) -> None:
+    def update(self, updates: Dict[str, Dict[str, Any]]) -> None:
         """
         Apply a batch of updates to features.
 
         `updates` is a mapping:
 
             {
-                ElectricalBasePh: {"P_MW": 5.0, "Q_MVAr": 1.0},
-                StatusBlock:      {"state": "online"},
+                "ElectricalBasePh": {"P_MW": 5.0, "Q_MVAr": 1.0},
+                "StatusBlock":      {"state": "online"},
                 ...
             }
 

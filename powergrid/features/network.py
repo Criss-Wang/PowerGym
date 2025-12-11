@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from powergrid.features.base import FeatureProvider
-from powergrid.utils.array_utils import _as_f32, _cat_f32
+from powergrid.utils.array_utils import as_f32, cat_f32
 from powergrid.utils.registry import provider
 from powergrid.utils.typing import Array
 
@@ -29,9 +29,9 @@ class BusVoltages(FeatureProvider):
 
     def __post_init__(self):
         if self.vm_pu is not None:
-            self.vm_pu = _as_f32(self.vm_pu).ravel()
+            self.vm_pu = as_f32(self.vm_pu).ravel()
         if self.va_deg is not None:
-            self.va_deg = _as_f32(self.va_deg).ravel()
+            self.va_deg = as_f32(self.va_deg).ravel()
 
         # Validate consistency
         sizes = []
@@ -51,7 +51,7 @@ class BusVoltages(FeatureProvider):
             parts.append(self.vm_pu)
         if self.va_deg is not None:
             parts.append(self.va_deg)
-        return _cat_f32(parts)
+        return cat_f32(parts)
 
     def names(self) -> List[str]:
         out: List[str] = []
@@ -88,8 +88,8 @@ class BusVoltages(FeatureProvider):
     @classmethod
     def from_dict(cls, d: Dict) -> "BusVoltages":
         return cls(
-            vm_pu=_as_f32(d["vm_pu"]) if d.get("vm_pu") is not None else None,
-            va_deg=_as_f32(d["va_deg"]) if d.get("va_deg") is not None else None,
+            vm_pu=as_f32(d["vm_pu"]) if d.get("vm_pu") is not None else None,
+            va_deg=as_f32(d["va_deg"]) if d.get("va_deg") is not None else None,
             bus_names=d.get("bus_names", []),
         )
 
@@ -109,11 +109,11 @@ class LineFlows(FeatureProvider):
 
     def __post_init__(self):
         if self.p_from_mw is not None:
-            self.p_from_mw = _as_f32(self.p_from_mw).ravel()
+            self.p_from_mw = as_f32(self.p_from_mw).ravel()
         if self.q_from_mvar is not None:
-            self.q_from_mvar = _as_f32(self.q_from_mvar).ravel()
+            self.q_from_mvar = as_f32(self.q_from_mvar).ravel()
         if self.loading_percent is not None:
-            self.loading_percent = _as_f32(self.loading_percent).ravel()
+            self.loading_percent = as_f32(self.loading_percent).ravel()
 
         # Validate consistency
         sizes = []
@@ -137,7 +137,7 @@ class LineFlows(FeatureProvider):
             parts.append(self.q_from_mvar)
         if self.loading_percent is not None:
             parts.append(self.loading_percent)
-        return _cat_f32(parts)
+        return cat_f32(parts)
 
     def names(self) -> List[str]:
         out: List[str] = []
@@ -182,9 +182,9 @@ class LineFlows(FeatureProvider):
     @classmethod
     def from_dict(cls, d: Dict) -> "LineFlows":
         return cls(
-            p_from_mw=_as_f32(d["p_from_mw"]) if d.get("p_from_mw") is not None else None,
-            q_from_mvar=_as_f32(d["q_from_mvar"]) if d.get("q_from_mvar") is not None else None,
-            loading_percent=_as_f32(d["loading_percent"]) if d.get("loading_percent") is not None else None,
+            p_from_mw=as_f32(d["p_from_mw"]) if d.get("p_from_mw") is not None else None,
+            q_from_mvar=as_f32(d["q_from_mvar"]) if d.get("q_from_mvar") is not None else None,
+            loading_percent=as_f32(d["loading_percent"]) if d.get("loading_percent") is not None else None,
             line_names=d.get("line_names", []),
         )
 

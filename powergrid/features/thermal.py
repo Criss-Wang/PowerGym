@@ -5,7 +5,7 @@ import numpy as np
 
 from powergrid.core.state import PhaseModel, PhaseSpec
 from powergrid.features.base import FeatureProvider
-from powergrid.utils.array_utils import _as_f32
+from powergrid.utils.array_utils import as_f32
 from powergrid.utils.registry import provider
 from powergrid.utils.typing import Array
 
@@ -79,7 +79,7 @@ class ThermalLoading(FeatureProvider):
     def _ensure_shapes_(self) -> None:
         if self.phase_model == PhaseModel.THREE_PHASE:
             n = self.phase_spec.nph()
-            arr = _as_f32(self.loading_percentage_ph).ravel()
+            arr = as_f32(self.loading_percentage_ph).ravel()
             if arr.shape != (n,):
                 raise ValueError(
                     f"loading_percentage_ph must have shape ({n},), "
@@ -93,7 +93,7 @@ class ThermalLoading(FeatureProvider):
             return np.array([val], np.float32)
 
         # THREE_PHASE → per-phase fractions
-        arr = _as_f32(self.loading_percentage_ph).ravel()
+        arr = as_f32(self.loading_percentage_ph).ravel()
         return (arr / 100.0).astype(np.float32, copy=False)
 
     def names(self) -> List[str]:
@@ -108,7 +108,7 @@ class ThermalLoading(FeatureProvider):
                 np.clip(self.loading_percentage, 0.0, 200.0)
             )
         if self.loading_percentage_ph is not None:
-            arr = _as_f32(self.loading_percentage_ph).ravel()
+            arr = as_f32(self.loading_percentage_ph).ravel()
             arr = np.clip(arr, 0.0, 200.0).astype(np.float32)
             self.loading_percentage_ph = arr
 
@@ -160,7 +160,7 @@ class ThermalLoading(FeatureProvider):
 
         def arr(key: str):
             v = d.get(key)
-            return None if v is None else _as_f32(v)
+            return None if v is None else as_f32(v)
 
         return cls(
             phase_model=pm,

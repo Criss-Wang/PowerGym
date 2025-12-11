@@ -6,7 +6,7 @@ import gymnasium as gym
 
 from gymnasium.spaces import Box, Discrete, MultiDiscrete, Dict as SpaceDict
 
-from powergrid.utils.array_utils import _cat_f32
+from powergrid.utils.array_utils import cat_f32
 from powergrid.utils.typing import Array, FloatArray, IntArray
 
 
@@ -352,14 +352,14 @@ class Action:
         """Flatten to `[c..., d...]` (float32) for logging/export."""
         if self.dim_d:
             parts = [self.c.astype(np.float32), self.d.astype(np.int32)]
-            return _cat_f32(parts)
+            return cat_f32(parts)
         return self.c.astype(np.float32, copy=True)
 
     def vector(self) -> FloatArray:
         """Flatten to `[c..., d...]` (float32) for logging/export."""
         if self.dim_d:
             parts = [self.c.astype(np.float32), self.d.astype(np.int32)]
-            return _cat_f32(parts)
+            return cat_f32(parts)
         return self.c.astype(np.float32, copy=True)
 
     def vector(self) -> Array:

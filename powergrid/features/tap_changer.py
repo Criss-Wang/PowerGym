@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from powergrid.features.base import FeatureProvider
-from powergrid.utils.array_utils import _as_f32, _one_hot
+from powergrid.utils.array_utils import as_f32, one_hot
 from powergrid.utils.phase import PhaseModel, PhaseSpec
 from powergrid.utils.registry import provider
 from powergrid.utils.typing import Array
@@ -77,7 +77,7 @@ class TapChangerPh(FeatureProvider):
                     "THREE_PHASE requires 'tap_pos_ph' with shape (nph,)."
                 )
             n = self.phase_spec.nph()  # type: ignore
-            a = _as_f32(self.tap_pos_ph).ravel()
+            a = as_f32(self.tap_pos_ph).ravel()
             if a.shape != (n,):
                 raise ValueError(
                     f"'tap_pos_ph' must have shape ({n},), got {a.shape}."
@@ -92,7 +92,7 @@ class TapChangerPh(FeatureProvider):
             pos = int(self.tap_position) - int(self.tap_min)  # type: ignore
             pos = int(np.clip(pos, 0, nsteps - 1))
             if self.one_hot:
-                return _one_hot(pos, nsteps)
+                return one_hot(pos, nsteps)
             frac = pos / max(nsteps - 1, 1)
             return np.array([frac], np.float32)
 
@@ -103,7 +103,7 @@ class TapChangerPh(FeatureProvider):
         for p in np.asarray(self.tap_pos_ph, dtype=np.int32).ravel():
             pos = int(np.clip(int(p) - base, 0, nsteps - 1))
             if self.one_hot:
-                outs.append(_one_hot(pos, nsteps))
+                outs.append(one_hot(pos, nsteps))
             else:
                 frac = pos / max(nsteps - 1, 1)
                 outs.append(np.array([frac], np.float32))

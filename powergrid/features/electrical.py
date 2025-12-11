@@ -6,7 +6,7 @@ import numpy as np
 from powergrid.utils.phase import PhaseModel, PhaseSpec, check_phase_model_consistency
 from powergrid.features.base import FeatureProvider
 from powergrid.utils.registry import provider
-from powergrid.utils.array_utils import _cat_f32
+from powergrid.utils.array_utils import cat_f32
 from powergrid.utils.typing import Array
 
 
@@ -284,14 +284,14 @@ class ElectricalBasePh(FeatureProvider):
             for v in (self.P_MW, self.Q_MVAr, self.Vm_pu, self.Va_rad):
                 if v is not None:
                     parts.append(np.array([v], np.float32))
-            return _cat_f32(parts)
+            return cat_f32(parts)
 
         # THREE_PHASE
         if self.phase_model == PhaseModel.THREE_PHASE:
             for arr in (self.P_MW_ph, self.Q_MVAr_ph, self.Vm_pu_ph, self.Va_rad_ph):
                 if arr is not None:
                     parts.append(arr.ravel())
-            return _cat_f32(parts)
+            return cat_f32(parts)
 
         raise ValueError(f"Unsupported phase model: {self.phase_model}")
 

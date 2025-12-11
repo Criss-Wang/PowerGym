@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from powergrid.features.base import FeatureProvider
-from powergrid.utils.array_utils import _as_f32, _cat_f32
+from powergrid.utils.array_utils import as_f32, cat_f32
 from powergrid.utils.phase import PhaseModel, PhaseSpec
 from powergrid.utils.registry import provider
 from powergrid.utils.typing import Array
@@ -93,7 +93,7 @@ class ShuntCapacitorBlock(FeatureProvider):
         # --- cross-field consistency ---
         if self.phase_model == PhaseModel.THREE_PHASE:
             if self.kvar_total is not None and self.kvar_ph is not None:
-                total_ph = float(np.sum(_as_f32(self.kvar_ph)))
+                total_ph = float(np.sum(as_f32(self.kvar_ph)))
                 if not np.isclose(float(self.kvar_total), total_ph, rtol=1e-3):
                     raise ValueError(
                         f"Conflict: kvar_total={self.kvar_total} "
@@ -102,7 +102,7 @@ class ShuntCapacitorBlock(FeatureProvider):
             # if both scalar and staged exist, they should match too
             if (self.kvar_total is not None and
                     self.stage_kvar_ph is not None):
-                staged_sum = float(np.sum(_as_f32(self.stage_kvar_ph)))
+                staged_sum = float(np.sum(as_f32(self.stage_kvar_ph)))
                 if not np.isclose(float(self.kvar_total), staged_sum, rtol=1e-3):
                     raise ValueError(
                         f"Conflict: kvar_total={self.kvar_total} "
@@ -111,7 +111,7 @@ class ShuntCapacitorBlock(FeatureProvider):
         else:
             if (self.kvar_total is not None and
                     self.stage_kvar_total is not None):
-                total_staged = float(np.sum(_as_f32(self.stage_kvar_total)))
+                total_staged = float(np.sum(as_f32(self.stage_kvar_total)))
                 if not np.isclose(float(self.kvar_total),
                                 total_staged, rtol=1e-3):
                     raise ValueError(
@@ -149,7 +149,7 @@ class ShuntCapacitorBlock(FeatureProvider):
             if has_staged:
                 m = int(self.n_stages or 0)
                 if m <= 0 and self.stage_kvar_total is not None:
-                    m = int(_as_f32(self.stage_kvar_total).ravel().size)
+                    m = int(as_f32(self.stage_kvar_total).ravel().size)
                 if m <= 0:
                     raise ValueError(
                         "Staged config needs positive 'n_stages' or a "
@@ -160,7 +160,7 @@ class ShuntCapacitorBlock(FeatureProvider):
                         "Provide 'stage_kvar_total' of length m for staged "
                         "BALANCED_1PH."
                     )
-                sk = _as_f32(self.stage_kvar_total).ravel()
+                sk = as_f32(self.stage_kvar_total).ravel()
                 if sk.size != m:
                     raise ValueError(
                         f"'stage_kvar_total' must have length m={m}, "
@@ -189,7 +189,7 @@ class ShuntCapacitorBlock(FeatureProvider):
             m = int(self.n_stages or 0)
             SK = None
             if self.stage_kvar_ph is not None:
-                SK = _as_f32(self.stage_kvar_ph)
+                SK = as_f32(self.stage_kvar_ph)
                 if SK.ndim != 2 or SK.shape[0] != n:
                     raise ValueError(
                         f"'stage_kvar_ph' must have shape ({n}, m), "
@@ -214,7 +214,7 @@ class ShuntCapacitorBlock(FeatureProvider):
                 )
 
             if self.stage_enabled_ph is not None:
-                SE = _as_f32(self.stage_enabled_ph)
+                SE = as_f32(self.stage_enabled_ph)
                 if SE.ndim != 2 or SE.shape != (n, m):
                     raise ValueError(
                         f"'stage_enabled_ph' must have shape ({n}, {m}), "
@@ -231,7 +231,7 @@ class ShuntCapacitorBlock(FeatureProvider):
 
         # Validate direct per-phase totals if provided
         if self.kvar_ph is not None:
-            a = _as_f32(self.kvar_ph).ravel()
+            a = as_f32(self.kvar_ph).ravel()
             if a.shape != (n,):
                 raise ValueError(
                     f"'kvar_ph' must have shape ({n},), got {a.shape}."
@@ -242,25 +242,25 @@ class ShuntCapacitorBlock(FeatureProvider):
             return int(max(0, int(self.n_stages)))
         if self.phase_model == PhaseModel.BALANCED_1PH:
             if self.stage_kvar_total is not None:
-                return int(_as_f32(self.stage_kvar_total).ravel().size)
+                return int(as_f32(self.stage_kvar_total).ravel().size)
         if self.phase_model == PhaseModel.THREE_PHASE:
             if self.stage_kvar_ph is not None:
-                X = _as_f32(self.stage_kvar_ph)
+                X = as_f32(self.stage_kvar_ph)
                 return int(X.shape[1]) if X.ndim == 2 else None
         return None
 
     def _ensure_shapes_(self) -> None:
         if self.phase_model == PhaseModel.BALANCED_1PH:
             if self.stage_kvar_total is not None:
-                self.stage_kvar_total = _as_f32(self.stage_kvar_total).ravel()
+                self.stage_kvar_total = as_f32(self.stage_kvar_total).ravel()
             if self.stage_enabled is not None:
-                self.stage_enabled = _as_f32(self.stage_enabled).ravel()
+                self.stage_enabled = as_f32(self.stage_enabled).ravel()
     
         if self.phase_model == PhaseModel.THREE_PHASE:
             n = self.phase_spec.nph()
 
             if self.kvar_ph is not None:
-                a = _as_f32(self.kvar_ph).ravel()
+                a = as_f32(self.kvar_ph).ravel()
                 if a.shape != (n,):
                     raise ValueError(f"'kvar_ph' must have shape ({n},), got {a.shape}")
                 self.kvar_ph = a
@@ -268,7 +268,7 @@ class ShuntCapacitorBlock(FeatureProvider):
             def fix_2d(name: str, A: Optional[Array], m_eff: Optional[int]) -> Optional[Array]:
                 if A is None:
                     return None
-                X = _as_f32(A)
+                X = as_f32(A)
                 if X.ndim != 2:
                     raise ValueError(f"{name} must be 2D (nph, m), got {X.shape}")
                 if X.shape[0] != n:
@@ -300,20 +300,20 @@ class ShuntCapacitorBlock(FeatureProvider):
         # Aggregate staged (balanced 1φ only)
         if self.phase_model == PhaseModel.BALANCED_1PH:
             if self.stage_kvar_total is not None:
-                parts.append(_as_f32(self.stage_kvar_total).ravel())
+                parts.append(as_f32(self.stage_kvar_total).ravel())
             if self.stage_enabled is not None:
-                parts.append(_as_f32(self.stage_enabled).ravel())
+                parts.append(as_f32(self.stage_enabled).ravel())
 
         # Per-phase (3φ only)
         if self.phase_model == PhaseModel.THREE_PHASE:
             if self.kvar_ph is not None:
-                parts.append(_as_f32(self.kvar_ph).ravel())
+                parts.append(as_f32(self.kvar_ph).ravel())
             if self.stage_kvar_ph is not None:
-                parts.append(_as_f32(self.stage_kvar_ph).ravel())
+                parts.append(as_f32(self.stage_kvar_ph).ravel())
             if self.stage_enabled_ph is not None:
-                parts.append(_as_f32(self.stage_enabled_ph).ravel())
+                parts.append(as_f32(self.stage_enabled_ph).ravel())
 
-        return _cat_f32(parts)
+        return cat_f32(parts)
 
     def names(self) -> List[str]:
         n: List[str] = []
@@ -323,10 +323,10 @@ class ShuntCapacitorBlock(FeatureProvider):
 
         if self.phase_model == PhaseModel.BALANCED_1PH:
             if self.stage_kvar_total is not None:
-                m = len(_as_f32(self.stage_kvar_total))
+                m = len(as_f32(self.stage_kvar_total))
                 n += [f"cap_stage_kvar_{i}" for i in range(m)]
             if self.stage_enabled is not None:
-                m = len(_as_f32(self.stage_enabled))
+                m = len(as_f32(self.stage_enabled))
                 n += [f"cap_stage_en_{i}" for i in range(m)]
 
         elif self.phase_model == PhaseModel.THREE_PHASE:
@@ -399,7 +399,7 @@ class ShuntCapacitorBlock(FeatureProvider):
 
         def arr(k: str) -> Optional[Array]:
             v = d.get(k)
-            return None if v is None else _as_f32(v)
+            return None if v is None else as_f32(v)
 
         return cls(
             phase_model=pm,
@@ -441,8 +441,8 @@ class VoltVarCurve(FeatureProvider):
     def _ensure_shared_(self) -> None:
         if self.v_points_pu is None and self.q_points_pu is None:
             return
-        v = None if self.v_points_pu is None else _as_f32(self.v_points_pu).ravel()
-        q = None if self.q_points_pu is None else _as_f32(self.q_points_pu).ravel()
+        v = None if self.v_points_pu is None else as_f32(self.v_points_pu).ravel()
+        q = None if self.q_points_pu is None else as_f32(self.q_points_pu).ravel()
         if v is not None and q is not None and v.size != q.size:
             k = min(v.size, q.size)
             v, q = v[:k].astype(np.float32), q[:k].astype(np.float32)
@@ -457,14 +457,14 @@ class VoltVarCurve(FeatureProvider):
     def _ensure_per_phase_(self) -> None:
         n = self.phase_spec.nph()
         if self.enabled_ph is not None:
-            e = _as_f32(self.enabled_ph).ravel()
+            e = as_f32(self.enabled_ph).ravel()
             if e.shape != (n,):
                 raise ValueError(f"enabled_ph must have shape ({n},), got {e.shape}")
             self.enabled_ph = np.where(e >= 0.5, 1.0, 0.0).astype(np.float32)
 
         def fix_2d(a: Optional[Array]) -> Optional[Array]:
             if a is None: return None
-            A = _as_f32(a)
+            A = as_f32(a)
             if A.ndim != 2 or A.shape[0] != n:
                 raise ValueError(f"expected 2D array with first dim {n}, got {A.shape}")
             return A
@@ -510,7 +510,7 @@ class VoltVarCurve(FeatureProvider):
             if self.q_points_pu_ph is not None:
                 parts.append(self.q_points_pu_ph.astype(np.float32, copy=False).ravel())
 
-        return _cat_f32(parts)
+        return cat_f32(parts)
 
     def names(self) -> List[str]:
         n: List[str] = []
@@ -578,7 +578,7 @@ class VoltVarCurve(FeatureProvider):
             )
 
         def arr(k):
-            v = d.get(k); return None if v is None else _as_f32(v)
+            v = d.get(k); return None if v is None else as_f32(v)
 
         obj = cls(
             phase_model=pm, phase_spec=ps,
@@ -622,7 +622,7 @@ class VoltVarCurve(FeatureProvider):
 
         def remap2d(A: Optional[Array]) -> Optional[Array]:
             if A is None: return None
-            A = _as_f32(A); k = A.shape[1] if A.ndim == 2 else 0
+            A = as_f32(A); k = A.shape[1] if A.ndim == 2 else 0
             out = np.zeros((n, k), np.float32)
             r = min(n, A.shape[0]); out[:r, :k] = A[:r, :k]
             return out
@@ -689,9 +689,9 @@ class VoltVarCurve(FeatureProvider):
             return
 
         v = (None if self.v_points_pu is None
-              else _as_f32(self.v_points_pu).ravel())
+              else as_f32(self.v_points_pu).ravel())
         q = (None if self.q_points_pu is None
-              else _as_f32(self.q_points_pu).ravel())
+              else as_f32(self.q_points_pu).ravel())
 
         # Reconcile lengths: keep common part if both present.
         if v is not None and q is not None and v.size != q.size:
@@ -722,7 +722,7 @@ class VoltVarCurve(FeatureProvider):
 
         # enabled_ph
         if self.enabled_ph is not None:
-            e = _as_f32(self.enabled_ph).ravel()
+            e = as_f32(self.enabled_ph).ravel()
             if e.shape != (nph,):
                 raise ValueError(
                     f"enabled_ph must have shape ({nph},), got {e.shape}"
@@ -730,8 +730,8 @@ class VoltVarCurve(FeatureProvider):
             self.enabled_ph = np.where(e >= 0.5, 1.0, 0.0).astype(np.float32)
 
         # v_points_pu_ph / q_points_pu_ph
-        V = None if self.v_points_pu_ph is None else _as_f32(self.v_points_pu_ph)
-        Q = None if self.q_points_pu_ph is None else _as_f32(self.q_points_pu_ph)
+        V = None if self.v_points_pu_ph is None else as_f32(self.v_points_pu_ph)
+        Q = None if self.q_points_pu_ph is None else as_f32(self.q_points_pu_ph)
 
         def _check_2d(name: str, A: Array) -> None:
             if A.ndim != 2:
@@ -804,7 +804,7 @@ class VoltVarCurve(FeatureProvider):
                     self.q_points_pu_ph.astype(np.float32, copy=False).ravel()
                 )
 
-        return _cat_f32(parts)
+        return cat_f32(parts)
 
     def names(self) -> List[str]:
         n: List[str] = []
@@ -813,10 +813,10 @@ class VoltVarCurve(FeatureProvider):
         if self.enabled is not None:
             n.append("vvar_enabled")
         if self.v_points_pu is not None:
-            k = int(_as_f32(self.v_points_pu).size)
+            k = int(as_f32(self.v_points_pu).size)
             n += [f"vvar_v_{i}" for i in range(k)]
         if self.q_points_pu is not None:
-            k = int(_as_f32(self.q_points_pu).size)
+            k = int(as_f32(self.q_points_pu).size)
             n += [f"vvar_q_{i}" for i in range(k)]
 
         # Per-phase names
@@ -877,7 +877,7 @@ class VoltVarCurve(FeatureProvider):
 
         def arr(k: str) -> Optional[Array]:
             v = d.get(k)
-            return None if v is None else _as_f32(v)
+            return None if v is None else as_f32(v)
 
         obj = cls(
             phase_model=pm,
@@ -925,7 +925,7 @@ class VoltVarCurve(FeatureProvider):
         def remap_row(a: Optional[Array]) -> Optional[Array]:
             if a is None:
                 return None
-            a = _as_f32(a).ravel()
+            a = as_f32(a).ravel()
             out = np.zeros(nph_new, np.float32)
             k = min(nph_new, a.size)
             if k:
@@ -935,7 +935,7 @@ class VoltVarCurve(FeatureProvider):
         def remap_mat(A: Optional[Array]) -> Optional[Array]:
             if A is None:
                 return None
-            X = _as_f32(A)
+            X = as_f32(A)
             if X.ndim != 2:
                 return None
             k = X.shape[1]
