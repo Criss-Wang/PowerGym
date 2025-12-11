@@ -69,7 +69,12 @@ class GridAgent(Agent):
 
         # Build device agents
         device_configs = grid_config.get('devices', [])
-        self.devices = self._build_device_agents(device_configs, message_broker)
+        self.devices = self._build_device_agents(
+            device_configs,
+            message_broker=message_broker,
+            env_id=env_id,
+            upstream_id=agent_id  # Devices' upstream is this GridAgent
+        )
 
         super().__init__(
             agent_id=agent_id,
@@ -198,7 +203,7 @@ class GridAgent(Agent):
         """
         return None
 
-    def _derive_downstream_actions(
+    async def _derive_downstream_actions(
         self,
         upstream_action: Optional[Any]
     ) -> DictType[AgentID, Any]:
@@ -218,24 +223,46 @@ class GridAgent(Agent):
             return downstream_actions
 
         # Handle Dict action space (continuous + discrete)
+        continuous_action = None
+        discrete_action = None
+
         if isinstance(upstream_action, dict):
             # For Dict spaces with 'continuous' and 'discrete' keys
             if 'continuous' in upstream_action:
-                action = np.asarray(upstream_action['continuous'])
-            else:
-                # Assume it's already a per-device dict
+                continuous_action = np.asarray(upstream_action['continuous'])
+            if 'discrete' in upstream_action:
+                discrete_action = np.asarray(upstream_action['discrete'])
+
+            # If neither key is present, assume it's already a per-device dict
+            if continuous_action is None and discrete_action is None:
                 return upstream_action
         else:
-            action = np.asarray(upstream_action)
+            continuous_action = np.asarray(upstream_action)
 
-        # Decompose flat action vector into per-device actions
-        offset = 0
+        # Decompose flat action vectors into per-device actions
+        cont_offset = 0
+        disc_offset = 0
+
         for agent_id, device in self.devices.items():
-            # Get device action size
-            action_size = device.action.dim_c + device.action.dim_d
-            device_action = action[offset:offset + action_size]
-            downstream_actions[agent_id] = device_action
-            offset += action_size
+            # Build per-device action by combining continuous and discrete parts
+            device_action_parts = []
+
+            # Add continuous part
+            if device.action.dim_c > 0 and continuous_action is not None:
+                cont_part = continuous_action[cont_offset:cont_offset + device.action.dim_c]
+                device_action_parts.append(cont_part)
+                cont_offset += device.action.dim_c
+
+            # Add discrete part
+            if device.action.dim_d > 0 and discrete_action is not None:
+                disc_part = discrete_action[disc_offset:disc_offset + device.action.dim_d]
+                device_action_parts.append(disc_part)
+                disc_offset += device.action.dim_d
+
+            # Concatenate parts into single action array
+            if device_action_parts:
+                device_action = np.concatenate(device_action_parts)
+                downstream_actions[agent_id] = device_action
 
         return downstream_actions
 
@@ -435,6 +462,9 @@ class PowerGridAgent(GridAgent):
             Dictionary mapping device IDs to DeviceAgent instances
         """
         devices = {}
+        generators = []
+        ess_devices = []
+
         for device_config in device_configs:
             device_type = device_config.get('type', None)
 
@@ -445,8 +475,8 @@ class PowerGridAgent(GridAgent):
                     env_id=env_id,
                     device_config=device_config,
                 )
-                # Don't add to network here - that's done separately via _add_sgen()
                 devices[generator.agent_id] = generator
+                generators.append(generator)
             elif device_type == 'ESS':
                 ess = ESS(
                     message_broker=message_broker,
@@ -454,11 +484,17 @@ class PowerGridAgent(GridAgent):
                     env_id=env_id,
                     device_config=device_config,
                 )
-                # Don't add to network here - that's done separately
                 devices[ess.agent_id] = ess
+                ess_devices.append(ess)
             else:
                 # Other device types not yet implemented
                 pass
+
+        # Add devices to pandapower network
+        if generators:
+            self._add_sgen(generators)
+        if ess_devices:
+            self._add_storage(ess_devices)
 
         return devices
 
@@ -490,7 +526,6 @@ class PowerGridAgent(GridAgent):
                 min_q_mvar=sgen.limits.q_min_MVAr
             )
             self.sgen[sgen.config.name] = sgen
-            self.devices[sgen.config.name] = sgen
 
     def _add_storage(self, storages: Iterable[ESS] | ESS):
         """Add energy storage systems to the network.
@@ -517,7 +552,6 @@ class PowerGridAgent(GridAgent):
                 min_q_mvar=ess.limits.q_min_MVAr if ess.limits else 0.0,
             )
             self.storage[ess.config.name] = ess
-            self.devices[ess.config.name] = ess
 
     def add_dataset(self, dataset):
         """Add time-series dataset for loads and renewables.
@@ -702,6 +736,18 @@ class PowerGridAgent(GridAgent):
             if isinstance(sp, Box):
                 low = np.append(low, sp.low)
                 high = np.append(high, sp.high)
+            elif isinstance(sp, Dict):
+                # Handle Dict spaces (e.g., Generator with continuous + discrete)
+                if 'continuous' in sp.spaces or 'c' in sp.spaces:
+                    cont_space = sp.spaces.get('continuous', sp.spaces.get('c'))
+                    low = np.append(low, cont_space.low)
+                    high = np.append(high, cont_space.high)
+                if 'discrete' in sp.spaces or 'd' in sp.spaces:
+                    disc_space = sp.spaces.get('discrete', sp.spaces.get('d'))
+                    if isinstance(disc_space, Discrete):
+                        discrete_n.append(disc_space.n)
+                    elif isinstance(disc_space, MultiDiscrete):
+                        discrete_n.extend(list(disc_space.nvec))
             elif isinstance(sp, Discrete):
                 discrete_n.append(sp.n)
             elif isinstance(sp, MultiDiscrete):

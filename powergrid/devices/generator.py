@@ -406,7 +406,7 @@ class Generator(DeviceAgent):
             "progress_frac": progress_frac,
         }
 
-        self.state.update_feature(StatusBlock, **status_updates)
+        self.state.update_feature(StatusBlock.feature_name, **status_updates)
 
     def _update_power_outputs(self) -> None:
         """Apply continuous P/Q control from action.c, projected to limits.
@@ -423,7 +423,7 @@ class Generator(DeviceAgent):
         if self.action.c.size >= 2:
             elec_updates["Q_MVAr"] = Q_eff
 
-        self.state.update_feature(ElectricalBasePh, **elec_updates)
+        self.state.update_feature(ElectricalBasePh.feature_name, **elec_updates)
 
     def _update_by_kwargs(self, **kwargs) -> None:
         """Update features based on provided kwargs.
@@ -440,12 +440,11 @@ class Generator(DeviceAgent):
         limits_updates = {k: v for k, v in kwargs.items() if k in power_limits_keys}
 
         if elec_updates:
-            self.state.update_feature(ElectricalBasePh, **elec_updates)
+            self.state.update_feature(ElectricalBasePh.feature_name, **elec_updates)
         if status_updates:
-            self.state.update_feature(StatusBlock, **status_updates)
+            self.state.update_feature(StatusBlock.feature_name, **status_updates)
         if limits_updates:
-            self.state.update_feature(PowerLimits, **limits_updates)
-
+            self.state.update_feature(PowerLimits.feature_name, **limits_updates)
     def update_cost_safety(self) -> None:
         """Economic cost + S/PF penalties + UC start/stop cost."""
         P = self.electrical.P_MW or 0.0

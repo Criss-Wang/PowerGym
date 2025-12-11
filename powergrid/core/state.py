@@ -70,10 +70,13 @@ class State(ABC):
 
     def update_feature(self, feature_name: str, **values: Any) -> None:
         """
-        Update a single feature identified by its class.
+        Update a single feature identified by its class or class name.
+
+        Args:
+            feature_name: Feature class or class name string
 
         Example:
-            state.update_feature(ElectricalBasePh, P_MW=10.0, Q_MVAr=2.0)
+            state.update_feature("ElectricalBasePh", P_MW=10.0, Q_MVAr=2.0)
         """
         for feature in self.features:
             if feature.feature_name == feature_name:

@@ -150,15 +150,6 @@ class MultiMicrogridP2PEnv(NetworkedGridEnv):
             # Add microgrid-specific dataset
             mg_agent.add_dataset(dataset[config["name"]])
 
-            # Add devices to pandapower network (automatically registered from grid_config)
-            generators = [dev for dev in mg_agent.devices.values() if isinstance(dev, Generator)]
-            ess_devices = [dev for dev in mg_agent.devices.values() if isinstance(dev, ESS)]
-
-            if generators:
-                mg_agent._add_sgen(generators)
-            if ess_devices:
-                mg_agent._add_storage(ess_devices)
-
             # Store agent
             self.agent_dict[config["name"]] = mg_agent
 

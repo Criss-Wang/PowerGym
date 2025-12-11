@@ -96,15 +96,6 @@ class SingleMicrogridEnv(NetworkedGridEnv):
         self.data_size = len(dataset["load"])
         self._total_days = self.data_size // self.max_episode_steps
 
-        # Add devices to pandapower network (automatically created from grid_config)
-        generators = [dev for dev in mg_agent.devices.values() if isinstance(dev, Generator)]
-        ess_devices = [dev for dev in mg_agent.devices.values() if isinstance(dev, ESS)]
-
-        if generators:
-            mg_agent._add_sgen(generators)
-        if ess_devices:
-            mg_agent._add_storage(ess_devices)
-
         # Store agents
         self.possible_agents = ["MG1"]
         self.agent_dict = {"MG1": mg_agent}

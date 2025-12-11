@@ -288,7 +288,7 @@ class ESS(DeviceAgent):
         if self.action.c.size >= 2:
             elec_updates["Q_MVAr"] = Q_eff
 
-        self.state.update_feature(ElectricalBasePh, **elec_updates)
+        self.state.update_feature(ElectricalBasePh.feature_name, **elec_updates)
         return P_eff, Q_eff
 
     def _update_storage_dynamics(self, P_MW: float) -> None:
@@ -331,12 +331,12 @@ class ESS(DeviceAgent):
         limits_updates = {k: v for k, v in kwargs.items() if k in power_limits_keys}
 
         if elec_updates:
-            self.state.update_feature(ElectricalBasePh, **elec_updates)
+            self.state.update_feature(ElectricalBasePh.feature_name, **elec_updates)
         if storage_updates:
-            self.state.update_feature(StorageBlock, **storage_updates)
+            self.state.update_feature(StorageBlock.feature_name, **storage_updates)
         if limits_updates:
-            self.state.update_feature(PowerLimits, **limits_updates)
-
+            self.state.update_feature(PowerLimits.feature_name, **limits_updates)
+    
     def update_cost_safety(self) -> None:
         """Update per-step cost and safety penalties for the ESS.
 

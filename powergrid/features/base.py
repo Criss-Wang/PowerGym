@@ -33,6 +33,11 @@ class FeatureProvider(ABC):
     """
 
     visibility: ClassVar[Sequence[str]]
+    feature_name: ClassVar[str]
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls.feature_name = cls.__name__
 
     @abstractmethod
     def vector(self) -> np.ndarray:
@@ -112,12 +117,3 @@ class FeatureProvider(ABC):
             return requestor_level == owner_level + 1
         # Default: treat as private
         return False
-
-    @property
-    def feature_name(self) -> str:
-        """Get the feature type name (class name).
-
-        Returns:
-            String name of the feature class
-        """
-        return type(self).__name__  
