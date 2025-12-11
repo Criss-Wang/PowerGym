@@ -65,11 +65,16 @@ class GridAgent(Agent):
         """
         self.protocol = protocol
         self.policy = policy
-        self.state = GridState()
+        self.state = GridState(agent_id, GRID_LEVEL)
 
         # Build device agents
         device_configs = grid_config.get('devices', [])
-        self.devices = self._build_device_agents(device_configs, message_broker)
+        self.devices = self._build_device_agents(
+            device_configs,
+            message_broker=message_broker,
+            env_id=env_id,
+            upstream_id=agent_id  # Devices' upstream is this GridAgent
+        )
 
         super().__init__(
             agent_id=agent_id,
@@ -161,19 +166,19 @@ class GridAgent(Agent):
             "grid_state": self.state.vector()
         }
 
-    def act(self, observation: Observation, given_action: Any = None) -> None:
+    def act(self, observation: Observation, upstream_action: Any = None) -> None:
         """Compute coordination action and distribute to devices.
 
         Args:
             observation: Aggregated observation
-            given_action: Pre-computed action (if any)
+            upstream_action: Pre-computed action (if any)
 
         Raises:
             NotImplementedError: If using decentralized mode (not yet implemented)
         """
         # Get coordinator action from policy if available
-        if given_action is not None:
-            action = given_action
+        if upstream_action is not None:
+            action = upstream_action
         elif self.policy is not None:
             action = self.policy.forward(observation)
         else:
@@ -198,7 +203,7 @@ class GridAgent(Agent):
         """
         return None
 
-    def _derive_downstream_actions(
+    async def _derive_downstream_actions(
         self,
         upstream_action: Optional[Any]
     ) -> DictType[AgentID, Any]:
@@ -218,24 +223,46 @@ class GridAgent(Agent):
             return downstream_actions
 
         # Handle Dict action space (continuous + discrete)
+        continuous_action = None
+        discrete_action = None
+
         if isinstance(upstream_action, dict):
             # For Dict spaces with 'continuous' and 'discrete' keys
             if 'continuous' in upstream_action:
-                action = np.asarray(upstream_action['continuous'])
-            else:
-                # Assume it's already a per-device dict
+                continuous_action = np.asarray(upstream_action['continuous'])
+            if 'discrete' in upstream_action:
+                discrete_action = np.asarray(upstream_action['discrete'])
+
+            # If neither key is present, assume it's already a per-device dict
+            if continuous_action is None and discrete_action is None:
                 return upstream_action
         else:
-            action = np.asarray(upstream_action)
+            continuous_action = np.asarray(upstream_action)
 
-        # Decompose flat action vector into per-device actions
-        offset = 0
+        # Decompose flat action vectors into per-device actions
+        cont_offset = 0
+        disc_offset = 0
+
         for agent_id, device in self.devices.items():
-            # Get device action size
-            action_size = device.action.dim_c + device.action.dim_d
-            device_action = action[offset:offset + action_size]
-            downstream_actions[agent_id] = device_action
-            offset += action_size
+            # Build per-device action by combining continuous and discrete parts
+            device_action_parts = []
+
+            # Add continuous part
+            if device.action.dim_c > 0 and continuous_action is not None:
+                cont_part = continuous_action[cont_offset:cont_offset + device.action.dim_c]
+                device_action_parts.append(cont_part)
+                cont_offset += device.action.dim_c
+
+            # Add discrete part
+            if device.action.dim_d > 0 and discrete_action is not None:
+                disc_part = discrete_action[disc_offset:disc_offset + device.action.dim_d]
+                device_action_parts.append(disc_part)
+                disc_offset += device.action.dim_d
+
+            # Concatenate parts into single action array
+            if device_action_parts:
+                device_action = np.concatenate(device_action_parts)
+                downstream_actions[agent_id] = device_action
 
         return downstream_actions
 
@@ -435,22 +462,50 @@ class PowerGridAgent(GridAgent):
             Dictionary mapping device IDs to DeviceAgent instances
         """
         devices = {}
+        generators = []
+        ess_devices = []
+
         for device_config in device_configs:
             device_type = device_config.get('type', None)
+
+            # Wrap YAML config in device_state_config if not already wrapped
+            # Keep name and type at top level
+            if 'device_state_config' not in device_config:
+                wrapped_config = {
+                    'name': device_config.get('name', 'device_agent'),
+                    'type': device_type,
+                    'device_state_config': device_config
+                }
+            else:
+                wrapped_config = device_config
 
             if device_type == 'Generator':
                 generator = Generator(
                     message_broker=message_broker,
                     upstream_id=upstream_id,
                     env_id=env_id,
-                    device_config=device_config,
+                    device_config=wrapped_config,
                 )
-                # Don't add to network here - that's done separately via _add_sgen()
                 devices[generator.agent_id] = generator
+                generators.append(generator)
+            elif device_type == 'ESS':
+                ess = ESS(
+                    message_broker=message_broker,
+                    upstream_id=upstream_id,
+                    env_id=env_id,
+                    device_config=wrapped_config,
+                )
+                devices[ess.agent_id] = ess
+                ess_devices.append(ess)
             else:
-                # Only 'Generator' type is supported
-                # ESS and other device types are not yet implemented for distributed mode
+                # Other device types not yet implemented
                 pass
+
+        # Add devices to pandapower network
+        if generators:
+            self._add_sgen(generators)
+        if ess_devices:
+            self._add_storage(ess_devices)
 
         return devices
 
@@ -482,7 +537,32 @@ class PowerGridAgent(GridAgent):
                 min_q_mvar=sgen.limits.q_min_MVAr
             )
             self.sgen[sgen.config.name] = sgen
-            self.devices[sgen.config.name] = sgen
+
+    def _add_storage(self, storages: Iterable[ESS] | ESS):
+        """Add energy storage systems to the network.
+
+        Args:
+            storages: Single ESS instance or iterable of ESS instances
+        """
+        if not isinstance(storages, Iterable):
+            storages = [storages]
+
+        for ess in storages:
+            bus_id = pp.get_element_index(self.net, 'bus', self.name + ' ' + ess.bus)
+            pp.create_storage(
+                self.net,
+                bus_id,
+                name=self.name + ' ' + ess.config.name,
+                index=None,  # Let pandapower auto-assign to avoid collisions during fuse
+                p_mw=ess.electrical.P_MW,
+                max_e_mwh=ess.storage.e_capacity_MWh,
+                soc_percent=ess.storage.soc * 100,
+                max_p_mw=ess.storage.p_ch_max_MW,
+                min_p_mw=-ess.storage.p_dsc_max_MW,
+                max_q_mvar=ess.limits.q_max_MVAr if ess.limits else 0.0,
+                min_q_mvar=ess.limits.q_min_MVAr if ess.limits else 0.0,
+            )
+            self.storage[ess.config.name] = ess
 
     def add_dataset(self, dataset):
         """Add time-series dataset for loads and renewables.
@@ -529,16 +609,20 @@ class PowerGridAgent(GridAgent):
     # Observation Methods
     # ============================================
 
-    def _build_local_observation(self, device_obs: DictType[AgentID, Observation], net) -> Any:
+    def _build_local_observation(self, device_obs: DictType[AgentID, Observation], *args, **kwargs) -> Any:
         """Build local observation including device states and network results.
 
         Args:
             device_obs: Device observations dictionary
-            net: PandaPower network with power flow results
+            *args: Additional positional arguments
+            **kwargs: Additional keyword arguments (can include 'net')
 
         Returns:
             Local observation dictionary with device and network state
         """
+        # Use provided net or fall back to self.net
+        net = kwargs.get('net', self.net)
+
         # Update grid state from network results
         self._update_grid_state(net)
 
@@ -663,6 +747,18 @@ class PowerGridAgent(GridAgent):
             if isinstance(sp, Box):
                 low = np.append(low, sp.low)
                 high = np.append(high, sp.high)
+            elif isinstance(sp, Dict):
+                # Handle Dict spaces (e.g., Generator with continuous + discrete)
+                if 'continuous' in sp.spaces or 'c' in sp.spaces:
+                    cont_space = sp.spaces.get('continuous', sp.spaces.get('c'))
+                    low = np.append(low, cont_space.low)
+                    high = np.append(high, cont_space.high)
+                if 'discrete' in sp.spaces or 'd' in sp.spaces:
+                    disc_space = sp.spaces.get('discrete', sp.spaces.get('d'))
+                    if isinstance(disc_space, Discrete):
+                        discrete_n.append(disc_space.n)
+                    elif isinstance(disc_space, MultiDiscrete):
+                        discrete_n.extend(list(disc_space.nvec))
             elif isinstance(sp, Discrete):
                 discrete_n.append(sp.n)
             elif isinstance(sp, MultiDiscrete):
@@ -745,8 +841,11 @@ class PowerGridAgent(GridAgent):
             # Handle both scalar and array cases
             p_mw = p_mw_val if np.isscalar(p_mw_val) else p_mw_val.values[0]
             q_mvar = q_mvar_val if np.isscalar(q_mvar_val) else q_mvar_val.values[0]
-            dg.electrical.P_MW = p_mw
-            dg.electrical.Q_MVAr = q_mvar
+            # Handle NaN values (can occur if power flow didn't converge properly)
+            if not np.isnan(p_mw):
+                dg.electrical.P_MW = p_mw
+            if not np.isnan(q_mvar):
+                dg.electrical.Q_MVAr = q_mvar
 
     def update_cost_safety(self, net):
         """Update cost and safety metrics for the grid.

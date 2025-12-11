@@ -10,6 +10,7 @@ The Agent class supports two execution modes:
 """
 
 from abc import ABC, abstractmethod
+import asyncio
 from typing import Any, Dict, List, Optional, Union
 
 import gymnasium as gym
@@ -112,7 +113,7 @@ class Agent(ABC):
 
     @abstractmethod
     def observe(self, global_state: Optional[Dict[str, Any]] = None, *args, **kwargs) -> Observation:
-        """Extract relevant observations from global state.
+        """Extract relevant observations from global state. [Only for synchronous direct execution]
 
         Used for direct execution mode where agents simply observe and act
         without hierarchical communication.
@@ -131,7 +132,7 @@ class Agent(ABC):
 
     @abstractmethod
     def act(self, observation: Observation, *args, **kwargs) -> Any:
-        """Compute action from observation.
+        """Compute action from observation. [Only for synchronous direct execution]
 
         Used for direct execution mode where agents receive observations
         and return actions without hierarchical communication.
@@ -148,7 +149,7 @@ class Agent(ABC):
     # Hierarchical Execution Mode (New API)
     # ============================================
 
-    def step_distributed(self) -> None:
+    async def step_distributed(self) -> None:
         """Execute one step with hierarchical message-based communication.
 
         This method implements full recursive hierarchical execution with
@@ -198,13 +199,13 @@ class Agent(ABC):
         # 2-4. Handle subordinates if any
         if self.subordinates:
             # Derive actions for subordinates
-            downstream_actions = self._derive_downstream_actions(upstream_action)
+            downstream_actions = await self._derive_downstream_actions(upstream_action)
 
             # Send actions to subordinates via message broker
             self._send_actions_to_subordinates(downstream_actions)
 
             # Execute subordinate steps recursively
-            self._execute_subordinates()
+            await self._execute_subordinates()
 
             # Collect info from subordinates via message broker
             self._collect_subordinates_info()
@@ -234,7 +235,7 @@ class Agent(ABC):
         """
         raise NotImplementedError
 
-    def _derive_downstream_actions(
+    async def _derive_downstream_actions(
         self,
         upstream_action: Optional[Any]
     ) -> Dict[AgentID, Any]:
@@ -262,7 +263,7 @@ class Agent(ABC):
         raise NotImplementedError
 
     # ============================================
-    # State Update Hooks
+    # State Update Hooks (Implemented by individual agents as needed)
     # ============================================
 
     def _update_state_with_upstream_info(self, upstream_info: Optional[Dict[str, Any]]) -> None:
@@ -393,10 +394,12 @@ class Agent(ABC):
             )
             self.message_broker.publish(channel, message)
 
-    def _execute_subordinates(self) -> None:
+    async def _execute_subordinates(self) -> None:
         """Execute subordinate agent steps recursively."""
-        for _, subordinate in self.subordinates.items():
-            subordinate.step_distributed()
+        await asyncio.gather(*[
+            subordinate.step_distributed() 
+            for subordinate in self.subordinates.values()
+        ])
 
     def _collect_subordinates_info(self) -> None:
         """Collect info from subordinates via message broker."""
@@ -418,6 +421,8 @@ class Agent(ABC):
             if messages:
                 latest_msg = messages[-1]
                 self.subordinates_info[sub_id] = latest_msg.payload
+            else:
+                self.subordinates_info[sub_id] = {}
 
     # ============================================
     # Utility Methods

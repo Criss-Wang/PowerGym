@@ -9,7 +9,8 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 
-from powergrid.utils.typing import AgentID, Array
+from powergrid.utils.typing import AgentID
+
 
 
 @dataclass
@@ -27,7 +28,7 @@ class Observation:
     messages: List['Message'] = field(default_factory=list)
     timestamp: float = 0.0
 
-    def as_vector(self) -> Array:
+    def vector(self) -> np.ndarray:
         """Convert observation to flat numpy array for RL algorithms.
 
         Returns:

@@ -1,5 +1,5 @@
 from dataclasses import dataclass, fields
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -215,23 +215,15 @@ class ESS(DeviceAgent):
             )
             self.state.features.append(power_limits)
 
-    def reset_device(self, *args, **kwargs) -> None:
-        """
-        Reset ESS to a neutral operating point.
+    def reset_device(self, **kwargs) -> None:
+        """Reset ESS to a neutral operating point.
 
-        Optional kwargs (forwarded to StorageBlock.reset if present):
-            soc: float
-                Explicit SOC target (fraction in [0, 1]).
-
-            random_init_soc: bool
-                If True (and soc is None), sample SOC uniformly in
-                [soc_min, soc_max] using the given seed (if any).
-
-            seed: int
-                Optional RNG seed for random SOC initialization.
-
-            reset_degradation: bool
-                If True, clear degradation accounting in StorageBlock.
+        Args:
+            **kwargs: Optional keyword arguments for StorageBlock.reset:
+                soc: Explicit SOC target (fraction in [0, 1])
+                random_init_soc: Sample SOC uniformly in [soc_min, soc_max]
+                seed: RNG seed for random SOC initialization
+                reset_degradation: Clear degradation accounting
         """
         # Extract optional overrides for StorageBlock.reset
         soc = kwargs.get("soc", None)
@@ -239,12 +231,12 @@ class ESS(DeviceAgent):
         seed = kwargs.get("seed", None)
         reset_degradation = kwargs.get("reset_degradation", True)
 
-        # 1) Reset all feature providers and the action to their neutral state
+        # Reset all feature providers and the action to their neutral state
         self.state.reset()
         self.action.reset()
 
-        # 2) If any SOC/degradation overrides are provided, explicitly re-reset
-        #    the StorageBlock with those options on top of the neutral reset.
+        # If any SOC/degradation overrides are provided, explicitly re-reset
+        # the StorageBlock with those options on top of the neutral reset
         if any(k in kwargs for k in ("soc", "random_init_soc", "seed", "reset_degradation")):
             self.storage.reset(
                 soc=soc,
@@ -253,31 +245,30 @@ class ESS(DeviceAgent):
                 reset_degradation=reset_degradation,
             )
 
-        # 3) Cost / safety bookkeeping
+        # Cost / safety bookkeeping
         self.cost = 0.0
         self.safety = 0.0
 
-    def update_state(self, *args, **kwargs) -> None:
-        """
-        Apply P/Q from the action, update SOC / degradation, and optionally
-        apply extra feature updates via keyword arguments.
+    def update_state(self, **kwargs) -> None:
+        """Apply P/Q from action, update SOC/degradation, apply extra updates.
 
-        Keyword arguments (optional) can target:
-            - ElectricalBasePh fields  (e.g. P_MW, Q_MVAr, Vm_pu, Va_rad)
-            - StorageBlock fields      (e.g. soc, e_throughput_MWh, ...)
-            - PowerLimits fields       (if PowerLimits is present in state)
+        Args:
+            **kwargs: Optional keyword arguments for feature updates:
+                - ElectricalBasePh fields (e.g. P_MW, Q_MVAr, Vm_pu, Va_rad)
+                - StorageBlock fields (e.g. soc, e_throughput_MWh)
+                - PowerLimits fields (if PowerLimits is present)
         """
         P_eff, Q_eff = self._update_power_outputs()
         self._update_storage_dynamics(P_eff)
-        self._update_by_kwargs(**kwargs)
 
-    def _update_power_outputs(self) -> tuple[float, float]:
-        """
-        Read action.c, optionally project (P, Q) through PowerLimits, and
-        write back to ElectricalBasePh.
+        if kwargs:
+            self._update_by_kwargs(**kwargs)
+
+    def _update_power_outputs(self) -> Tuple[float, float]:
+        """Read action.c, project through limits, update ElectricalBasePh.
 
         Returns:
-            (P_eff, Q_eff): the effective active/reactive power after limits.
+            Tuple of (P_eff, Q_eff): effective active/reactive power after limits
         """
         electrical = self.electrical
 
@@ -297,26 +288,24 @@ class ESS(DeviceAgent):
         if self.action.c.size >= 2:
             elec_updates["Q_MVAr"] = Q_eff
 
-        self.state.update_feature(ElectricalBasePh, **elec_updates)
+        self.state.update_feature(ElectricalBasePh.feature_name, **elec_updates)
         return P_eff, Q_eff
 
     def _update_storage_dynamics(self, P_MW: float) -> None:
-        """
-        Update SOC and degradation metrics in StorageBlock based on active power.
+        """Update SOC and degradation in StorageBlock based on active power.
 
-        P_MW > 0: charging
-        P_MW < 0: discharging
+        Args:
+            P_MW: Active power (positive=charging, negative=discharging)
         """
         storage = self.storage
         dt = self._storage_config.dt_h
 
-        # --- SOC update ---
-        # Normalize energy change by capacity (if capacity is zero, leave SOC untouched)
+        # SOC update: normalize energy change by capacity
         if P_MW >= 0.0:
-            # charging
+            # Charging
             delta_e = P_MW * storage.ch_eff * dt
         else:
-            # discharging
+            # Discharging
             delta_e = P_MW / max(storage.dsc_eff, 1e-9) * dt
 
         delta_soc = delta_e / storage.e_capacity_MWh
@@ -328,54 +317,44 @@ class ESS(DeviceAgent):
         storage.set_values(soc=new_soc)
 
     def _update_by_kwargs(self, **kwargs) -> None:
-        """
-        Route extra keyword updates to the appropriate FeatureProvider(s):
+        """Route keyword updates to appropriate FeatureProviders.
 
-            - ElectricalBasePh
-            - StorageBlock
-            - PowerLimits (if present in state)
+        Args:
+            **kwargs: Keyword arguments mapping to feature fields
         """
-        updates: Dict[type, Dict[str, Any]] = {}
-
         electrical_keys = {f.name for f in fields(ElectricalBasePh)}
         storage_keys = {f.name for f in fields(StorageBlock)}
         power_limits_keys = {f.name for f in fields(PowerLimits)}
 
-        for k, v in kwargs.items():
-            if k in electrical_keys:
-                updates.setdefault(ElectricalBasePh, {})[k] = v
-            elif k in storage_keys:
-                updates.setdefault(StorageBlock, {})[k] = v
-            elif k in power_limits_keys:
-                updates.setdefault(PowerLimits, {})[k] = v
+        elec_updates = {k: v for k, v in kwargs.items() if k in electrical_keys}
+        storage_updates = {k: v for k, v in kwargs.items() if k in storage_keys}
+        limits_updates = {k: v for k, v in kwargs.items() if k in power_limits_keys}
 
-        if updates:
-            self.state.update(updates)
+        if elec_updates:
+            self.state.update_feature(ElectricalBasePh.feature_name, **elec_updates)
+        if storage_updates:
+            self.state.update_feature(StorageBlock.feature_name, **storage_updates)
+        if limits_updates:
+            self.state.update_feature(PowerLimits.feature_name, **limits_updates)
+    
+    def update_cost_safety(self) -> None:
+        """Update per-step cost and safety penalties for the ESS.
 
-    def update_cost_safety(self, *args, **kwargs) -> None:
-        """
-        Update per-step cost and safety penalties for the ESS.
-
-        Cost components:
-            - Degradation cost from energy throughput and equivalent cycles.
-
-        Safety components:
-            - Apparent-power overload penalty (if s_rated_MVA is set).
-            - SOC bounds penalty based on (soc_min, soc_max).
+        Cost: Degradation from energy throughput and equivalent cycles
+        Safety: Apparent-power overload and SOC bounds violations
         """
         P = self.electrical.P_MW or 0.0
         Q = self.electrical.Q_MVAr or 0.0
         dt = self._storage_config.dt_h
-        # on = 1.0 if self.status.state == "online" else 0.0
 
         if P >= 0.0:
-            # charging
+            # Charging
             delta_e = P * self.storage.ch_eff * dt
         else:
-            # discharging
+            # Discharging
             delta_e = Q / max(self.storage.dsc_eff, 1e-9) * dt
 
-        # Cost
+        # Cost: degradation
         degr_cost_inc = 0.0
         e_throughput = self.storage.e_throughput_MWh + abs(delta_e)
         degr_cost_inc += self.storage.degr_cost_per_MWh * delta_e
@@ -387,13 +366,13 @@ class ESS(DeviceAgent):
         degr_cost_cum = self.storage.degr_cost_cum + degr_cost_inc
 
         self.storage.set_values(
-            e_throughput_MWh=e_throughput, 
+            e_throughput_MWh=e_throughput,
             degr_cost_cum=degr_cost_cum
         )
 
         self.cost = degr_cost_inc
 
-        # Safety
+        # Safety: SOC violations + power limit violations
         safety = self.storage.soc_violation()
         if self.limits is not None:
             violations = self.limits.feasible(P, Q)
@@ -401,16 +380,14 @@ class ESS(DeviceAgent):
 
         self.safety = safety
 
-    def feasible_action(self, P_req) -> float:
-        """
-        Clip the current action to the feasible set based on:
-        - SOC window [soc_min, soc_max]
-        - charge/discharge limits (p_min_MW, p_max_MW)
-        - reactive power bounds (q_min_MVAr, q_max_MVAr) if present.
+    def feasible_action(self, P_req: float) -> float:
+        """Clip action to feasible set based on SOC window and power limits.
 
-        Conventions:
-        P > 0 : charging
-        P < 0 : discharging
+        Args:
+            P_req: Requested active power (positive=charging, negative=discharging)
+
+        Returns:
+            Clipped active power respecting SOC and power constraints
         """
         storage = self.storage
         dt = self._storage_config.dt_h
@@ -432,7 +409,6 @@ class ESS(DeviceAgent):
         p_min = max(p_min_soc, self._storage_config.p_min_MW)
         p_max = min(p_max_soc, self._storage_config.p_max_MW)
 
-        # Final clipped active power
         return np.clip(P_req, p_min, p_max)
 
     @property

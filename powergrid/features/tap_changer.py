@@ -4,10 +4,9 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from powergrid.features.base import FeatureProvider
-from powergrid.utils.array_utils import _as_f32, _one_hot
+from powergrid.utils.array_utils import as_f32, one_hot
 from powergrid.utils.phase import PhaseModel, PhaseSpec
 from powergrid.utils.registry import provider
-from powergrid.utils.typing import Array
 
 
 @provider()
@@ -28,7 +27,7 @@ class TapChangerPh(FeatureProvider):
     tap_position: Optional[int] = None
 
     # per-phase positions (shape (nph,), int)
-    tap_pos_ph: Optional[Array] = None
+    tap_pos_ph: Optional[np.ndarray] = None
 
     def __post_init__(self):
         # model/spec checks (subset phases allowed)
@@ -45,7 +44,7 @@ class TapChangerPh(FeatureProvider):
         else:
             raise ValueError(f"Unsupported phase model: {self.phase_model}")
 
-        self._validate_inputs_()
+        self._validate_inputs()
         self.clamp_()  # keep invariants
 
     def _nsteps(self) -> int:
@@ -53,7 +52,7 @@ class TapChangerPh(FeatureProvider):
             return 0
         return int(self.tap_max - self.tap_min + 1)
 
-    def _validate_inputs_(self) -> None:
+    def _validate_inputs(self) -> None:
         # require a valid tap range
         if self.tap_min is None or self.tap_max is None:
             raise ValueError("Provide 'tap_min' and 'tap_max'.")
@@ -77,7 +76,7 @@ class TapChangerPh(FeatureProvider):
                     "THREE_PHASE requires 'tap_pos_ph' with shape (nph,)."
                 )
             n = self.phase_spec.nph()  # type: ignore
-            a = _as_f32(self.tap_pos_ph).ravel()
+            a = as_f32(self.tap_pos_ph).ravel()
             if a.shape != (n,):
                 raise ValueError(
                     f"'tap_pos_ph' must have shape ({n},), got {a.shape}."
@@ -92,7 +91,7 @@ class TapChangerPh(FeatureProvider):
             pos = int(self.tap_position) - int(self.tap_min)  # type: ignore
             pos = int(np.clip(pos, 0, nsteps - 1))
             if self.one_hot:
-                return _one_hot(pos, nsteps)
+                return one_hot(pos, nsteps)
             frac = pos / max(nsteps - 1, 1)
             return np.array([frac], np.float32)
 
@@ -103,7 +102,7 @@ class TapChangerPh(FeatureProvider):
         for p in np.asarray(self.tap_pos_ph, dtype=np.int32).ravel():
             pos = int(np.clip(int(p) - base, 0, nsteps - 1))
             if self.one_hot:
-                outs.append(_one_hot(pos, nsteps))
+                outs.append(one_hot(pos, nsteps))
             else:
                 frac = pos / max(nsteps - 1, 1)
                 outs.append(np.array([frac], np.float32))
@@ -207,3 +206,33 @@ class TapChangerPh(FeatureProvider):
             tap_position=d.get("tap_position"),
             tap_pos_ph=arr,
         )
+
+    def set_values(self, **kwargs) -> None:
+        """Update tap changer fields and re-validate.
+
+        Args:
+            **kwargs: Field names and values to update
+
+        Example:
+            tap_changer.set_values(tap_position=5)
+            tap_changer.set_values(tap_pos_ph=np.array([3, 4, 5]))
+        """
+        allowed_keys = {
+            "tap_position",
+            "tap_pos_ph",
+            "tap_min",
+            "tap_max",
+            "one_hot",
+        }
+
+        unknown = set(kwargs.keys()) - allowed_keys
+        if unknown:
+            raise AttributeError(
+                f"TapChangerPh.set_values got unknown fields: {sorted(unknown)}"
+            )
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        self._validate_inputs()
+        self.clamp_()

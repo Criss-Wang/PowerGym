@@ -7,7 +7,6 @@ with PowerGridAgent while maintaining identical environment logic and API.
 from abc import abstractmethod
 from typing import Any, Dict, List, Optional
 
-import gymnasium.utils.seeding as seeding
 import numpy as np
 import pandapower as pp
 from gymnasium.spaces import Box, Dict as SpaceDict, Discrete, MultiDiscrete
@@ -301,12 +300,19 @@ class NetworkedGridEnv(ParallelEnv):
                     # Get observation for this agent
                     obs = self.actionable_agents[name].observe()
                     # Compute and set actions on devices
-                    self.actionable_agents[name].act(obs, given_action=action)
+                    self.actionable_agents[name].act(obs, upstream_action=action)
         else:
-            for agent_id, action in action_n.items():
-                if agent_id in self.actionable_agents:
-                    self._send_actions_to_agent(agent_id, action)
-                    self.actionable_agents[agent_id].step_distributed()
+            # Distributed mode: run agent steps concurrently
+            import asyncio
+            async def run_distributed_steps():
+                tasks = []
+                for agent_id, action in action_n.items():
+                    if agent_id in self.actionable_agents:
+                        self._send_actions_to_agent(agent_id, action)
+                        tasks.append(self.actionable_agents[agent_id].step_distributed())
+                await asyncio.gather(*tasks)
+
+            asyncio.run(run_distributed_steps())
 
         # Update network states based on agent actions
         self._update_net()
@@ -375,16 +381,14 @@ class NetworkedGridEnv(ParallelEnv):
         """
         # Initialize RNG
         if seed is not None:
-            self.np_random, _ = seeding.np_random(seed)
-        elif not hasattr(self, 'np_random'):
-            self.np_random, _ = seeding.np_random(None)
+            np.random.seed(seed)
 
         # Reset episode step counter
         self._episode_step = 0
 
         # Reset all agents
         if self.train:
-            self._day = self.np_random.integers(self._total_days - 1)
+            self._day = np.random.randint(0, self._total_days - 1)
             self._t = self._day * self.max_episode_steps
             for agent in self.agent_dict.values():
                 agent.reset(seed=seed)

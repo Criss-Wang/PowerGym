@@ -141,7 +141,7 @@ class Agent(ABC):
         pass
 
     @abstractmethod
-    def act(self, observation: Observation, given_action=None) -> Action:
+    def act(self, observation: Observation, upstream_action=None) -> Action:
         """Compute action (may be overridden by protocol)."""
         pass
 

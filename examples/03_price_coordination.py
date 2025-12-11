@@ -35,8 +35,6 @@ import pandapower as pp
 
 from powergrid.agents.grid_agent import PowerGridAgent
 from powergrid.core.protocols import PriceSignalProtocol
-from powergrid.devices.generator import Generator
-from powergrid.devices.storage import ESS
 from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
 from powergrid.networks.ieee13 import IEEE13Bus
 
@@ -49,83 +47,80 @@ class PriceCoordinationEnv(NetworkedGridEnv):
         self.price_history = []
         super().__init__(env_config)
 
+    def _build_agents(self):
+        """Build grid agents - populated in _build_net."""
+        return {}
+
     def _build_net(self):
         """Build network with price-responsive devices."""
         net = IEEE13Bus("MG1")
-
-        # Create devices with different cost characteristics
-        # Generator 1: Low cost (will run at high prices)
-        gen1 = Generator(
-            agent_id="gen1_cheap",
-            device_config={
-                "name": "gen1_cheap",
-                "device_state_config": {
-                    "bus": "Bus 633",
-                    "p_max_MW": 2.5,
-                    "p_min_MW": 0.5,
-                    "q_max_MVAr": 1.2,
-                    "q_min_MVAr": -1.2,
-                    "s_rated_MVA": 3.0,
-                    "startup_time_hr": 0.5,
-                    "shutdown_time_hr": 0.5,
-                    "cost_curve_coefs": [0.01, 8.0, 0.0],  # Low marginal cost
-                },
-            },
-        )
-
-        # Generator 2: High cost (will run only at very high prices)
-        gen2 = Generator(
-            agent_id="gen2_expensive",
-            device_config={
-                "name": "gen2_expensive",
-                "device_state_config": {
-                    "bus": "Bus 645",
-                    "p_max_MW": 1.5,
-                    "p_min_MW": 0.3,
-                    "q_max_MVAr": 0.8,
-                    "q_min_MVAr": -0.8,
-                    "s_rated_MVA": 2.0,
-                    "startup_time_hr": 1.0,
-                    "shutdown_time_hr": 1.0,
-                    "cost_curve_coefs": [0.05, 15.0, 0.0],  # High marginal cost
-                },
-            },
-        )
-
-        # ESS: Charge at low prices, discharge at high prices
-        ess = ESS(
-            agent_id="ess1",
-            device_config={
-                "name": "ess1",
-                "device_state_config": {
-                    "bus": "Bus 634",
-                    "capacity_MWh": 6.0,
-                    "max_e_MWh": 5.5,
-                    "min_e_MWh": 0.5,
-                    "max_p_MW": 1.5,
-                    "min_p_MW": -1.5,
-                    "max_q_MVAr": 0.7,
-                    "min_q_MVAr": -0.7,
-                    "s_rated_MVA": 1.8,
-                    "init_soc": 0.5,
-                    "ch_eff": 0.95,
-                    "dsc_eff": 0.95,
-                },
-            },
-        )
 
         # Create GridAgent with price signal protocol
         # Initial price = $40/MWh (will vary during simulation)
         mg_agent = PowerGridAgent(
             net=net,
+            message_broker=self.message_broker,
+            upstream_id=self._name,  # Environment is the upstream in distributed mode
+            env_id=self._env_id,
             grid_config={
                 "name": "MG1",
                 "base_power": 1.0,
                 "load_scale": 1.0,
+                "devices": [
+                    # Generator 1: Low cost (will run at high prices)
+                    {
+                        "type": "Generator",
+                        "name": "gen1_cheap",
+                        "device_state_config": {
+                            "bus": "Bus 633",
+                            "p_max_MW": 2.5,
+                            "p_min_MW": 0.5,
+                            "q_max_MVAr": 1.2,
+                            "q_min_MVAr": -1.2,
+                            "s_rated_MVA": 3.0,
+                            "startup_time_hr": 0.5,
+                            "shutdown_time_hr": 0.5,
+                            "cost_curve_coefs": [0.01, 8.0, 0.0],  # Low marginal cost
+                        },
+                    },
+                    # Generator 2: High cost (will run only at very high prices)
+                    {
+                        "type": "Generator",
+                        "name": "gen2_expensive",
+                        "device_state_config": {
+                            "bus": "Bus 645",
+                            "p_max_MW": 1.5,
+                            "p_min_MW": 0.3,
+                            "q_max_MVAr": 0.8,
+                            "q_min_MVAr": -0.8,
+                            "s_rated_MVA": 2.0,
+                            "startup_time_hr": 1.0,
+                            "shutdown_time_hr": 1.0,
+                            "cost_curve_coefs": [0.05, 15.0, 0.0],  # High marginal cost
+                        },
+                    },
+                    # ESS: Charge at low prices, discharge at high prices
+                    {
+                        "type": "ESS",
+                        "name": "ess1",
+                        "device_state_config": {
+                            "bus": "Bus 634",
+                            "e_capacity_MWh": 6.0,
+                            "max_e_MWh": 5.5,
+                            "min_e_MWh": 0.5,
+                            "p_max_MW": 1.5,
+                            "p_min_MW": -1.5,
+                            "q_max_MVAr": 0.7,
+                            "q_min_MVAr": -0.7,
+                            "s_rated_MVA": 1.8,
+                            "init_soc": 0.5,
+                            "ch_eff": 0.95,
+                            "dsc_eff": 0.95,
+                        },
+                    },
+                ],
             },
-            devices=[gen1, gen2, ess],
             protocol=PriceSignalProtocol(initial_price=40.0),
-            centralized=True,  # Centralized action computation
         )
 
         # Create dataset with varying prices
@@ -135,10 +130,6 @@ class PriceCoordinationEnv(NetworkedGridEnv):
         # Set environment attributes
         self.data_size = len(dataset["load"])
         self._total_days = self.data_size // self.max_episode_steps
-
-        # Add devices to network
-        mg_agent.add_sgen([gen1, gen2])
-        mg_agent.add_storage([ess])
 
         # Store agents
         self.possible_agents = ["MG1"]

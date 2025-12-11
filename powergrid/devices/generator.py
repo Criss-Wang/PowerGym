@@ -292,9 +292,8 @@ class Generator(DeviceAgent):
         self.state.owner_id = self.agent_id
         self.state.owner_level = self.level
 
-    def reset_device(self, *args, **kwargs) -> None:
-        """Reset generator to a neutral operating point.
-        """
+    def reset_device(self) -> None:
+        """Reset generator to a neutral operating point."""
         self.state.reset()
         self.action.reset()
 
@@ -303,14 +302,22 @@ class Generator(DeviceAgent):
         self.safety = 0.0
         self._uc_cost_step = 0.0
 
-    def update_state(self, *args, **kwargs) -> None:
+    def update_state(self, **kwargs) -> None:
+        """Update generator state with optional kwargs for feature updates.
+
+        Args:
+            **kwargs: Optional keyword arguments to update specific feature fields
+        """
         self._update_uc_status()
         self._update_power_outputs()
-        self._update_by_kwargs(**kwargs)
 
-    def _update_uc_status(self, **kwargs) -> None:
+        # Apply any additional kwargs to respective features
+        if kwargs:
+            self._update_by_kwargs(**kwargs)
+
+    def _update_uc_status(self) -> None:
         """Advance UC lifecycle in StatusBlock using d[0] ∈ {off, on}.
-        When a transition completes, apply the corresponding UC cost for 
+        When a transition completes, apply the corresponding UC cost for
         this step.
         """
         self._uc_cost_step = 0.0
@@ -393,22 +400,15 @@ class Generator(DeviceAgent):
 
         # Apply updates to features
         status_updates: Dict[str, Any] = {
-            "state": state, 
+            "state": state,
             "t_in_state_s": t_in_state_s,
             "t_to_next_s": t_to_next_s,
             "progress_frac": progress_frac,
         }
 
-        # Allowed keys for StatusBlock
-        status_keys = {f.name for f in fields(StatusBlock)}
+        self.state.update_feature(StatusBlock.feature_name, **status_updates)
 
-        for k, v in kwargs.items():
-            if k in status_keys:
-                status_updates[k] = v
-    
-        self.state.update_feature(StatusBlock, **status_updates)
-
-    def _update_power_outputs(self, **kwargs) -> None:
+    def _update_power_outputs(self) -> None:
         """Apply continuous P/Q control from action.c, projected to limits.
         """
         electrical = self.electrical
@@ -423,34 +423,29 @@ class Generator(DeviceAgent):
         if self.action.c.size >= 2:
             elec_updates["Q_MVAr"] = Q_eff
 
-        # Allowed keys for ElectricalBasePh
-        electrical_keys = {f.name for f in fields(ElectricalBasePh)}
-
-        for k, v in kwargs.items():
-            if k in electrical_keys:
-                elec_updates[k] = v
-
-        self.state.update_feature(ElectricalBasePh, **elec_updates)
+        self.state.update_feature(ElectricalBasePh.feature_name, **elec_updates)
 
     def _update_by_kwargs(self, **kwargs) -> None:
-        updates = {
-            "ElectricalBasePh": {},
-            "StatusBlock": {},
-            "PowerLimits": {},
-        }
+        """Update features based on provided kwargs.
+
+        Args:
+            **kwargs: Keyword arguments mapping to feature fields
+        """
         electrical_keys = {f.name for f in fields(ElectricalBasePh)}
         status_keys = {f.name for f in fields(StatusBlock)}
         power_limits_keys = {f.name for f in fields(PowerLimits)}
-        for k, v in kwargs.items():
-            if k in electrical_keys:
-                updates["ElectricalBasePh"] = v
-            elif k in status_keys:
-                updates["status_keys"] = v
-            elif k in power_limits_keys:
-                updates["PowerLimits"] = v
-        self.state.update(updates)
 
-    def update_cost_safety(self, *args, **kwargs) -> None:
+        elec_updates = {k: v for k, v in kwargs.items() if k in electrical_keys}
+        status_updates = {k: v for k, v in kwargs.items() if k in status_keys}
+        limits_updates = {k: v for k, v in kwargs.items() if k in power_limits_keys}
+
+        if elec_updates:
+            self.state.update_feature(ElectricalBasePh.feature_name, **elec_updates)
+        if status_updates:
+            self.state.update_feature(StatusBlock.feature_name, **status_updates)
+        if limits_updates:
+            self.state.update_feature(PowerLimits.feature_name, **limits_updates)
+    def update_cost_safety(self) -> None:
         """Economic cost + S/PF penalties + UC start/stop cost."""
         P = self.electrical.P_MW or 0.0
         Q = self.electrical.Q_MVAr or 0.0

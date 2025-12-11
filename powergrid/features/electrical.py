@@ -6,8 +6,7 @@ import numpy as np
 from powergrid.utils.phase import PhaseModel, PhaseSpec, check_phase_model_consistency
 from powergrid.features.base import FeatureProvider
 from powergrid.utils.registry import provider
-from powergrid.utils.array_utils import _cat_f32
-from powergrid.utils.typing import Array
+from powergrid.utils.array_utils import cat_f32
 
 
 @provider()
@@ -35,10 +34,10 @@ class ElectricalBasePh(FeatureProvider):
     Va_rad: Optional[float] = None
 
     # Three-phase arrays
-    P_MW_ph: Optional[Array] = None
-    Q_MVAr_ph: Optional[Array] = None
-    Vm_pu_ph: Optional[Array] = None
-    Va_rad_ph: Optional[Array] = None
+    P_MW_ph: Optional[np.ndarray] = None
+    Q_MVAr_ph: Optional[np.ndarray] = None
+    Vm_pu_ph: Optional[np.ndarray] = None
+    Va_rad_ph: Optional[np.ndarray] = None
 
     # Neutral telemetry (needs has_neutral=True)
     I_neutral_A: Optional[float] = None
@@ -50,14 +49,14 @@ class ElectricalBasePh(FeatureProvider):
 
     def __post_init__(self):
         check_phase_model_consistency(self.phase_model, self.phase_spec)
-        self._validate_inputs_()
+        self._validate_inputs()
         self._ensure_shapes_()
 
     # ------------------------------------------------------------
     # Validation / shapes
     # ------------------------------------------------------------
 
-    def _validate_inputs_(self) -> None:
+    def _validate_inputs(self) -> None:
         if self.phase_model == PhaseModel.BALANCED_1PH:
             # 1) Forbid any per-phase arrays
             bad = []
@@ -133,7 +132,7 @@ class ElectricalBasePh(FeatureProvider):
                         f"got shape {arr.shape}"
                     )
                 setattr(self, name, float(arr.item()))
-            # Per-phase arrays are already forbidden in _validate_inputs_
+            # Per-phase arrays are already forbidden in _validate_inputs
             return
 
         # THREE_PHASE
@@ -244,7 +243,7 @@ class ElectricalBasePh(FeatureProvider):
         This will:
             - assign the given attributes
             - check phase_model/phase_spec consistency
-            - run _validate_inputs_() and _ensure_shapes_()
+            - run _validate_inputs() and _ensure_shapes_()
         """
         # Allowed public fields that describe the electrical state
         allowed_keys = {
@@ -274,29 +273,26 @@ class ElectricalBasePh(FeatureProvider):
 
         # Re-check consistency and normalize
         check_phase_model_consistency(self.phase_model, self.phase_spec)
-        self._validate_inputs_()
+        self._validate_inputs()
         self._ensure_shapes_()
 
-    def as_vector(self) -> Array:
+    def vector(self) -> np.ndarray:
         parts = []
         # BALANCED_1PH
         if self.phase_model == PhaseModel.BALANCED_1PH:
             for v in (self.P_MW, self.Q_MVAr, self.Vm_pu, self.Va_rad):
                 if v is not None:
                     parts.append(np.array([v], np.float32))
-            return _cat_f32(parts)
+            return cat_f32(parts)
 
         # THREE_PHASE
         if self.phase_model == PhaseModel.THREE_PHASE:
             for arr in (self.P_MW_ph, self.Q_MVAr_ph, self.Vm_pu_ph, self.Va_rad_ph):
                 if arr is not None:
                     parts.append(arr.ravel())
-            return _cat_f32(parts)
+            return cat_f32(parts)
 
         raise ValueError(f"Unsupported phase model: {self.phase_model}")
-
-    def vector(self) -> Array:  # pragma: no cover
-        return self.as_vector()
 
     def names(self) -> List[str]:
         out = []

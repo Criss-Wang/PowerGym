@@ -344,7 +344,7 @@ sequenceDiagram
         Note over Env,DevAgent: 1. Set Actions & Update States
 
         loop For each GridAgent
-            Env->>GridAgent: act(obs, given_action=action)
+            Env->>GridAgent: act(obs, upstream_action=action)
             GridAgent->>GridAgent: protocol.coordinate_action()
 
             loop For each DeviceAgent
@@ -395,7 +395,7 @@ flowchart TD
     subgraph "1. Action Distribution & State Update"
         A1[Parse action_dict by agent_id]
         A2{Protocol.no_op?}
-        A3[For each GridAgent:<br/>agent.act given_action]
+        A3[For each GridAgent:<br/>agent.act upstream_action]
         A4[Protocol.coordinate_actions<br/>agents, actions, net, t]
         A5[GridAgent.protocol.coordinate_action<br/>Distribute to DeviceAgents]
         A6[For each DeviceAgent:<br/>update_state]
@@ -769,7 +769,7 @@ grid = GridAgent(
 
 # Protocol broadcasts price to all devices
 obs = grid.observe(global_state)
-action = grid.act(obs, given_action=parent_action)
+action = grid.act(obs, upstream_action=parent_action)
 # → protocol.coordinate_message() sends price to devices
 ```
 

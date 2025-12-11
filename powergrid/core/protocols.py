@@ -12,9 +12,18 @@ import numpy as np
 
 from powergrid.agents.base import Agent, AgentID, Observation, Message
 
+class CommunicationProtocol(ABC):
+    """Base class for communication protocols."""
+
+    def __init__(self):
+        self.neighbors = []
 
 class Protocol(ABC):
     """Base class for all coordination protocols."""
+
+    def __init__(self):
+        self.communication_protocol = CommunicationProtocol()
+        self.action_protocol = None
 
     def no_op(self) -> bool:
         """Check if this is a no-operation protocol.
@@ -299,7 +308,7 @@ class SetpointProtocol(VerticalProtocol):
                 if device_id in devices:
                     devices[device_id].act(
                         devices[device_id].observation,
-                        given_action=setpoint
+                        upstream_action=setpoint
                     )
         else:
             # Action is a numpy array - split among devices
@@ -310,7 +319,7 @@ class SetpointProtocol(VerticalProtocol):
                 # Get device action size
                 action_size = device.action.dim_c + device.action.dim_d
                 device_action = action[offset:offset + action_size]
-                device.act(device.observation, given_action=device_action)
+                device.act(device.observation, upstream_action=device_action)
                 offset += action_size
 
     def coordinate_message(
@@ -410,8 +419,11 @@ class CentralizedSetpointProtocol(VerticalProtocol):
             # Get device action size
             action_size = device.action.dim_c + device.action.dim_d
             device_action = action[offset:offset + action_size]
-            # Set action directly via _set_device_action (bypass observation requirement)
-            device._set_device_action(device_action)
+            # Set action directly on the action object
+            if device.action.dim_c > 0:
+                device.action.c = device_action[:device.action.dim_c]
+            if device.action.dim_d > 0:
+                device.action.d = device_action[device.action.dim_c:].astype(np.int32)
             offset += action_size
 
 

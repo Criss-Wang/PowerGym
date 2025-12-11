@@ -6,7 +6,6 @@ import numpy as np
 from powergrid.features.base import FeatureProvider
 from powergrid.utils.phase import PhaseModel, PhaseSpec
 from powergrid.utils.registry import provider
-from powergrid.utils.typing import Array, CtrlMode
 
 
 @provider()
@@ -21,7 +20,7 @@ class InverterBasedSource(FeatureProvider):
     # Phase context
     phase_model: PhaseModel = PhaseModel.THREE_PHASE
     phase_spec: Optional[PhaseSpec] = field(default_factory=PhaseSpec)
-    alloc_frac_ph: Optional[Array] = None
+    alloc_frac_ph: Optional[np.ndarray] = None
 
     # Ratings / limits
     s_rated_MVA: Optional[float] = None
@@ -353,3 +352,29 @@ class InverterBasedSource(FeatureProvider):
             expand_phases=d.get("expand_phases", False),
             include_derived=d.get("include_derived", True),
         )
+
+    def set_values(self, **kwargs) -> None:
+        """Update inverter fields and re-validate.
+
+        Args:
+            **kwargs: Field names and values to update
+        """
+        allowed_keys = {
+            "alloc_frac_ph", "s_rated_MVA", "q_min_MVAr", "q_max_MVAr",
+            "p_avail_MW", "p_set_MW", "p_MW", "q_MVAr", "ctrl_mode",
+            "q_set_MVAr", "pf_target", "pf_leading", "vv_v1_pu", "vv_v2_pu",
+            "vv_q1_MVAr", "vv_q2_MVAr", "expand_phases", "include_derived",
+        }
+
+        unknown = set(kwargs.keys()) - allowed_keys
+        if unknown:
+            raise AttributeError(
+                f"InverterBasedSource.set_values got unknown fields: {sorted(unknown)}"
+            )
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        self._infer_ctrl_mode_()
+        self._validate_()
+        self.clamp_()

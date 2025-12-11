@@ -10,9 +10,8 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from powergrid.features.base import FeatureProvider
-from powergrid.utils.array_utils import _as_f32, _cat_f32
+from powergrid.utils.array_utils import as_f32, cat_f32
 from powergrid.utils.registry import provider
-from powergrid.utils.typing import Array
 
 
 @provider()
@@ -23,15 +22,15 @@ class BusVoltages(FeatureProvider):
     Captures voltage state at all buses, which is essential for
     monitoring system stability and voltage regulation.
     """
-    vm_pu: Optional[Array] = None  # Voltage magnitudes (p.u.)
-    va_deg: Optional[Array] = None  # Voltage angles (degrees)
+    vm_pu: Optional[np.ndarray] = None  # Voltage magnitudes (p.u.)
+    va_deg: Optional[np.ndarray] = None  # Voltage angles (degrees)
     bus_names: List[str] = field(default_factory=list)
 
     def __post_init__(self):
         if self.vm_pu is not None:
-            self.vm_pu = _as_f32(self.vm_pu).ravel()
+            self.vm_pu = as_f32(self.vm_pu).ravel()
         if self.va_deg is not None:
-            self.va_deg = _as_f32(self.va_deg).ravel()
+            self.va_deg = as_f32(self.va_deg).ravel()
 
         # Validate consistency
         sizes = []
@@ -45,13 +44,13 @@ class BusVoltages(FeatureProvider):
         if sizes and len(set(sizes)) > 1:
             raise ValueError(f"Inconsistent bus voltage array sizes: {sizes}")
 
-    def vector(self) -> Array:
-        parts: List[Array] = []
+    def vector(self) -> np.ndarray:
+        parts: List[np.ndarray] = []
         if self.vm_pu is not None:
             parts.append(self.vm_pu)
         if self.va_deg is not None:
             parts.append(self.va_deg)
-        return _cat_f32(parts)
+        return cat_f32(parts)
 
     def names(self) -> List[str]:
         out: List[str] = []
@@ -88,10 +87,30 @@ class BusVoltages(FeatureProvider):
     @classmethod
     def from_dict(cls, d: Dict) -> "BusVoltages":
         return cls(
-            vm_pu=_as_f32(d["vm_pu"]) if d.get("vm_pu") is not None else None,
-            va_deg=_as_f32(d["va_deg"]) if d.get("va_deg") is not None else None,
+            vm_pu=as_f32(d["vm_pu"]) if d.get("vm_pu") is not None else None,
+            va_deg=as_f32(d["va_deg"]) if d.get("va_deg") is not None else None,
             bus_names=d.get("bus_names", []),
         )
+
+    def set_values(self, **kwargs) -> None:
+        """Update bus voltage fields.
+
+        Args:
+            **kwargs: Field names and values to update
+        """
+        allowed_keys = {"vm_pu", "va_deg", "bus_names"}
+
+        unknown = set(kwargs.keys()) - allowed_keys
+        if unknown:
+            raise AttributeError(
+                f"BusVoltages.set_values got unknown fields: {sorted(unknown)}"
+            )
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        self.__post_init__()
+        self.clamp_()
 
 
 @provider()
@@ -102,18 +121,18 @@ class LineFlows(FeatureProvider):
     Monitors line utilization and power transfer, critical for
     identifying congestion and ensuring thermal limits.
     """
-    p_from_mw: Optional[Array] = None  # Active power from "from" bus (MW)
-    q_from_mvar: Optional[Array] = None  # Reactive power from "from" bus (MVAr)
-    loading_percent: Optional[Array] = None  # Line loading (%)
+    p_from_mw: Optional[np.ndarray] = None  # Active power from "from" bus (MW)
+    q_from_mvar: Optional[np.ndarray] = None  # Reactive power from "from" bus (MVAr)
+    loading_percent: Optional[np.ndarray] = None  # Line loading (%)
     line_names: List[str] = field(default_factory=list)
 
     def __post_init__(self):
         if self.p_from_mw is not None:
-            self.p_from_mw = _as_f32(self.p_from_mw).ravel()
+            self.p_from_mw = as_f32(self.p_from_mw).ravel()
         if self.q_from_mvar is not None:
-            self.q_from_mvar = _as_f32(self.q_from_mvar).ravel()
+            self.q_from_mvar = as_f32(self.q_from_mvar).ravel()
         if self.loading_percent is not None:
-            self.loading_percent = _as_f32(self.loading_percent).ravel()
+            self.loading_percent = as_f32(self.loading_percent).ravel()
 
         # Validate consistency
         sizes = []
@@ -129,15 +148,15 @@ class LineFlows(FeatureProvider):
         if sizes and len(set(sizes)) > 1:
             raise ValueError(f"Inconsistent line flow array sizes: {sizes}")
 
-    def vector(self) -> Array:
-        parts: List[Array] = []
+    def vector(self) -> np.ndarray:
+        parts: List[np.ndarray] = []
         if self.p_from_mw is not None:
             parts.append(self.p_from_mw)
         if self.q_from_mvar is not None:
             parts.append(self.q_from_mvar)
         if self.loading_percent is not None:
             parts.append(self.loading_percent)
-        return _cat_f32(parts)
+        return cat_f32(parts)
 
     def names(self) -> List[str]:
         out: List[str] = []
@@ -182,11 +201,31 @@ class LineFlows(FeatureProvider):
     @classmethod
     def from_dict(cls, d: Dict) -> "LineFlows":
         return cls(
-            p_from_mw=_as_f32(d["p_from_mw"]) if d.get("p_from_mw") is not None else None,
-            q_from_mvar=_as_f32(d["q_from_mvar"]) if d.get("q_from_mvar") is not None else None,
-            loading_percent=_as_f32(d["loading_percent"]) if d.get("loading_percent") is not None else None,
+            p_from_mw=as_f32(d["p_from_mw"]) if d.get("p_from_mw") is not None else None,
+            q_from_mvar=as_f32(d["q_from_mvar"]) if d.get("q_from_mvar") is not None else None,
+            loading_percent=as_f32(d["loading_percent"]) if d.get("loading_percent") is not None else None,
             line_names=d.get("line_names", []),
         )
+
+    def set_values(self, **kwargs) -> None:
+        """Update line flow fields.
+
+        Args:
+            **kwargs: Field names and values to update
+        """
+        allowed_keys = {"p_from_mw", "q_from_mvar", "loading_percent", "line_names"}
+
+        unknown = set(kwargs.keys()) - allowed_keys
+        if unknown:
+            raise AttributeError(
+                f"LineFlows.set_values got unknown fields: {sorted(unknown)}"
+            )
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        self.__post_init__()
+        self.clamp_()
 
 
 @provider()
@@ -203,7 +242,7 @@ class NetworkMetrics(FeatureProvider):
     total_gen_mvar: float = 0.0
     total_load_mvar: float = 0.0
 
-    def vector(self) -> Array:
+    def vector(self) -> np.ndarray:
         return np.array([
             self.total_gen_mw,
             self.total_load_mw,
@@ -232,3 +271,28 @@ class NetworkMetrics(FeatureProvider):
     @classmethod
     def from_dict(cls, d: Dict) -> "NetworkMetrics":
         return cls(**d)
+
+    def set_values(self, **kwargs) -> None:
+        """Update network metrics fields.
+
+        Args:
+            **kwargs: Field names and values to update
+        """
+        allowed_keys = {
+            "total_gen_mw",
+            "total_load_mw",
+            "total_loss_mw",
+            "total_gen_mvar",
+            "total_load_mvar",
+        }
+
+        unknown = set(kwargs.keys()) - allowed_keys
+        if unknown:
+            raise AttributeError(
+                f"NetworkMetrics.set_values got unknown fields: {sorted(unknown)}"
+            )
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        self.clamp_()

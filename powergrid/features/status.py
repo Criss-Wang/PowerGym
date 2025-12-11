@@ -5,8 +5,7 @@ import numpy as np
 
 from powergrid.features.base import FeatureProvider
 from powergrid.utils.registry import provider
-from powergrid.utils.typing import Array
-from powergrid.utils.array_utils import _cat_f32
+from powergrid.utils.array_utils import cat_f32
 
 
 @provider()
@@ -190,7 +189,7 @@ class StatusBlock(FeatureProvider):
         return self._vocab_index[self.state]
 
     @staticmethod
-    def _one_hot(idx: int, n: int) -> np.ndarray:
+    def one_hot(idx: int, n: int) -> np.ndarray:
         out = np.zeros(n, np.float32)
         if 0 <= idx < n:
             out[idx] = 1.0
@@ -295,7 +294,7 @@ class StatusBlock(FeatureProvider):
         self._prime_schema_()
         self.clip_()
 
-    def as_vector(self) -> Array:
+    def vector(self) -> np.ndarray:
         """
         Return a flat numeric representation of the status block.
         """
@@ -327,7 +326,7 @@ class StatusBlock(FeatureProvider):
                 (self.lock_schema and self._export_state_oh)
                 or (not self.lock_schema and self.emit_state_one_hot)
             ):
-                add(self._one_hot(idx, len(self.states_vocab)))
+                add(self.one_hot(idx, len(self.states_vocab)))
 
             if (
                 (self.lock_schema and self._export_state_idx)
@@ -357,14 +356,11 @@ class StatusBlock(FeatureProvider):
         if self._should_export(self.progress_frac, self._export_prog):
             add(0.0 if self.progress_frac is None else self.progress_frac)
 
-        return _cat_f32(parts)
-
-    def vector(self) -> Array:  # pragma: no cover
-        return self.as_vector()
+        return cat_f32(parts)
 
     def names(self) -> List[str]:
         """
-        Return names aligned with as_vector().
+        Return names aligned with vector().
         """
         out: List[str] = []
 

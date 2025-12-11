@@ -30,8 +30,8 @@ from powergrid.agents.device_agent import DeviceAgent
 from powergrid.agents.grid_agent import PowerGridAgent
 from powergrid.core.policies import Policy
 from powergrid.core.protocols import CentralizedSetpointProtocol, NoProtocol, Protocol
-from powergrid.core.state import DeviceState, PhaseModel
-from powergrid.devices.storage import ESS
+from powergrid.core.state import DeviceState
+from powergrid.utils.phase import PhaseModel
 from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
 from powergrid.features.electrical import ElectricalBasePh
 from powergrid.features.connection import PhaseConnection
@@ -109,6 +109,12 @@ class SolarPanelFeature(FeatureProvider):
         """Deserialize from dictionary."""
         return cls(**d["payload"])
 
+    def set_values(self, **kwargs) -> None:
+        """Update feature values from keyword arguments."""
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+
 
 # ============================================================================
 # Step 2: Implement Custom Device
@@ -148,6 +154,9 @@ class SolarPanel(DeviceAgent):
         agent_id: Optional[str] = None,
         policy: Optional[Policy] = None,
         protocol: Protocol = NoProtocol(),
+        message_broker: Optional[Any] = None,
+        upstream_id: Optional[str] = None,
+        env_id: Optional[str] = None,
         device_config: Dict[str, Any],
     ):
         """Initialize solar panel device."""
@@ -174,10 +183,30 @@ class SolarPanel(DeviceAgent):
             agent_id=agent_id,
             policy=policy,
             protocol=protocol,
+            message_broker=message_broker,
+            upstream_id=upstream_id,
+            env_id=env_id,
             device_config=device_config,
         )
 
-    def set_action_space(self) -> None:
+    @property
+    def bus(self) -> str:
+        """Return bus connection for pandapower integration."""
+        return self._solar_config.bus
+
+    @property
+    def limits(self):
+        """Return power limits (needed for grid agent integration)."""
+        class Limits:
+            def __init__(self, config):
+                self.s_rated_MVA = config.s_rated_mva
+                self.p_max_MW = config.max_power_kw / 1000.0  # Convert kW to MW
+                self.p_min_MW = 0.0
+                self.q_max_MVAr = config.max_q_mvar
+                self.q_min_MVAr = config.min_q_mvar
+        return Limits(self._solar_config)
+
+    def set_device_action(self) -> None:
         """Define action space: [curtailment, Q]."""
         self.action.set_specs(
             dim_c=2,
@@ -211,14 +240,20 @@ class SolarPanel(DeviceAgent):
 
         # Aggregate into DeviceState
         self.state = DeviceState(
-            phase_model=PhaseModel.BALANCED_1PH,
+            owner_id=self.agent_id,
+            owner_level=1,  # DEVICE_LEVEL
             features=[electrical, connection, solar_feature],
-            prefix_names=False,
         )
 
         # Store references for easy access
         self.electrical = electrical
         self.solar = solar_feature
+
+        # Add a simple status object for compatibility with GridAgent
+        class SimpleStatus:
+            def __init__(self):
+                self.in_service = True
+        self.status = SimpleStatus()
 
     def set_environmental_data(self, irradiance_data: np.ndarray, temperature_data: np.ndarray):
         """Set time-series environmental data (called externally)."""
@@ -271,7 +306,13 @@ class SolarPanel(DeviceAgent):
         actual_power_mw *= temp_derate
 
         # Update electrical state
-        self.electrical.P_MW = actual_power_mw
+        # Ensure values are valid (not NaN or inf)
+        if np.isnan(actual_power_mw) or np.isinf(actual_power_mw):
+            actual_power_mw = 0.0
+        if np.isnan(q_setpoint) or np.isinf(q_setpoint):
+            q_setpoint = 0.0
+
+        self.electrical.P_MW = max(0.0, actual_power_mw)
         self.electrical.Q_MVAr = q_setpoint
 
         # Track energy
@@ -282,7 +323,7 @@ class SolarPanel(DeviceAgent):
         self.solar.curtailed_energy_kwh += curtailed_mwh * 1000.0
 
         # Clamp features
-        self.state.clamp_()
+        self.solar.clamp_()
 
     def update_cost_safety(self) -> None:
         """Compute cost and safety metrics."""
@@ -307,61 +348,75 @@ class SolarPanel(DeviceAgent):
 class CustomDeviceEnv(NetworkedGridEnv):
     """Environment demonstrating custom solar panel device."""
 
+    def _build_agents(self):
+        """Build grid agents - populated in _build_net."""
+        return {}
+
     def _build_net(self):
         """Build network with custom solar panel."""
         net = IEEE13Bus("MG1")
 
-        # Create solar panel with our custom class
+        # For custom devices, we need to use config-based approach
+        # But we'll use a workaround: build devices first, then attach to agent
+        grid_config = {
+            "name": "MG1",
+            "base_power": 1.0,
+            "load_scale": 1.0,
+            "devices": [
+                {
+                    "type": "ESS",
+                    "name": "ess1",
+                    "device_state_config": {
+                        "bus": "Bus 634",
+                        "e_capacity_MWh": 2.0,  # 2 MWh capacity
+                        "soc_min": 0.1,
+                        "soc_max": 0.9,
+                        "p_max_MW": 0.8,  # 800 kW max discharge
+                        "p_min_MW": -0.8,  # 800 kW max charge
+                        "q_max_MVAr": 0.3,
+                        "q_min_MVAr": -0.3,
+                        "s_rated_MVA": 1.0,
+                        "init_soc": 0.5,
+                        "ch_eff": 0.95,
+                        "dsc_eff": 0.95,
+                    },
+                },
+            ],
+        }
+
+        # Create GridAgent with standard devices
+        mg_agent = PowerGridAgent(
+            net=net,
+            message_broker=self.message_broker,
+            upstream_id=self._name,  # Environment is the upstream in distributed mode
+            env_id=self._env_id,
+            grid_config=grid_config,
+            protocol=CentralizedSetpointProtocol(),
+        )
+
+        # Now manually add our custom solar panel device
         solar = SolarPanel(
             agent_id="solar1",
+            message_broker=self.message_broker,
+            upstream_id="MG1",  # GridAgent is the upstream
+            env_id=self._env_id,
             device_config={
                 "name": "solar1",
                 "device_state_config": {
                     "bus": "Bus 645",
-                    "panel_area_m2": 150.0,  # 150 m² of panels
-                    "efficiency": 0.22,  # 22% efficient
-                    "max_power_kw": 33.0,  # 33 kW rated
-                    "min_q_mvar": -10.0,
-                    "max_q_mvar": 10.0,
-                    "s_rated_mva": 0.04,  # 40 kVA
+                    "panel_area_m2": 2500.0,  # 2500 m² of panels (large rooftop array)
+                    "efficiency": 0.20,  # 20% efficient
+                    "max_power_kw": 500.0,  # 500 kW rated
+                    "min_q_mvar": -150.0,
+                    "max_q_mvar": 150.0,
+                    "s_rated_mva": 0.6,  # 600 kVA
                 },
             },
         )
 
-        # Create ESS for energy management
-        ess = ESS(
-            agent_id="ess1",
-            device_config={
-                "name": "ess1",
-                "device_state_config": {
-                    "bus": "Bus 634",
-                    "capacity_MWh": 40.0,
-                    "max_e_MWh": 36.0,
-                    "min_e_MWh": 4.0,
-                    "max_p_MW": 10.0,
-                    "min_p_MW": -10.0,
-                    "max_q_MVAr": 5.0,
-                    "min_q_MVAr": -5.0,
-                    "s_rated_MVA": 12.0,
-                    "init_soc": 0.5,
-                    "ch_eff": 0.95,
-                    "dsc_eff": 0.95,
-                },
-            },
-        )
-
-        # Create GridAgent
-        mg_agent = PowerGridAgent(
-            net=net,
-            grid_config={
-                "name": "MG1",
-                "base_power": 1.0,
-                "load_scale": 1.0,
-            },
-            devices=[solar, ess],
-            protocol=CentralizedSetpointProtocol(),
-            centralized=True,
-        )
+        # Manually add solar panel to devices dict
+        mg_agent.devices["solar1"] = solar
+        mg_agent._add_sgen([solar])
 
         # Create dataset
         dataset = self._create_solar_dataset()
@@ -376,10 +431,6 @@ class CustomDeviceEnv(NetworkedGridEnv):
         # Set environment attributes
         self.data_size = len(dataset["load"])
         self._total_days = self.data_size // self.max_episode_steps
-
-        # Add devices to network
-        mg_agent.add_sgen([solar])
-        mg_agent.add_storage([ess])
 
         # Store
         self.possible_agents = ["MG1"]
@@ -405,7 +456,7 @@ class CustomDeviceEnv(NetworkedGridEnv):
         irrad_pattern = np.array([0, 0, 0, 0, 0, 50,          # Night + dawn
                                   200, 400, 650, 850, 950, 1000,  # Morning ramp
                                   1000, 950, 850, 650, 400, 200,  # Afternoon decline
-                                  50, 0, 0, 0, 0, 0])             # Sunset + night
+                                  50, 0, 0, 0, 0, 0], dtype=np.float64)             # Sunset + night
         irradiance = np.tile(irrad_pattern, days)
         irradiance += np.random.normal(0, 50, hours)  # Cloud variability
         irradiance = np.clip(irradiance, 0, 1200)
@@ -414,7 +465,7 @@ class CustomDeviceEnv(NetworkedGridEnv):
         temp_pattern = np.array([15, 14, 13, 13, 14, 16,
                                  20, 25, 30, 35, 38, 40,
                                  40, 38, 35, 32, 28, 24,
-                                 20, 18, 17, 16, 15, 15])
+                                 20, 18, 17, 16, 15, 15], dtype=np.float64)
         temperature = np.tile(temp_pattern, days)
         temperature += np.random.normal(0, 2, hours)
         temperature = np.clip(temperature, 10, 45)
@@ -455,9 +506,12 @@ def main():
     print("=" * 70)
 
     # Create environment
+    # Note: Set "centralized": True for synchronous execution (faster, easier debugging)
+    #       Set "centralized": False for distributed execution (realistic, message-based)
     env_config = {
         "max_episode_steps": 24,
         "train": True,
+        "centralized": True,  # Toggle between centralized (True) and distributed (False) modes
     }
 
     print("\n[1] Creating environment with custom SolarPanel device...")

@@ -5,8 +5,7 @@ import numpy as np
 
 from powergrid.features.base import FeatureProvider
 from powergrid.utils.registry import provider
-from powergrid.utils.array_utils import _cat_f32
-from powergrid.utils.typing import Array
+from powergrid.utils.array_utils import cat_f32
 
 
 @provider()
@@ -101,14 +100,14 @@ class StorageBlock(FeatureProvider):
     # ------------------------------------------------------------
 
     def __post_init__(self) -> None:
-        self._validate_inputs_()
+        self._validate_inputs()
         self.clip_()
 
     # ------------------------------------------------------------
     # Validation / clamp
     # ------------------------------------------------------------
 
-    def _validate_inputs_(self) -> None:
+    def _validate_inputs(self) -> None:
         # SOC bounds
         for v, nm in (
             (self.soc_min, "soc_min"),
@@ -286,7 +285,7 @@ class StorageBlock(FeatureProvider):
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-        self._validate_inputs_()
+        self._validate_inputs()
         self.clip_()
 
     # ------------------------------------------------------------
@@ -349,7 +348,7 @@ class StorageBlock(FeatureProvider):
     # Vectorization
     # ------------------------------------------------------------
 
-    def as_vector(self) -> Array:
+    def vector(self) -> np.ndarray:
         """
         Flatten to a numeric feature vector.
 
@@ -382,14 +381,11 @@ class StorageBlock(FeatureProvider):
         # add(self.degr_cost_per_cycle)
         # add(self.degr_cost_cum)
 
-        return _cat_f32(parts)
-
-    def vector(self) -> Array:  # pragma: no cover
-        return self.as_vector()
+        return cat_f32(parts)
 
     def names(self) -> List[str]:
         """
-        Return feature names aligned with as_vector().
+        Return feature names aligned with vector().
         """
         out: List[str] = []
 

@@ -5,9 +5,8 @@ import numpy as np
 
 from powergrid.features.base import FeatureProvider
 from powergrid.utils.phase import PhaseModel, PhaseSpec
-from powergrid.utils.array_utils import _cat_f32
+from powergrid.utils.array_utils import cat_f32
 from powergrid.utils.registry import provider
-from powergrid.utils.typing import Array
 
 
 @provider()
@@ -151,10 +150,10 @@ class PowerLimits(FeatureProvider):
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-        self._validate_()
+        self._validate()
         self.clip_()
 
-    def as_vector(self) -> Array:
+    def vector(self) -> np.ndarray:
         """
         Return a flat numeric representation of the limits.
         """
@@ -181,14 +180,11 @@ class PowerLimits(FeatureProvider):
         # PF constraint
         add(self.pf_min_abs)
 
-        return _cat_f32(parts)
-
-    def vector(self) -> Array:
-        return self.as_vector()
+        return cat_f32(parts)
 
     def names(self) -> List[str]:
         """
-        Return feature names aligned with as_vector().
+        Return feature names aligned with vector().
         """
         out: List[str] = []
 

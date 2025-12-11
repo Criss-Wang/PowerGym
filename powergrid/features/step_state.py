@@ -5,9 +5,8 @@ from typing import List, Optional
 
 import numpy as np
 
-from powergrid.utils.typing import Array
 from powergrid.features.base import FeatureProvider
-from powergrid.core.state import PhaseModel, PhaseSpec
+from powergrid.utils.phase import PhaseModel, PhaseSpec
 from powergrid.utils.registry import provider
 
 @provider()
@@ -15,9 +14,9 @@ from powergrid.utils.registry import provider
 class StepState(FeatureProvider):
     """Provider for discrete step state (e.g., shunt capacitor banks)."""
     max_step: int = 0
-    step: Optional[Array] = None  # One-hot encoded current step
+    step: Optional[np.ndarray] = None  # One-hot encoded current step
 
-    def vector(self) -> Array:
+    def vector(self) -> np.ndarray:
         if self.step is not None:
             return self.step.astype(np.float32, copy=False)
         return np.zeros(self.max_step + 1, dtype=np.float32)
@@ -46,3 +45,22 @@ class StepState(FeatureProvider):
 
     def to_phase_model(self, model: PhaseModel, spec: PhaseSpec, policy=None) -> "StepState":
         return self
+
+    def set_values(self, **kwargs) -> None:
+        """Update step state fields.
+
+        Args:
+            **kwargs: Field names and values to update
+        """
+        allowed_keys = {"max_step", "step"}
+
+        unknown = set(kwargs.keys()) - allowed_keys
+        if unknown:
+            raise AttributeError(
+                f"StepState.set_values got unknown fields: {sorted(unknown)}"
+            )
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        self.clamp_()

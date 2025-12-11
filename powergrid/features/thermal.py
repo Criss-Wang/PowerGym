@@ -3,11 +3,10 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from powergrid.core.state import PhaseModel, PhaseSpec
 from powergrid.features.base import FeatureProvider
-from powergrid.utils.array_utils import _as_f32
+from powergrid.utils.array_utils import as_f32
+from powergrid.utils.phase import PhaseModel, PhaseSpec
 from powergrid.utils.registry import provider
-from powergrid.utils.typing import Array
 
 
 @provider()
@@ -34,7 +33,7 @@ class ThermalLoading(FeatureProvider):
     loading_percentage: Optional[float] = None
 
     # Per-phase (percent) — THREE_PHASE only; shape (nph,)
-    loading_percentage_ph: Optional[Array] = None
+    loading_percentage_ph: Optional[np.ndarray] = None
 
     def __post_init__(self):
         if self.phase_model == PhaseModel.BALANCED_1PH:
@@ -51,10 +50,10 @@ class ThermalLoading(FeatureProvider):
         else:
             raise ValueError(f"Unsupported phase model: {self.phase_model}")
 
-        self._validate_inputs_()
+        self._validate_inputs()
         self._ensure_shapes_()
 
-    def _validate_inputs_(self) -> None:
+    def _validate_inputs(self) -> None:
         if self.phase_model == PhaseModel.BALANCED_1PH:
             if self.loading_percentage_ph is not None:
                 raise ValueError(
@@ -79,7 +78,7 @@ class ThermalLoading(FeatureProvider):
     def _ensure_shapes_(self) -> None:
         if self.phase_model == PhaseModel.THREE_PHASE:
             n = self.phase_spec.nph()
-            arr = _as_f32(self.loading_percentage_ph).ravel()
+            arr = as_f32(self.loading_percentage_ph).ravel()
             if arr.shape != (n,):
                 raise ValueError(
                     f"loading_percentage_ph must have shape ({n},), "
@@ -87,13 +86,13 @@ class ThermalLoading(FeatureProvider):
                 )
             self.loading_percentage_ph = arr
 
-    def vector(self) -> Array:
+    def vector(self) -> np.ndarray:
         if self.phase_model == PhaseModel.BALANCED_1PH:
             val = float(self.loading_percentage) / 100.0
             return np.array([val], np.float32)
 
         # THREE_PHASE → per-phase fractions
-        arr = _as_f32(self.loading_percentage_ph).ravel()
+        arr = as_f32(self.loading_percentage_ph).ravel()
         return (arr / 100.0).astype(np.float32, copy=False)
 
     def names(self) -> List[str]:
@@ -108,7 +107,7 @@ class ThermalLoading(FeatureProvider):
                 np.clip(self.loading_percentage, 0.0, 200.0)
             )
         if self.loading_percentage_ph is not None:
-            arr = _as_f32(self.loading_percentage_ph).ravel()
+            arr = as_f32(self.loading_percentage_ph).ravel()
             arr = np.clip(arr, 0.0, 200.0).astype(np.float32)
             self.loading_percentage_ph = arr
 
@@ -160,7 +159,7 @@ class ThermalLoading(FeatureProvider):
 
         def arr(key: str):
             v = d.get(key)
-            return None if v is None else _as_f32(v)
+            return None if v is None else as_f32(v)
 
         return cls(
             phase_model=pm,
@@ -168,3 +167,28 @@ class ThermalLoading(FeatureProvider):
             loading_percentage=d.get("loading_percentage"),
             loading_percentage_ph=arr("loading_percentage_ph"),
         )
+
+    def set_values(self, **kwargs) -> None:
+        """Update thermal loading fields and re-validate.
+
+        Args:
+            **kwargs: Field names and values to update
+
+        Example:
+            thermal.set_values(loading_percentage=75.0)
+            thermal.set_values(loading_percentage_ph=np.array([70.0, 80.0, 75.0]))
+        """
+        allowed_keys = {"loading_percentage", "loading_percentage_ph"}
+
+        unknown = set(kwargs.keys()) - allowed_keys
+        if unknown:
+            raise AttributeError(
+                f"ThermalLoading.set_values got unknown fields: {sorted(unknown)}"
+            )
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        self._validate_inputs()
+        self._ensure_shapes_()
+        self.clamp_()
