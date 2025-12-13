@@ -52,10 +52,15 @@ Requirements:
 
 Runtime: ~30 minutes for 100 iterations (depends on workers and hardware)
 """
+import os
+import warnings
+
+# Suppress warnings before any other imports (applies to subprocesses too)
+os.environ.setdefault("PYTHONWARNINGS", "ignore")
+warnings.filterwarnings("ignore")  # Suppress all warnings for cleaner output
 
 import argparse
 import json
-import os
 from datetime import datetime
 
 import ray
@@ -75,7 +80,7 @@ def parse_args():
     )
 
     # Training parameters
-    parser.add_argument('--iterations', type=int, default=100,
+    parser.add_argument('--iterations', type=int, default=3,
                         help='Number of training iterations')
     parser.add_argument('--test', action='store_true',
                         help='Quick test mode (3 iterations, 1 worker, small batch)')
@@ -294,7 +299,12 @@ def main():
             policy_mapping_fn=policy_mapping_fn,
         )
         .resources(
-            num_gpus=0 if args.no_cuda else 1,
+            num_gpus=0,
+        )
+        .env_runners(
+            num_env_runners=args.num_workers,
+            num_envs_per_env_runner=args.num_envs_per_worker,
+            num_gpus_per_env_runner=0,
         )
         .debugging(
             seed=args.seed,
@@ -305,8 +315,6 @@ def main():
     config.train_batch_size = args.train_batch_size
     config.sgd_minibatch_size = args.sgd_minibatch_size
     config.num_sgd_iter = args.num_sgd_iter
-    config.num_rollout_workers = args.num_workers
-    config.num_envs_per_worker = args.num_envs_per_worker
     config.model = {
         "fcnet_hiddens": [args.hidden_dim, args.hidden_dim],
         "fcnet_activation": "relu",
@@ -341,7 +349,7 @@ def main():
     with open(config_path, 'w') as f:
         json.dump(vars(args), f, indent=2)
     print(f"✓ Configuration saved to: {config_path}")
-
+    
     # Build algorithm
     if args.resume:
         print(f"⟳ Resuming from checkpoint: {args.resume}")
@@ -363,15 +371,16 @@ def main():
     for i in range(args.iterations):
         result = algo.train()
 
-        # Extract metrics
-        reward_mean = result.get('episode_reward_mean', 0)
-        episodes = result.get('episodes_this_iter', 0)
+        # Extract metrics from nested structure
+        env_runners = result.get('env_runners', {})
+        reward_mean = env_runners.get('episode_reward_mean', 0)
+        episodes = env_runners.get('episodes_this_iter', 0)
+
         timesteps = result.get('timesteps_total', 0)
         time_total = result.get('time_total_s', 0)
 
-        # Custom metrics (if available)
-        custom_metrics = result.get('custom_metrics', {})
-        cost_mean = custom_metrics.get('cost_mean', 0)
+        # Cost is negative reward (since reward = -cost)
+        cost_mean = -reward_mean if reward_mean != 0 else 0
 
         # Print progress
         print(f"{i+1:5d} | {reward_mean:10.2f} | {cost_mean:10.2f} | "

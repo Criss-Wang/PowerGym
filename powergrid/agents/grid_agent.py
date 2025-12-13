@@ -285,11 +285,18 @@ class GridAgent(Agent):
     def _update_state_with_upstream_info(self, upstream_info: Optional[DictType[str, Any]]) -> None:
         """Update internal state based on info received from upstream agent.
 
+        In distributed mode, this receives network state from ProxyAgent and
+        updates internal features/attributes accordingly.
+
         Args:
-            upstream_info: Info dict received from upstream agent
+            upstream_info: Info dict received from upstream agent (ProxyAgent in distributed mode)
         """
-        # Default: no update
-        pass
+        if not upstream_info:
+            return
+
+        # In distributed mode, upstream_info contains network state from ProxyAgent
+        # Update internal state features based on received network info
+        self._update_from_network_state(upstream_info)
 
     def _update_state_with_subordinates_info(self) -> None:
         """Update internal state based on info received from subordinates."""
@@ -355,7 +362,11 @@ class GridAgent(Agent):
     # ============================================
 
     def _consume_network_state(self) -> Optional[DictType[str, Any]]:
-        """Consume network state from environment via message broker.
+        """Consume network state from ProxyAgent via message broker.
+
+        In distributed mode, agents retrieve network state from the ProxyAgent
+        rather than directly from the environment. The ProxyAgent acts as the
+        single source of truth for network information.
 
         Returns:
             Network state payload or None if no message available
@@ -363,7 +374,13 @@ class GridAgent(Agent):
         if not self.message_broker or not self.env_id:
             return None
 
-        channel = ChannelManager.power_flow_result_channel(self.env_id, self.agent_id)
+        # Receive network state from ProxyAgent (not directly from environment)
+        # ProxyAgent sends state via info channel: proxy_agent -> grid_agent
+        channel = ChannelManager.info_channel(
+            "proxy_agent",  # ProxyAgent is the sender
+            self.agent_id,   # This grid agent is the recipient
+            self.env_id
+        )
         messages = self.message_broker.consume(
             channel,
             recipient_id=self.agent_id,
@@ -623,8 +640,9 @@ class PowerGridAgent(GridAgent):
         # Use provided net or fall back to self.net
         net = kwargs.get('net', self.net)
 
-        # Update grid state from network results
-        self._update_grid_state(net)
+        # Update grid state from network results (only if net provided)
+        if net is not None:
+            self._update_grid_state(net)
 
         local = super()._build_local_observation(device_obs)
         local['state'] = self._get_obs(net, device_obs)
@@ -634,7 +652,7 @@ class PowerGridAgent(GridAgent):
         """Extract numerical observation vector from network state.
 
         Args:
-            net: PandaPower network
+            net: PandaPower network (None in distributed mode)
             device_obs: Optional device observations (computed if not provided)
 
         Returns:
@@ -650,10 +668,13 @@ class PowerGridAgent(GridAgent):
             # P, Q, SoC of energy storage units
             # P, Q, UC status of generators
             obs = np.concatenate((obs, ob.local['state']))
-        # P, Q at all buses
-        local_load_ids = pp.get_element_index(net, 'load', self.name, False)
-        load_pq = net.res_load.iloc[local_load_ids].values
-        obs = np.concatenate([obs, load_pq.ravel() / self.base_power])
+
+        # P, Q at all buses (only in centralized mode when net is provided)
+        if net is not None:
+            local_load_ids = pp.get_element_index(net, 'load', self.name, False)
+            load_pq = net.res_load.iloc[local_load_ids].values
+            obs = np.concatenate([obs, load_pq.ravel() / self.base_power])
+
         return obs.astype(np.float32)
 
     def _update_grid_state(self, net) -> None:
@@ -830,10 +851,19 @@ class PowerGridAgent(GridAgent):
     def sync_global_state(self, net, t):
         """Sync global state from PandaPower network to devices.
 
+        In centralized mode, syncs from pandapower network directly.
+        In distributed mode, network state has already been synced via ProxyAgent
+        in _update_from_network_state(), so we can skip this.
+
         Args:
-            net: PandaPower network with power flow results
+            net: PandaPower network with power flow results (None in distributed mode)
             t: Current timestep
         """
+        # In distributed mode, state is already synced via ProxyAgent
+        if net is None:
+            return
+
+        # Centralized mode: sync from pandapower network
         for name, dg in self.sgen.items():
             local_ids = pp.get_element_index(net, 'sgen', self.name + ' ' + name)
             p_mw_val = net.res_sgen.loc[local_ids, 'p_mw']
@@ -847,6 +877,69 @@ class PowerGridAgent(GridAgent):
             if not np.isnan(q_mvar):
                 dg.electrical.Q_MVAr = q_mvar
 
+    def _update_from_network_state(self, network_state: DictType[str, Any]) -> None:
+        """Update internal features from received network state.
+
+        This method is called in distributed mode when network state is received
+        from ProxyAgent. It updates the GridState features with the latest
+        network information.
+
+        Args:
+            network_state: Network state dict from ProxyAgent containing:
+                - converged: bool
+                - bus_voltages: {vm_pu: [...], overvoltage: float, undervoltage: float}
+                - line_loading: {loading_percent: [...], overloading: float}
+                - device_results: {device_name: {p_mw: float, q_mvar: float}}
+        """
+        if not network_state or not network_state.get('converged', False):
+            return
+
+        # Extract bus voltages
+        bus_voltages_data = network_state.get('bus_voltages', {})
+        bus_vm = np.array(bus_voltages_data.get('vm_pu', []))
+
+        # Extract line loading
+        line_loading_data = network_state.get('line_loading', {})
+        line_loading_percent = np.array(line_loading_data.get('loading_percent', []))
+
+        # Update GridState features
+        # Note: We don't have bus/line names in the message, so we use indices
+        if len(bus_vm) > 0:
+            from powergrid.features.network import BusVoltages
+            self.state.features.append(
+                BusVoltages(
+                    vm_pu=bus_vm,
+                    va_deg=np.zeros_like(bus_vm),  # Not transmitted in message
+                    bus_names=[f"bus_{i}" for i in range(len(bus_vm))],
+                )
+            )
+
+        if len(line_loading_percent) > 0:
+            from powergrid.features.network import LineFlows
+            self.state.features.append(
+                LineFlows(
+                    p_from_mw=np.zeros_like(line_loading_percent),  # Not transmitted
+                    q_from_mvar=np.zeros_like(line_loading_percent),  # Not transmitted
+                    loading_percent=line_loading_percent,
+                    line_names=[f"line_{i}" for i in range(len(line_loading_percent))],
+                )
+            )
+
+        # Update device results if available
+        device_results = network_state.get('device_results', {})
+        for device_name, result in device_results.items():
+            if device_name in self.sgen:
+                # Update device electrical state with power flow results
+                device = self.sgen[device_name]
+                p_mw = result.get('p_mw', device.electrical.P_MW)
+                q_mvar = result.get('q_mvar', device.electrical.Q_MVAr)
+
+                # Only update if values are valid (not NaN)
+                if not np.isnan(p_mw):
+                    device.electrical.P_MW = float(p_mw)
+                if not np.isnan(q_mvar):
+                    device.electrical.Q_MVAr = float(q_mvar)
+
     def update_cost_safety(self, net):
         """Update cost and safety metrics for the grid.
 
@@ -857,8 +950,7 @@ class PowerGridAgent(GridAgent):
         - Centralized (net != None): Directly accesses PandaPower network for
           voltage and line loading information
         - Distributed (net == None): Receives network state via messages from
-          environment through message broker, ensuring agents never access the
-          network object directly
+          ProxyAgent, ensuring agents never access the network object directly
 
         Args:
             net: PandaPower network with power flow results, or None for distributed mode
@@ -886,11 +978,11 @@ class PowerGridAgent(GridAgent):
 
                 self.safety += overloading + overvoltage + undervoltage
         else:
-            # Distributed mode: receive network state via messages
+            # Distributed mode: receive network state via ProxyAgent
             if self.message_broker and self.env_id:
                 network_state = self._consume_network_state()
                 if network_state and network_state.get('converged', False):
-                    # Extract pre-computed safety metrics from message
+                    # Extract pre-computed safety metrics from ProxyAgent message
                     bus_voltages = network_state.get('bus_voltages', {})
                     line_loading = network_state.get('line_loading', {})
 

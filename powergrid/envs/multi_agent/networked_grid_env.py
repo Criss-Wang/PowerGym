@@ -13,6 +13,7 @@ from gymnasium.spaces import Box, Dict as SpaceDict, Discrete, MultiDiscrete
 from pettingzoo import ParallelEnv
 
 from powergrid.agents.grid_agent import PowerGridAgent
+from powergrid.agents.proxy_agent import ProxyAgent
 from powergrid.core.protocols import NoProtocol, Protocol
 from powergrid.messaging.base import ChannelManager, Message, MessageBroker, MessageType
 from powergrid.messaging.memory import InMemoryBroker
@@ -44,6 +45,7 @@ class NetworkedGridEnv(ParallelEnv):
             - message_broker: str, broker type for distributed mode (default: 'in_memory')
         centralized: bool, whether to use centralized or distributed execution
         message_broker: MessageBroker instance for distributed communication, or None
+        proxy_agent: ProxyAgent instance for managing network state distribution in distributed mode
         agent_dict: Dictionary of all grid agents in the environment
         net: PandaPower network object containing the complete power system
     """
@@ -64,6 +66,7 @@ class NetworkedGridEnv(ParallelEnv):
         self.message_broker = self._build_message_broker()
         self.agent_dict = self._build_agents()
         self.net = self._build_net()
+        self.proxy_agent = self._build_proxy_agent()
         self._init_space()
 
     @property
@@ -99,6 +102,30 @@ class NetworkedGridEnv(ParallelEnv):
             return None
         else:
             raise ValueError(f"Unsupported message broker type: {broker_type}")
+
+    def _build_proxy_agent(self) -> Optional[ProxyAgent]:
+        """Build ProxyAgent for managing network state distribution.
+
+        Returns:
+            ProxyAgent instance in distributed mode, None in centralized mode
+        """
+        # If centralized mode, no proxy agent needed
+        if self.centralized or self.message_broker is None:
+            return None
+
+        # Get list of all agent IDs that will receive network state
+        subordinate_agent_ids = list(self.agent_dict.keys())
+
+        # Create proxy agent
+        proxy = ProxyAgent(
+            agent_id="proxy_agent",
+            message_broker=self.message_broker,
+            env_id=self._env_id,
+            subordinate_agents=subordinate_agent_ids,
+            visibility_rules=None,  # Default: all agents see all state
+        )
+
+        return proxy
         
 
     def _send_actions_to_agent(self, agent_id: AgentID, action: Any):
@@ -190,20 +217,27 @@ class NetworkedGridEnv(ParallelEnv):
             self._apply_state_updates_to_net(state_updates)
 
     def _publish_network_state_to_agents(self):
-        """Publish network state (voltages, line loading, device results) to agents via messages.
+        """Publish network state to agents via ProxyAgent.
 
-        In distributed mode, agents don't access net directly. Instead, the environment
-        publishes relevant network state information to each agent via the message broker.
+        In distributed mode, the environment sends network state to the ProxyAgent,
+        which then distributes it to individual agents based on visibility rules.
+        This ensures agents never directly access the network object.
         """
-        if not self.message_broker:
+        if not self.message_broker or not self.proxy_agent:
             return
+
+        # Collect aggregated network state for all agents
+        aggregated_network_state = {
+            'converged': self.net.get('converged', False),
+            'agents': {}
+        }
 
         for agent in self.agent_dict.values():
             if not isinstance(agent, PowerGridAgent):
                 continue
 
             # Extract network state relevant to this agent
-            network_state = {
+            agent_network_state = {
                 'converged': self.net.get('converged', False),
                 'device_results': {},
                 'bus_voltages': {},
@@ -215,7 +249,7 @@ class NetworkedGridEnv(ParallelEnv):
                 element_name = f"{agent.name} {device_name}"
                 try:
                     idx = pp.get_element_index(self.net, 'sgen', element_name)
-                    network_state['device_results'][device_name] = {
+                    agent_network_state['device_results'][device_name] = {
                         'p_mw': float(self.net.res_sgen.loc[idx, 'p_mw']),
                         'q_mvar': float(self.net.res_sgen.loc[idx, 'q_mvar'])
                     }
@@ -223,11 +257,11 @@ class NetworkedGridEnv(ParallelEnv):
                     pass
 
             # Bus voltages for this agent's buses
-            if network_state['converged']:
+            if agent_network_state['converged']:
                 try:
                     local_bus_ids = pp.get_element_index(self.net, 'bus', agent.name, False)
                     bus_voltages = self.net.res_bus.loc[local_bus_ids, 'vm_pu'].values
-                    network_state['bus_voltages'] = {
+                    agent_network_state['bus_voltages'] = {
                         'vm_pu': bus_voltages.tolist(),
                         'overvoltage': float(np.maximum(bus_voltages - 1.05, 0).sum()),
                         'undervoltage': float(np.maximum(0.95 - bus_voltages, 0).sum())
@@ -239,24 +273,31 @@ class NetworkedGridEnv(ParallelEnv):
                 try:
                     local_line_ids = pp.get_element_index(self.net, 'line', agent.name, False)
                     line_loading = self.net.res_line.loc[local_line_ids, 'loading_percent'].values
-                    network_state['line_loading'] = {
+                    agent_network_state['line_loading'] = {
                         'loading_percent': line_loading.tolist(),
                         'overloading': float(np.maximum(line_loading - 100, 0).sum() * 0.01)
                     }
                 except (KeyError, UserWarning):
                     pass
 
-            # Send network state to agent via message broker
-            channel = ChannelManager.power_flow_result_channel(self._env_id, agent.agent_id)
-            message = Message(
-                env_id=self._env_id,
-                sender_id="environment",
-                recipient_id=agent.agent_id,
-                timestamp=self._t,
-                message_type=MessageType.INFO,
-                payload=network_state
-            )
-            self.message_broker.publish(channel, message)
+            # Store agent-specific state in aggregated state
+            aggregated_network_state['agents'][agent.agent_id] = agent_network_state
+
+        # Send aggregated network state to ProxyAgent
+        channel = ChannelManager.power_flow_result_channel(self._env_id, "proxy_agent")
+        message = Message(
+            env_id=self._env_id,
+            sender_id="environment",
+            recipient_id="proxy_agent",
+            timestamp=self._t,
+            message_type=MessageType.POWER_FLOW_RESULT,
+            payload=aggregated_network_state
+        )
+        self.message_broker.publish(channel, message)
+
+        # ProxyAgent receives and distributes to individual agents
+        self.proxy_agent.receive_network_state_from_environment()
+        self.proxy_agent.distribute_network_state_to_agents()
 
     def _update_loads_distributed(self):
         """Update load scaling for all agents in distributed mode.
@@ -419,25 +460,49 @@ class NetworkedGridEnv(ParallelEnv):
         """
         Get observations for all agents.
 
+        In centralized mode, agents observe with direct network access.
+        In distributed mode, agents observe without network access (they use
+        ProxyAgent state received via messages).
+
         Returns:
             Dict mapping agent_id → observation array
         """
         obs_dict = {}
         for agent_id, agent in self.agent_dict.items():
-            obs = agent.observe(net=self.net)
+            if self.centralized:
+                # Centralized mode: pass network directly
+                obs = agent.observe(net=self.net)
+            else:
+                # Distributed mode: no network access
+                obs = agent.observe(net=None)
             # Extract state from observation
             obs_dict[agent_id] = obs.local['state']
 
         return obs_dict
 
     def _init_space(self):
-        """Initialize action and observation spaces for all agents."""
+        """Initialize action and observation spaces for all agents.
+
+        In centralized mode, observation space includes network load information.
+        In distributed mode, observation space excludes load information (agents
+        don't have direct network access).
+        """
         ac_spaces = {}
         ob_spaces = {}
 
         for name, agent in self.agent_dict.items():
             ac_spaces[name] = agent.get_grid_action_space()
-            ob_spaces[name] = agent.get_grid_observation_space(self.net)
+            # Pass net only in centralized mode
+            net_for_obs = self.net if self.centralized else None
+            ob_spaces[name] = agent.get_grid_observation_space(net_for_obs)
 
         self.action_spaces = ac_spaces
         self.observation_spaces = ob_spaces
+
+    def observation_space(self, agent):
+        """Return observation space for the given agent (PettingZoo API)."""
+        return self.observation_spaces[agent]
+
+    def action_space(self, agent):
+        """Return action space for the given agent (PettingZoo API)."""
+        return self.action_spaces[agent]
