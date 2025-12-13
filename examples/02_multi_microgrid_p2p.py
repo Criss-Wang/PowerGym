@@ -275,11 +275,20 @@ def main():
     total_safety = {agent_id: 0.0 for agent_id in env.possible_agents}
 
     for t in range(24):
-        # Sample random actions
-        actions = {
-            agent_id: space.sample()
-            for agent_id, space in env.action_spaces.items()
-        }
+        # Sample random actions and flatten dict spaces
+        actions = {}
+        for agent_id, space in env.action_spaces.items():
+            action_sample = space.sample()
+            # Flatten dict action space to array for protocol
+            if isinstance(action_sample, dict):
+                action_array = []
+                if 'continuous' in action_sample:
+                    action_array.append(action_sample['continuous'])
+                if 'discrete' in action_sample:
+                    action_array.append(action_sample['discrete'])
+                actions[agent_id] = np.concatenate(action_array)
+            else:
+                actions[agent_id] = action_sample
 
         # Step environment (P2P trading happens here)
         obs, rewards, terminateds, truncateds, infos = env.step(actions)

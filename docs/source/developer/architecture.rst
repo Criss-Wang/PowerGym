@@ -12,7 +12,8 @@ Code Organization
    ├── agents/          # Agent implementations
    │   ├── base.py      # Base Agent class
    │   ├── grid_agent.py
-   │   └── device_agent.py
+   │   ├── device_agent.py
+   │   └── proxy_agent.py  # Info distribution in distributed mode
    ├── core/            # Core data structures
    │   ├── action.py
    │   ├── observation.py

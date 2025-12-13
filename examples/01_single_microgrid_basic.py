@@ -179,7 +179,19 @@ def main():
 
     for t in range(24):
         # Sample random actions for each agent
-        actions = {agent_id: space.sample() for agent_id, space in env.action_spaces.items()}
+        actions = {}
+        for agent_id, space in env.action_spaces.items():
+            action_sample = space.sample()
+            # Flatten dict action space to array for protocol
+            if isinstance(action_sample, dict):
+                action_array = []
+                if 'continuous' in action_sample:
+                    action_array.append(action_sample['continuous'])
+                if 'discrete' in action_sample:
+                    action_array.append(action_sample['discrete'])
+                actions[agent_id] = np.concatenate(action_array)
+            else:
+                actions[agent_id] = action_sample
 
         # Step environment
         obs, rewards, terminateds, truncateds, infos = env.step(actions)

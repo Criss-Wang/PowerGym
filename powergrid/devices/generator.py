@@ -271,6 +271,9 @@ class Generator(DeviceAgent):
             emit_state_one_hot=True,
             emit_state_index=False,
             visibility=["owner"],
+            t_in_state_s=0.0,
+            t_to_next_s=0.0,
+            progress_frac=0.0,
         )
 
         # Capability / limits

@@ -127,6 +127,8 @@ obs_dict, rewards, terminateds, truncateds, infos = env.step(actions)
 **Key Difference**:
 - **Centralized**: Agents directly access PandaPower network (traditional MARL)
 - **Distributed**: Agents communicate via messages only (realistic distributed control)
+  - **ProxyAgent**: Intermediary that filters and distributes network state information to agents
+  - Enforces information hiding (agents only see their own network segment)
 
 ## Action Space
 
