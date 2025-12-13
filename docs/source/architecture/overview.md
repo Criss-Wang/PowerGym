@@ -52,16 +52,25 @@ PowerGrid 2.0's architecture is designed for **realistic distributed control** w
 - Runs AC power flow
 - Manages network topology
 - Computes safety metrics
+- Publishes network state to agents (distributed mode)
 
-**Agents**: Own control logic
-- Observe local state
-- Make decisions
-- Send commands to devices
+**GridAgent**: Coordinates microgrid control
+- Observes local device states and network info
+- Makes strategic decisions via RL policy
+- Coordinates subordinate DeviceAgents
+- Communicates with peer GridAgents
 
-**Devices**: Own device physics
-- Execute dynamics (SOC updates, ramp rates)
-- Respect physical limits
-- Publish state updates
+**DeviceAgent**: Wraps physical device as autonomous agent
+- Maintains device-specific state (via FeatureProviders)
+- Executes device actions (P, Q setpoints)
+- Respects physical constraints
+- Publishes state updates to environment
+
+**FeatureProviders**: Modular state representation
+- Encapsulate observable/controllable attributes
+- Define visibility rules (public, owner, system, upper_level)
+- Provide vectorization for ML observations
+- Enable composable state structures
 
 ### 2. Message-Based Communication
 
@@ -127,38 +136,58 @@ def _run_power_flow(self):
 ### GridAgent
 
 **Responsibilities**:
-- Observe microgrid state
+- Observe microgrid state (via subordinate DeviceAgents)
 - Execute RL policy
-- Coordinate subordinate devices
+- Coordinate subordinate devices via protocols
 - Communicate with peer agents
+- Aggregate rewards from devices
 
 **Key Methods**:
 ```python
 def observe(self, global_state) -> Observation:
     """Create observation for RL policy"""
 
-def step_centralized(self, obs, action):
-    """Centralized execution (direct calls)"""
+def act(self, observation: Observation, upstream_action: Any) -> None:
+    """Compute coordination action and distribute to devices"""
 
-def step_distributed(self):
-    """Distributed execution (message-based)"""
+async def _derive_downstream_actions(self, upstream_action) -> Dict[AgentID, Any]:
+    """Decompose flat action into per-device actions"""
+
+def _update_grid_state(self, net) -> None:
+    """Update GridState features from PandaPower results"""
 ```
 
 ### DeviceAgent
 
 **Responsibilities**:
-- Wrap physical device
-- Execute device dynamics
-- Respond to coordination signals
-- Publish state updates (distributed mode)
+- Wrap physical device (Generator, ESS, etc.)
+- Maintain device state via `DeviceState` and `FeatureProvider`s
+- Execute device actions via `Action` class
+- Respond to coordination signals from parent GridAgent
+- Publish state updates to environment (distributed mode)
+
+**Key Attributes**:
+- `state: DeviceState` - Composed of multiple FeatureProviders
+- `action: Action` - Handles continuous/discrete action spaces
+- `cost: float` - Device operational cost
+- `safety: float` - Safety violation penalties
 
 **Key Methods**:
 ```python
-def step(self):
-    """Update device state"""
+def observe(self, global_state) -> Observation:
+    """Extract device observation from global state"""
 
-def _publish_state_updates(self):
-    """Publish P, Q to environment"""
+def act(self, observation: Observation, upstream_action: Any) -> None:
+    """Compute action using policy or execute upstream command"""
+
+def _derive_local_action(self, upstream_action) -> Any:
+    """Derive local action from upstream or policy"""
+
+def _execute_local_action(self, action) -> None:
+    """Execute action and update internal state"""
+
+def _publish_state_updates(self) -> None:
+    """Publish P, Q, status to environment via message broker"""
 ```
 
 ### MessageBroker

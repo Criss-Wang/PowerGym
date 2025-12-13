@@ -7,17 +7,18 @@ It provides modular device models (DG, RES, ESS, Shunt, Transformer, Grid) with 
 
 ## Highlights
 
-- ⚡ **Plug-and-play devices**: `Generator`, `ESS`, `Grid`, `Shunt`, `Transformer` (OLTC), `Switch`
+- ⚡ **Hierarchical agent system**: `DeviceAgent` and `GridAgent` with modular state/action abstractions
 - 🔌 **Pandapower integration** with idempotent device → network attachment
-- 🧩 **Single-agent environments**: Gymnasium-compatible `GridBaseEnv`
+- 🧩 **Feature-based state representation**: Composable `FeatureProvider` system with visibility rules
 - 👥 **Multi-agent environments**: PettingZoo ParallelEnv for networked microgrids
 - 🌐 **Distributed execution**: Message-based communication between agents (centralized & distributed modes)
 - 🎛️ **Mixed action spaces**: continuous (`Box`) and discrete (`Discrete` / `MultiDiscrete`) combined in a `Dict`
-- 🔄 **NormalizeActionWrapper**: agents act in `[-1, 1]`, environment rescales to physical ranges
+- 🔄 **Flexible action system**: `Action` class with scale/unscale for normalized [-1, 1] control
 - 🛡️ **Safety framework**: penalties for over-rating, power factor, SOC, voltage, line loading, etc.
 - 💰 **Cost helpers**: quadratic, piecewise linear, ramping, tap wear, energy settlement
 - 🎯 **Coordination protocols**: Price signals, setpoint control, P2P trading, consensus
 - 📨 **Message broker system**: InMemoryBroker with extensible interface for Kafka/RabbitMQ
+- 👁️ **Observability control**: Multi-level visibility system (public, owner, system, upper_level)
 - ✅ **Comprehensive tests** for devices, agents, and environments
 - 🧪 **RL-ready**: works with Stable-Baselines3, RLlib (MAPPO/PPO), and custom agents
 
@@ -129,15 +130,28 @@ obs_dict, rewards, terminateds, truncateds, infos = env.step(actions)
 
 ## Action Space
 
-- **Continuous:** concatenated device controls (e.g., DG P/Q, ESS P/Q, RES Q)  
-- **Discrete:** optional categoricals (e.g., transformer taps)  
+PowerGrid uses a flexible `Action` dataclass that supports:
 
-- **Exposed as:**
-    - pure continuous → `Box`  
-    - mixed → `Dict({"continuous": Box, "discrete": Discrete|MultiDiscrete})`  
+- **Continuous actions (`c`)**: Device setpoints in physical units (MW, MVAr)
+- **Discrete actions (`d`)**: Categorical choices (e.g., transformer taps, on/off status)
 
-**Tip:** wrap with `NormalizeActionWrapper` if your agent outputs values in `[-1, 1]`;  
-the environment automatically rescales to true physical ranges internally.
+Actions are automatically exposed as Gymnasium spaces:
+- Pure continuous → `Box`
+- Pure discrete → `Discrete` or `MultiDiscrete`
+- Mixed → `Dict({"c": Box, "d": Discrete|MultiDiscrete})`
+
+The `Action` class provides built-in normalization:
+```python
+# Agent outputs normalized action in [-1, 1]
+normalized_action = agent.act(obs)
+
+# Action.unscale() converts to physical units
+action.unscale(normalized_action)  # Now action.c contains physical values
+
+# Or use action.scale() to normalize existing physical values
+physical_action = action.c
+normalized = action.scale()  # Returns [-1, 1] normalized version
+```
 
 ## Example Networks
 

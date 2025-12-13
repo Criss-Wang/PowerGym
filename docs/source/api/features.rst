@@ -1,10 +1,17 @@
 Features
 ========
 
-The features module provides extensible feature extraction for observations and state representation.
+The features module provides modular feature providers for composing agent state representations.
 
-Base Feature
-------------
+Each feature encapsulates a cohesive set of observable/controllable attributes with:
+
+- **Vectorization**: Convert to numpy arrays for ML
+- **Visibility Rules**: Control who can observe (public, owner, system, upper_level)
+- **Serialization**: Support for communication and logging
+- **Update Methods**: Flexible state updates via keyword arguments
+
+Base Feature Provider
+----------------------
 
 .. automodule:: powergrid.features.base
    :members:
@@ -27,10 +34,10 @@ Electrical Features
    :undoc-members:
    :show-inheritance:
 
-Generator Limits
-----------------
+Power Limits
+------------
 
-.. automodule:: powergrid.features.generator_limits
+.. automodule:: powergrid.features.power_limits
    :members:
    :undoc-members:
    :show-inheritance:
@@ -87,6 +94,16 @@ Inverter Features
 -----------------
 
 .. automodule:: powergrid.features.inverter
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Network Features
+----------------
+
+Network-level features for GridAgent state representation.
+
+.. automodule:: powergrid.features.network
    :members:
    :undoc-members:
    :show-inheritance:

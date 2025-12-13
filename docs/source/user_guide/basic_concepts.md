@@ -17,21 +17,28 @@ PowerGrid 2.0 is a **multi-agent reinforcement learning environment** for power 
 **GridAgent**
 - Represents a **microgrid controller**
 - The primary RL-trainable agent
-- Manages multiple devices within a microgrid
+- Manages multiple DeviceAgents within a microgrid
 - Can trade energy with other microgrids
+- Maintains `GridState` with network-level features (voltages, line flows)
+- Decomposes joint actions into per-device commands
 
 **DeviceAgent**
 - Represents a **physical device** (generator, storage, solar panel)
-- Managed by a GridAgent
-- Responds to coordination signals (prices, setpoints)
-- Not directly RL-trainable (follows local optimization or rules)
+- Managed by a parent GridAgent
+- Maintains `DeviceState` composed of `FeatureProvider`s
+- Executes device actions via `Action` class (continuous/discrete)
+- Can be RL-trainable or follow rule-based policies
+- Responds to coordination signals (prices, setpoints) from GridAgent
 
+**Agent Hierarchy**:
 ```
-# Example hierarchy
-GridAgent "MG1"
-├── DeviceAgent "ESS1" (Battery Storage)
-├── DeviceAgent "DG1"  (Diesel Generator)
-└── DeviceAgent "PV1"  (Solar Panel)
+GridAgent "MG1" (level=2)
+├── DeviceAgent "ESS1" (level=1) - Battery Storage
+│   └── State: ElectricalBasePh, StorageBlock, PowerLimits, Status
+├── DeviceAgent "DG1" (level=1) - Diesel Generator
+│   └── State: ElectricalBasePh, PowerLimits, InverterBlock, Status
+└── DeviceAgent "PV1" (level=1) - Solar Panel
+    └── State: ElectricalBasePh, PowerLimits, Status
 ```
 
 ---
@@ -82,6 +89,68 @@ PowerGrid 2.0 uses **PandaPower** for realistic AC power flow simulation:
 - **Custom networks**: Build your own with PandaPower
 
 Each microgrid has its own network, and microgrids can be interconnected.
+
+---
+
+### 5. State and Feature System
+
+PowerGrid uses a **modular feature-based state representation** where agent states are composed of multiple `FeatureProvider` objects.
+
+**FeatureProvider**
+- Base class for all state features
+- Encapsulates observable/controllable attributes
+- Defines visibility rules for multi-agent access control
+- Provides vectorization for ML observations
+- Supports serialization for communication
+
+**Common Features**:
+
+| Feature Type | Description | Example Attributes |
+|-------------|-------------|-------------------|
+| **ElectricalBasePh** | Active/reactive power state | P_MW, Q_MVAr, S_MVA, pf |
+| **StorageBlock** | Battery state | soc, e_capacity_MWh, p_ch_max_MW, p_dsc_max_MW |
+| **PowerLimits** | Device power constraints | p_min_MW, p_max_MW, q_min_MVAr, q_max_MVAr, s_rated_MVA |
+| **InverterBlock** | Inverter parameters | inv_eff, pf_mode, var_mode |
+| **StatusBlock** | Device status | in_service, controllable, state |
+| **BusVoltages** | Network voltages | vm_pu, va_deg, bus_names |
+| **LineFlows** | Line power flows | p_from_mw, q_from_mvar, loading_percent |
+| **NetworkMetrics** | Grid-wide metrics | total_gen_mw, total_load_mw, total_loss_mw |
+
+**Visibility Levels**:
+- `"public"`: All agents can observe
+- `"owner"`: Only owning agent can observe
+- `"system"`: System-level agents (level ≥ 3) can observe
+- `"upper_level"`: Agents one level above owner can observe
+
+**Example**:
+```python
+from powergrid.core.state import DeviceState
+from powergrid.features.electrical import ElectricalBasePh
+from powergrid.features.storage import StorageBlock
+
+# Create device state from features
+state = DeviceState(
+    owner_id="ess1",
+    owner_level=1,
+    features=[
+        ElectricalBasePh(P_MW=0.5, Q_MVAr=0.1),
+        StorageBlock(soc=0.8, e_capacity_MWh=2.0, p_ch_max_MW=1.0, p_dsc_max_MW=1.0)
+    ]
+)
+
+# Vectorize for ML
+vector = state.vector()  # Returns flat numpy array
+
+# Update features
+state.update({
+    "ElectricalBasePh": {"P_MW": 0.6},
+    "StorageBlock": {"soc": 0.75}
+})
+
+# Observe with access control
+observable = state.observed_by(requestor_id="grid1", requestor_level=2)
+# Returns: {"ElectricalBasePh": array([...]), "StorageBlock": array([...])}
+```
 
 ---
 
@@ -173,35 +242,74 @@ Environment ←→ MessageBroker ←→ GridAgents ←→ DeviceAgents
 
 ### Observation Space
 
-GridAgents observe:
-- **Local**: Own devices' states (SOC, power output, limits)
-- **Network**: Voltage, line loading, frequency (if available)
-- **Coordination**: Messages from other agents
+PowerGrid uses a structured `Observation` dataclass:
 
 ```python
-obs = {
-    'MG1': {
-        'local': {...},      # Device states
-        'network': {...},    # Network measurements
-        'messages': [...]    # Coordination messages
-    },
-    'MG2': {...},
-    ...
-}
+@dataclass
+class Observation:
+    local: Dict[str, Any]           # Local agent state
+    global_info: Dict[str, Any]     # Global information visible to agent
+    messages: List[Message]         # Inter-agent messages
+    timestamp: float                # Current simulation time
+```
+
+**GridAgent observations**:
+- **local**: Aggregated device states from subordinate DeviceAgents
+- **global_info**: Network state (voltages, line loading) from environment
+- **messages**: Coordination messages from peer GridAgents
+
+**DeviceAgent observations**:
+- **local**: Own device state features (e.g., SOC, power limits, electrical state)
+- **global_info**: Network info at device bus (voltage, frequency)
+- **messages**: Coordination signals from parent GridAgent
+
+**Visibility Control**: Features define who can observe them via visibility rules:
+```python
+class ElectricalBasePh(FeatureProvider):
+    visibility = ["owner", "upper_level"]  # Owner and parent can observe
+
+# Only visible to agents with permission
+obs_dict = state.observed_by(requestor_id="grid1", requestor_level=2)
 ```
 
 ### Action Space
 
-GridAgents output:
-- **Continuous**: Device setpoints or prices
-- **Discrete**: Discrete choices (e.g., trading decisions)
-- **Mixed**: Combination via `Dict` space
+PowerGrid uses a flexible `Action` dataclass with continuous and discrete components:
 
 ```python
-action_space = Dict({
-    'continuous': Box(low=-1, high=1, shape=(n_devices,)),
-    'discrete': Discrete(n_choices)
-})
+@dataclass
+class Action:
+    c: np.ndarray      # Continuous actions (e.g., MW, MVAr setpoints)
+    d: np.ndarray      # Discrete actions (e.g., on/off, tap position)
+    dim_c: int         # Number of continuous dimensions
+    dim_d: int         # Number of discrete dimensions
+    ncats: List[int]   # Categories per discrete dimension
+    range: Tuple       # (lower_bounds, upper_bounds) for continuous
+```
+
+**Automatic Gymnasium Space Conversion**:
+```python
+# Pure continuous
+action = Action()
+action.set_specs(dim_c=4, range=([-1, -0.5, -1, -0.5], [1, 0.5, 1, 0.5]))
+space = action.space  # Returns Box(low=[-1, -0.5, -1, -0.5], high=[1, 0.5, 1, 0.5])
+
+# Mixed continuous + discrete
+action.set_specs(dim_c=2, dim_d=1, ncats=[3], range=(...))
+space = action.space  # Returns Dict({"c": Box(...), "d": Discrete(3)})
+```
+
+**Normalization Support**:
+```python
+# RL agent outputs normalized [-1, 1]
+normalized = agent.act(obs)
+
+# Convert to physical units
+action.unscale(normalized)  # Now action.c contains physical values
+
+# Or normalize physical values
+physical = action.c
+normalized = action.scale()  # Returns [-1, 1] normalized version
 ```
 
 ---
