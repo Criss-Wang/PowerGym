@@ -6,6 +6,7 @@ Agents
 
    GridAgent <grid_agent>
    DeviceAgent <device_agent>
+   ProxyAgent <proxy_agent>
 
 PowerGrid uses a hierarchical multi-agent architecture with GridAgents and DeviceAgents.
 
@@ -14,6 +15,7 @@ Agent Types
 
 - :doc:`grid_agent` - Microgrid controller that coordinates devices
 - :doc:`device_agent` - Controls individual distributed energy resources
+- :doc:`proxy_agent` - Manages information distribution in distributed mode
 
 Agent Hierarchy
 ---------------

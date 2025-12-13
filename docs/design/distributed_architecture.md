@@ -40,15 +40,18 @@ graph TB
     subgraph "Distributed Mode (Realistic)"
         D_Env[NetworkedGridEnv]
         D_Broker{Message Broker}
+        D_Proxy[ProxyAgent]
         D_Net[(PandaPower Net)]
         D_Agent1[GridAgent MG1]
         D_Agent2[GridAgent MG2]
         D_Dev1[DeviceAgent gen1]
         D_Dev2[DeviceAgent gen2]
 
-        D_Env -->|publishes network state| D_Broker
-        D_Broker -->|network state msgs| D_Agent1
-        D_Broker -->|network state msgs| D_Agent2
+        D_Env -->|publishes aggregated state| D_Broker
+        D_Broker -->|aggregated state| D_Proxy
+        D_Proxy -->|filters & distributes| D_Broker
+        D_Broker -->|agent-specific state| D_Agent1
+        D_Broker -->|agent-specific state| D_Agent2
         D_Dev1 -->|publishes state updates| D_Broker
         D_Dev2 -->|publishes state updates| D_Broker
         D_Broker -->|state updates| D_Env
@@ -60,9 +63,12 @@ graph TB
     style C_Net fill:#ffcccb
     style D_Net fill:#90ee90
     style D_Broker fill:#87ceeb
+    style D_Proxy fill:#ffd54f
 ```
 
 **Key Principle**: In distributed mode, agents **never access net directly**. All information flows through messages.
+
+**ProxyAgent Role**: The ProxyAgent acts as an intermediary that receives aggregated network state from the environment and distributes filtered, agent-specific information to individual GridAgents. This enforces information hiding and allows for visibility control.
 
 ---
 
@@ -72,6 +78,7 @@ graph TB
 sequenceDiagram
     participant Env as NetworkedGridEnv
     participant Broker as MessageBroker
+    participant Proxy as ProxyAgent
     participant Agent as GridAgent (MG1)
     participant Device as DeviceAgent (gen1)
     participant Net as PandaPower
@@ -94,11 +101,17 @@ sequenceDiagram
     Env->>Net: apply state updates to net
     Env->>Net: runpp() - power flow
 
-    Note over Env,Net: Result Distribution
+    Note over Env,Proxy: Result Distribution via ProxyAgent
 
-    Env->>Env: extract network state<br/>(voltages, line loading)
-    Env->>Broker: publish network state per agent
-    Broker->>Agent: deliver network state
+    Env->>Env: extract aggregated network state<br/>(voltages, line loading for all agents)
+    Env->>Broker: publish aggregated state
+    Broker->>Proxy: deliver aggregated state
+    Proxy->>Proxy: receive_network_state_from_environment()
+    Proxy->>Proxy: cache aggregated state
+    Proxy->>Proxy: distribute_network_state_to_agents()
+    Proxy->>Proxy: filter state for each agent<br/>(visibility rules)
+    Proxy->>Broker: publish agent-specific state (MG1)
+    Broker->>Agent: deliver filtered network state
     Agent->>Agent: update_cost_safety(None)
     Agent->>Agent: consume network state<br/>from messages
     Agent->>Agent: compute safety metrics
@@ -119,12 +132,14 @@ graph LR
         SUC[env__state_updates]
     end
 
-    subgraph "Network State Channels"
-        NSC1[env__power_flow_results__MG1]
-        NSC2[env__power_flow_results__MG2]
+    subgraph "ProxyAgent Channels"
+        PAC1[env__power_flow_results__proxy_agent]
+        PAC2[env__info__proxy_agent_to_MG1]
+        PAC3[env__info__proxy_agent_to_MG2]
     end
 
     Env[Environment]
+    Proxy[ProxyAgent]
     Agent1[GridAgent MG1]
     Agent2[GridAgent MG2]
     Dev1[Device gen1]
@@ -139,20 +154,24 @@ graph LR
     Dev2 -->|state update| SUC
     SUC -->|consume all| Env
 
-    Env -->|network state| NSC1
-    Env -->|network state| NSC2
-    NSC1 -->|consume| Agent1
-    NSC2 -->|consume| Agent2
+    Env -->|aggregated network state| PAC1
+    PAC1 -->|consume| Proxy
+    Proxy -->|filtered state| PAC2
+    Proxy -->|filtered state| PAC3
+    PAC2 -->|consume| Agent1
+    PAC3 -->|consume| Agent2
 
     style SUC fill:#ffe0b2
-    style NSC1 fill:#c8e6c9
-    style NSC2 fill:#c8e6c9
+    style PAC1 fill:#ffd54f
+    style PAC2 fill:#c8e6c9
+    style PAC3 fill:#c8e6c9
 ```
 
 **Channel Naming Convention**:
 - Actions: `env_{env_id}__action__{sender}_to_{recipient}`
 - State Updates: `env_{env_id}__state_updates`
-- Network Results: `env_{env_id}__power_flow_results__{agent_id}`
+- ProxyAgent Aggregation: `env_{env_id}__power_flow_results__proxy_agent`
+- ProxyAgent Distribution: `env_{env_id}__info__proxy_agent_to_{agent_id}`
 
 ---
 
@@ -199,13 +218,13 @@ flowchart TD
 
 ---
 
-## 5. Network State Distribution
+## 5. Network State Distribution via ProxyAgent
 
 ```mermaid
 flowchart TD
     Start([Power flow complete])
 
-    A[Environment extracts<br/>per-agent network info]
+    A[Environment extracts<br/>aggregated network state]
 
     subgraph "For each GridAgent"
         B[Get device results:<br/>res_sgen p_mw, q_mvar]
@@ -214,10 +233,16 @@ flowchart TD
         E[Compute safety metrics:<br/>overvoltage, undervoltage]
     end
 
-    F[Publish network state<br/>to agent's channel]
-    G{Message Broker}
-    H[Agent consumes<br/>network state message]
-    I[Agent computes:<br/>cost + safety]
+    F[Create aggregated state<br/>with all agents' data]
+    G[Publish to ProxyAgent channel]
+    H{Message Broker}
+    I[ProxyAgent receives<br/>aggregated state]
+    J[ProxyAgent caches<br/>aggregated state]
+    K[ProxyAgent filters<br/>per agent visibility]
+    L[ProxyAgent publishes<br/>agent-specific state]
+    M{Message Broker}
+    N[GridAgent consumes<br/>filtered network state]
+    O[GridAgent computes:<br/>cost + safety]
 
     End([Metrics computed])
 
@@ -230,31 +255,125 @@ flowchart TD
     F --> G
     G --> H
     H --> I
-    I --> End
+    I --> J
+    J --> K
+    K --> L
+    L --> M
+    M --> N
+    N --> O
+    O --> End
 
-    style Start fill:#e3f2fd
-    style End fill:#e8f5e9
-    style G fill:#87ceeb
+    style I fill:#ffd54f
+    style J fill:#ffd54f
+    style K fill:#ffd54f
+    style L fill:#ffd54f
 ```
 
-**Message Payload Structure**:
+**ProxyAgent Responsibilities**:
+1. **Receive**: Consume aggregated network state from environment
+2. **Cache**: Store the most recent network state for all agents
+3. **Filter**: Apply visibility rules to determine what each agent can see
+4. **Distribute**: Send agent-specific filtered state to each GridAgent
+
+**Benefits of ProxyAgent**:
+- **Information Hiding**: Agents only see their own network segment
+- **Scalability**: Single aggregated message from environment, filtered distribution
+- **Flexibility**: Visibility rules can be customized per agent
+- **Realism**: Mimics real-world information asymmetry in power systems
+
+---
+
+## 6. ProxyAgent Implementation Details
+
+### 6.1 Aggregated State Structure
+
+The environment sends a single aggregated message to ProxyAgent containing state for all agents:
 ```python
+# Aggregated state sent to ProxyAgent
+{
+    'converged': bool,
+    'agents': {
+        'MG1': {
+            'converged': bool,
+            'device_results': {
+                'gen1': {'p_mw': float, 'q_mvar': float},
+                'ess1': {'p_mw': float, 'q_mvar': float}
+            },
+            'bus_voltages': {
+                'vm_pu': [float, ...],
+                'overvoltage': float,
+                'undervoltage': float
+            },
+            'line_loading': {
+                'loading_percent': [float, ...],
+                'overloading': float
+            }
+        },
+        'MG2': { ... },
+        'MG3': { ... }
+    }
+}
+```
+
+### 6.2 Filtered State Structure
+
+ProxyAgent extracts and filters each agent's specific state:
+```python
+# Filtered state sent to MG1
 {
     'converged': bool,
     'device_results': {
         'gen1': {'p_mw': float, 'q_mvar': float},
-        'gen2': {'p_mw': float, 'q_mvar': float}
+        'ess1': {'p_mw': float, 'q_mvar': float}
     },
     'bus_voltages': {
-        'vm_pu': [float, ...],
+        'vm_pu': [float, ...],      # Only MG1's buses
         'overvoltage': float,
         'undervoltage': float
     },
     'line_loading': {
-        'loading_percent': [float, ...],
+        'loading_percent': [float, ...],  # Only MG1's lines
         'overloading': float
     }
 }
+```
+
+### 6.3 Key Methods
+
+**`receive_network_state_from_environment()`**:
+- Consumes aggregated state from environment channel
+- Caches state for distribution
+- Returns: Network state payload or None
+
+**`distribute_network_state_to_agents()`**:
+- Iterates through subordinate agents
+- Extracts agent-specific state from cache
+- Applies visibility filtering
+- Publishes to agent's info channel
+
+**`_filter_state_for_agent(agent_id, state)`**:
+- Applies visibility rules (e.g., "owner", "public")
+- Removes information agent shouldn't see
+- Returns: Filtered state dict
+
+### 6.4 Usage in Environment
+
+```python
+# In NetworkedGridEnv.step() - distributed mode
+self._publish_network_state_to_agents()
+
+# Implementation
+def _publish_network_state_to_agents(self):
+    # 1. Collect aggregated state
+    aggregated_state = {'converged': self.net.converged, 'agents': {}}
+    for agent in self.agent_dict.values():
+        aggregated_state['agents'][agent.agent_id] = extract_agent_state(agent)
+
+    # 2. Publish to ProxyAgent
+    self.proxy_agent.receive_network_state_from_environment()
+
+    # 3. ProxyAgent distributes filtered state
+    self.proxy_agent.distribute_network_state_to_agents()
 ```
 
 ---
