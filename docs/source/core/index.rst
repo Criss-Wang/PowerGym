@@ -5,15 +5,17 @@ PowerGrid Core
    :hidden:
 
    Overview <overview>
+   State, Action & Observation <state_action_observation>
    Basic Concepts <../user_guide/basic_concepts>
    Centralized vs Distributed <../user_guide/centralized_vs_distributed>
    Architecture <../architecture/index>
 
 PowerGrid Core provides the foundation for multi-agent reinforcement learning in smart grids.
 
-**Overview**
+**Core Abstractions**
 
 - :doc:`overview` - System overview and key features
+- :doc:`state_action_observation` - State, Action, and Observation system
 - :doc:`../user_guide/basic_concepts` - Core concepts and terminology
 - :doc:`../user_guide/centralized_vs_distributed` - Dual-mode architecture
 - :doc:`../architecture/index` - Detailed architecture documentation

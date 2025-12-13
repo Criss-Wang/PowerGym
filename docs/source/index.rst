@@ -102,14 +102,20 @@ Quick Examples
 Key Features
 ------------
 
-.. grid:: 1 2 3 3
+.. grid:: 1 2 2 3
    :gutter: 3
 
    .. grid-item-card:: ⚡ PowerGrid Core
       :link: core/index
       :link-type: doc
 
-      Hierarchical agents, flexible protocols, and AC power flow
+      Hierarchical agents, feature-based state, flexible actions, and AC power flow
+
+   .. grid-item-card:: 🧩 State & Action System
+      :link: core/state_action_observation
+      :link-type: doc
+
+      Modular FeatureProviders, continuous/discrete actions, visibility control
 
    .. grid-item-card:: 🌐 Environments
       :link: environments/index
@@ -122,3 +128,15 @@ Key Features
       :link-type: doc
 
       RLlib integration with MAPPO and custom protocols
+
+   .. grid-item-card:: 🚀 Quick Reference
+      :link: developer/quick_reference
+      :link-type: doc
+
+      Common patterns, code examples, and debugging tips
+
+   .. grid-item-card:: 🏗️ Architecture
+      :link: architecture/index
+      :link-type: doc
+
+      System design, message broker, and distributed execution
