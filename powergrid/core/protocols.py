@@ -3,6 +3,11 @@
 This module defines vertical and horizontal coordination protocols:
 - Vertical protocols: Parent → subordinate coordination (agent-owned)
 - Horizontal protocols: Peer ↔ peer coordination (environment-owned)
+
+Protocol Architecture:
+    Each protocol is composed of two components:
+    1. CommunicationProtocol: Defines coordination messages (WHAT to communicate)
+    2. ActionProtocol: Defines action coordination (HOW to coordinate actions)
 """
 
 from abc import ABC, abstractmethod
@@ -10,94 +15,232 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from powergrid.agents.base import Agent, AgentID, Observation, Message
-
-class CommunicationProtocol(ABC):
-    """Base class for communication protocols."""
-
-    def __init__(self):
-        self.neighbors = []
-
-class Protocol(ABC):
-    """Base class for all coordination protocols."""
-
-    def __init__(self):
-        self.communication_protocol = CommunicationProtocol()
-        self.action_protocol = None
-
-    def no_op(self) -> bool:
-        """Check if this is a no-operation protocol.
-
-        Returns:
-            True if this protocol performs no coordination (NoProtocol or NoHorizontalProtocol)
-        """
-        return False
-    
-    def sync_global_state(
-        self,
-        agents: Dict[AgentID, Agent],
-        net: Any,
-        t: float
-    ) -> None:
-        """Sync global state to all agents (default: no-op).
-
-        This method can be overridden by protocols that need to sync global
-        information to agents at each timestep.
-
-        Args:
-            agents: Dictionary of all agents
-            net: Global network/state object
-            t: Current simulation time
-        """
-        pass
-
-    def coordinate_messages(
-        self,
-        agents: Dict[AgentID, Agent],
-        observations: Dict[AgentID, Observation],
-        net: Any,
-        t: float
-    ) -> None:
-        """Coordinate messages between agents (default: no-op).
-
-        This method can be overridden by protocols that need to send messages
-        between agents at each timestep.
-
-        Args:
-            agents: Dictionary of all agents
-            observations: Observations from all agents
-            net: Global network/state object
-            t: Current simulation time
-        """
-        pass
-
-    def coordinate_actions(
-        self,
-        agents: Dict[AgentID, Agent],
-        actions: Dict[AgentID, Any],
-        net: Any,
-        t: float
-    ) -> None:
-        """Coordinate actions between agents (default: no-op).
-
-        This method can be overridden by protocols that need to coordinate
-        actions between agents at each timestep.
-
-        Args:
-            agents: Dictionary of all agents
-            actions: Actions computed by all agents
-            net: Global network/state object
-            t: Current simulation time
-        """
-        pass
+from powergrid.agents.base import Agent, AgentID, Message
 
 
 # =============================================================================
-# VERTICAL PROTOCOLS (Agent-owned: Parent → Child)
+# BASE PROTOCOL COMPONENTS
+# =============================================================================
+
+class CommunicationProtocol(ABC):
+    """Handles message-passing coordination between agents.
+
+    Communication protocols define WHAT information is shared and HOW
+    agents exchange coordination signals (prices, bids, consensus values, etc.).
+    This is the "coordination signal computation" layer.
+    """
+
+    @abstractmethod
+    def compute_coordination_messages(
+        self,
+        sender_state: Any,
+        receiver_states: Dict[AgentID, Any],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[AgentID, Dict[str, Any]]:
+        """Compute coordination messages to send to receivers.
+
+        Pure function - computes what messages should be sent based on
+        current state, without side effects.
+
+        Args:
+            sender_state: State of the coordinating agent
+            receiver_states: States of agents receiving coordination signals
+            context: Additional context (coordinator_action, topology, etc.)
+
+        Returns:
+            Dict mapping receiver_id -> message content
+        """
+        pass
+
+    def deliver_messages(
+        self,
+        messages: Dict[AgentID, Dict[str, Any]],
+        receivers: Dict[AgentID, Agent],
+        sender_id: AgentID,
+        timestamp: float,
+        mode: str = "centralized"
+    ) -> None:
+        """Deliver computed messages to receivers.
+
+        Handles mode-specific delivery:
+        - Centralized: Direct mailbox delivery
+        - Distributed: Via message broker (handled by agent's async methods)
+
+        Args:
+            messages: Messages computed by compute_coordination_messages()
+            receivers: Target agents
+            sender_id: ID of coordinating agent
+            timestamp: Current timestamp
+            mode: "centralized" or "distributed"
+        """
+        for receiver_id, content in messages.items():
+            if receiver_id not in receivers or not content:
+                continue
+
+            receiver = receivers[receiver_id]
+            message = Message(
+                sender=sender_id,
+                recipient=receiver_id,
+                content=content,
+                timestamp=timestamp
+            )
+
+            # Both modes use mailbox - distributed mode agents check mailbox async
+            receiver.receive_message(message)
+
+
+class ActionProtocol(ABC):
+    """Handles action coordination between agents.
+
+    Action protocols define HOW actions are coordinated - whether through
+    direct control (setpoints), indirect incentives (prices), or consensus.
+    This is the "action execution" layer.
+    """
+
+    @abstractmethod
+    def compute_action_coordination(
+        self,
+        coordinator_action: Optional[Any],
+        subordinate_states: Dict[AgentID, Any],
+        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None
+    ) -> Dict[AgentID, Any]:
+        """Compute coordinated actions for subordinates.
+
+        Pure function - decomposes coordinator action or computes subordinate
+        actions based on coordination strategy.
+
+        Args:
+            coordinator_action: Action computed by coordinator policy (if any)
+            subordinate_states: Current states of subordinate agents
+            coordination_messages: Messages computed by communication protocol
+
+        Returns:
+            Dict mapping subordinate_id -> action (or None for decentralized)
+        """
+        pass
+
+    def apply_actions(
+        self,
+        actions: Dict[AgentID, Any],
+        subordinates: Dict[AgentID, Agent],
+        mode: str = "centralized"
+    ) -> None:
+        """Apply coordinated actions to subordinates.
+
+        Handles mode-specific application:
+        - Centralized: Direct action setting via subordinate.act()
+        - Distributed: Actions sent via message broker (environment handles this)
+
+        Args:
+            actions: Actions computed by compute_action_coordination()
+            subordinates: Target agents
+            mode: "centralized" or "distributed"
+        """
+        if mode == "centralized":
+            # Centralized: directly call subordinate.act()
+            for sub_id, action in actions.items():
+                if sub_id not in subordinates or action is None:
+                    continue
+                subordinate = subordinates[sub_id]
+                subordinate.act(subordinate.observation, upstream_action=action)
+        # In distributed mode, environment handles action delivery via messages
+
+
+# =============================================================================
+# PROTOCOL: Composition of Communication + Action
+# =============================================================================
+
+class Protocol(ABC):
+    """Base protocol combining communication and action coordination.
+
+    A protocol consists of:
+    1. CommunicationProtocol: Defines coordination signals/messages
+    2. ActionProtocol: Defines action coordination strategy
+
+    Protocols can be:
+    - Vertical (agent-owned): Parent coordinates subordinates
+    - Horizontal (env-owned): Peers coordinate with each other
+    """
+
+    def __init__(
+        self,
+        communication_protocol: Optional[CommunicationProtocol] = None,
+        action_protocol: Optional[ActionProtocol] = None
+    ):
+        self.communication_protocol = communication_protocol or NoCommunication()
+        self.action_protocol = action_protocol or NoActionCoordination()
+
+    def no_op(self) -> bool:
+        """Check if this is a no-operation protocol."""
+        return (
+            isinstance(self.communication_protocol, NoCommunication) and
+            isinstance(self.action_protocol, NoActionCoordination)
+        )
+
+    def coordinate(
+        self,
+        coordinator_state: Any,
+        subordinate_states: Dict[AgentID, Any],
+        coordinator_action: Optional[Any] = None,
+        mode: str = "centralized",
+        context: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Execute full coordination cycle.
+
+        This is the main entry point that orchestrates:
+        1. Communication: Compute and deliver messages
+        2. Action: Compute and apply coordinated actions
+
+        Args:
+            coordinator_state: State of coordinating agent
+            subordinate_states: States of subordinate agents
+            coordinator_action: Action from coordinator policy (if any)
+            mode: "centralized" or "distributed"
+            context: Additional context (subordinates dict, timestamp, etc.)
+        """
+        context = context or {}
+        subordinates = context.get("subordinates", {})
+        timestamp = context.get("timestamp", 0.0)
+        coordinator_id = context.get("coordinator_id", "coordinator")
+
+        # Enrich context with coordinator_action
+        context_with_action = {**context, "coordinator_action": coordinator_action}
+
+        # Step 1: Communication coordination
+        messages = self.communication_protocol.compute_coordination_messages(
+            sender_state=coordinator_state,
+            receiver_states=subordinate_states,
+            context=context_with_action
+        )
+
+        self.communication_protocol.deliver_messages(
+            messages=messages,
+            receivers=subordinates,
+            sender_id=coordinator_id,
+            timestamp=timestamp,
+            mode=mode
+        )
+
+        # Step 2: Action coordination
+        actions = self.action_protocol.compute_action_coordination(
+            coordinator_action=coordinator_action,
+            subordinate_states=subordinate_states,
+            coordination_messages=messages
+        )
+
+        self.action_protocol.apply_actions(
+            actions=actions,
+            subordinates=subordinates,
+            mode=mode
+        )
+
+
+# =============================================================================
+# VERTICAL PROTOCOLS (Agent-owned: Parent → Subordinate)
 # =============================================================================
 
 class VerticalProtocol(Protocol):
-    """Vertical coordination protocol for parent → subordinate communication.
+    """Vertical coordination protocol for hierarchical control.
 
     Each agent owns its own vertical protocol to coordinate its subordinates.
     This is decentralized - each agent independently manages its children.
@@ -105,78 +248,122 @@ class VerticalProtocol(Protocol):
     Example:
         GridAgent owns a PriceSignalProtocol to coordinate its DeviceAgents.
     """
+    pass
 
-    @abstractmethod
-    def coordinate(
+
+# =============================================================================
+# HORIZONTAL PROTOCOLS (Environment-owned: Peer ↔ Peer)
+# =============================================================================
+
+class HorizontalProtocol(Protocol):
+    """Horizontal coordination protocol for peer-to-peer coordination.
+
+    The environment owns and runs horizontal protocols, as they require
+    global view of all agents. Agents participate but don't run the protocol.
+
+    Example:
+        Environment runs PeerToPeerTradingProtocol to enable trading between
+        GridAgents MG1, MG2, and MG3.
+    """
+    pass
+
+
+# =============================================================================
+# NO-OP PROTOCOL COMPONENTS
+# =============================================================================
+
+class NoCommunication(CommunicationProtocol):
+    """No message passing."""
+
+    def compute_coordination_messages(
         self,
-        subordinate_observations: Dict[AgentID, Observation],
-        parent_action: Optional[Any] = None
+        sender_state: Any,
+        receiver_states: Dict[AgentID, Any],
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[AgentID, Dict[str, Any]]:
-        """Compute coordination signals for subordinates.
+        return {r_id: {} for r_id in receiver_states}
 
-        Args:
-            subordinate_observations: Observations from all subordinate agents
-            parent_action: Optional action from parent's policy (e.g., price to broadcast)
 
-        Returns:
-            Dictionary mapping subordinate_id to coordination signal
-            Example: {'ess1': {'price': 50.0}, 'dg1': {'price': 50.0}}
-        """
-        pass
+class NoActionCoordination(ActionProtocol):
+    """No action coordination."""
 
-    def coordinate_action(
+    def compute_action_coordination(
         self,
-        devices: Dict[AgentID, Agent],
-        observation: Observation,
-        action: Optional[Any] = None
-    ) -> None:
-        """Coordinate device actions (default: no-op).
-
-        This method can be overridden to distribute actions to subordinate devices.
-
-        Args:
-            devices: Dictionary of subordinate device agents
-            observation: Current observation from parent
-            action: Action computed by parent agent
-        """
-        pass
-
-    def coordinate_message(
-        self,
-        devices: Dict[AgentID, Agent],
-        observation: Observation,
-        action: Optional[Any] = None
-    ) -> None:
-        """Send coordination messages to devices (default: no-op).
-
-        This method can be overridden to send messages based on coordination protocol.
-
-        Args:
-            devices: Dictionary of subordinate device agents
-            observation: Current observation from parent
-            action: Action computed by parent agent
-        """
-        pass
+        coordinator_action: Optional[Any],
+        subordinate_states: Dict[AgentID, Any],
+        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None
+    ) -> Dict[AgentID, Any]:
+        return {sub_id: None for sub_id in subordinate_states}
 
 
 class NoProtocol(VerticalProtocol):
-    """No coordination - subordinates act independently."""
+    """No coordination protocol."""
 
-    def no_op(self) -> bool:
-        """NoProtocol is a no-operation protocol."""
-        return True
+    def __init__(self):
+        super().__init__(
+            communication_protocol=NoCommunication(),
+            action_protocol=NoActionCoordination()
+        )
 
-    def coordinate(
+
+# =============================================================================
+# PRICE SIGNAL PROTOCOL (Decentralized coordination via price messages)
+# =============================================================================
+
+class PriceCommunicationProtocol(CommunicationProtocol):
+    """Broadcasts price signals to subordinates."""
+
+    def __init__(self, initial_price: float = 50.0):
+        self.price = initial_price
+
+    def compute_coordination_messages(
         self,
-        subordinate_observations: Dict[AgentID, Observation],
-        parent_action: Optional[Any] = None
+        sender_state: Any,
+        receiver_states: Dict[AgentID, Any],
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[AgentID, Dict[str, Any]]:
-        """Return empty coordination signals."""
-        return {sub_id: {} for sub_id in subordinate_observations}
+        """Compute price messages to broadcast."""
+        context = context or {}
+
+        # Extract price from coordinator action if available
+        coordinator_action = context.get("coordinator_action")
+        if coordinator_action is not None:
+            if isinstance(coordinator_action, dict):
+                self.price = coordinator_action.get("price", self.price)
+            else:
+                try:
+                    self.price = float(coordinator_action)
+                except (TypeError, ValueError):
+                    pass  # Keep current price
+
+        # Broadcast same price to all subordinates
+        return {
+            receiver_id: {
+                "type": "price_signal",
+                "price": self.price
+            }
+            for receiver_id in receiver_states
+        }
+
+
+class DecentralizedActionProtocol(ActionProtocol):
+    """No direct action control - devices act independently based on messages."""
+
+    def compute_action_coordination(
+        self,
+        coordinator_action: Optional[Any],
+        subordinate_states: Dict[AgentID, Any],
+        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None
+    ) -> Dict[AgentID, Any]:
+        """Return empty actions - devices decide independently."""
+        return {sub_id: None for sub_id in subordinate_states}
 
 
 class PriceSignalProtocol(VerticalProtocol):
     """Price-based coordination via marginal price signals.
+
+    Communication: Broadcast price signals
+    Action: Decentralized (devices respond to prices independently)
 
     Attributes:
         price: Current electricity price ($/MWh)
@@ -188,402 +375,208 @@ class PriceSignalProtocol(VerticalProtocol):
         Args:
             initial_price: Initial electricity price ($/MWh)
         """
-        self.price = initial_price
+        super().__init__(
+            communication_protocol=PriceCommunicationProtocol(initial_price),
+            action_protocol=DecentralizedActionProtocol()
+        )
 
-    def coordinate(
+    @property
+    def price(self):
+        """Get current price."""
+        return self.communication_protocol.price
+
+    @price.setter
+    def price(self, value):
+        """Set current price."""
+        self.communication_protocol.price = value
+
+
+# =============================================================================
+# SETPOINT PROTOCOL (Centralized control via direct action assignment)
+# =============================================================================
+
+class SetpointCommunicationProtocol(CommunicationProtocol):
+    """Sends setpoint assignments as informational messages."""
+
+    def compute_coordination_messages(
         self,
-        subordinate_observations: Dict[AgentID, Observation],
-        parent_action: Optional[Any] = None
+        sender_state: Any,
+        receiver_states: Dict[AgentID, Any],
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[AgentID, Dict[str, Any]]:
-        """Broadcast price signal to all subordinates."""
-        # Update price from parent action if provided
-        if parent_action is not None:
-            if isinstance(parent_action, dict):
-                self.price = parent_action.get("price", self.price)
-            else:
-                self.price = float(parent_action)
+        """Compute setpoint messages."""
+        context = context or {}
+        coordinator_action = context.get("coordinator_action")
+        subordinates = context.get("subordinates", {})
 
-        # Broadcast to all subordinates
+        if coordinator_action is None:
+            return {r_id: {} for r_id in receiver_states}
+
+        # Decompose action into per-device setpoints
+        setpoints = self._decompose_action(coordinator_action, subordinates)
+
         return {
-            sub_id: {"price": self.price}
-            for sub_id in subordinate_observations
+            receiver_id: {
+                "type": "setpoint_command",
+                "setpoint": setpoints.get(receiver_id)
+            }
+            for receiver_id in receiver_states
+            if receiver_id in setpoints
         }
 
-    def coordinate_message(
+    def _decompose_action(
         self,
-        devices: Dict[AgentID, Agent],
-        observation: Observation,
-        action: Optional[Any] = None
-    ) -> None:
-        """Send price signal as message to all devices via mailbox.
+        action: Any,
+        subordinates: Dict[AgentID, Agent]
+    ) -> Dict[AgentID, Any]:
+        """Split action vector into per-device setpoints."""
+        if isinstance(action, dict):
+            return action  # Already per-device
 
-        Broadcasts price to devices using the Agent mailbox system. Devices can read
-        the price from their mailbox and use it in their local optimization.
+        # Split numpy array based on subordinate action sizes
+        action = np.asarray(action)
+        setpoints = {}
+        offset = 0
 
-        Args:
-            devices: Dictionary of subordinate device agents
-            observation: Current observation from parent
-            action: Action computed by parent (can contain price update)
-        """
-        # Update price from action if provided
-        if action is not None:
-            if isinstance(action, dict):
-                self.price = action.get("price", self.price)
-            elif hasattr(action, "price"):
-                self.price = action.price
-            else:
-                # If action is a scalar, treat it as price
-                try:
-                    self.price = float(action)
-                except (TypeError, ValueError):
-                    pass  # Keep current price if conversion fails
+        for sub_id, subordinate in subordinates.items():
+            if not hasattr(subordinate, 'action'):
+                continue
+            action_size = subordinate.action.dim_c + subordinate.action.dim_d
+            setpoints[sub_id] = action[offset:offset + action_size]
+            offset += action_size
 
-        # Send price message to all devices via mailbox
+        return setpoints
 
-        if not devices:
-            return
 
-        # Create parent/coordinator ID for message sender
-        parent_id = f"price_coordinator"
+class CentralizedActionProtocol(ActionProtocol):
+    """Direct action control - coordinator sets subordinate actions."""
 
-        # Create and send message to each device
-        for device_id, device in devices.items():
-            message = Message(
-                sender=parent_id,
-                content={"price": self.price, "type": "price_signal"},
-                recipient=device_id,
-                timestamp=observation.timestamp if observation else 0.0
-            )
-            device.receive_message(message)
+    def compute_action_coordination(
+        self,
+        coordinator_action: Optional[Any],
+        subordinate_states: Dict[AgentID, Any],
+        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None
+    ) -> Dict[AgentID, Any]:
+        """Decompose coordinator action into subordinate actions."""
+        if coordinator_action is None:
+            return {sub_id: None for sub_id in subordinate_states}
+
+        if isinstance(coordinator_action, dict):
+            return coordinator_action  # Already per-device
+
+        # For array actions, decomposition happens in communication protocol
+        # Here we extract from messages
+        if coordination_messages:
+            actions = {}
+            for sub_id, msg in coordination_messages.items():
+                if "setpoint" in msg:
+                    actions[sub_id] = msg["setpoint"]
+            return actions
+
+        return {sub_id: None for sub_id in subordinate_states}
 
 
 class SetpointProtocol(VerticalProtocol):
-    """Setpoint-based coordination - parent assigns power setpoints."""
+    """Setpoint-based coordination - parent assigns power setpoints.
 
-    def coordinate(
-        self,
-        subordinate_observations: Dict[AgentID, Observation],
-        parent_action: Optional[Any] = None
-    ) -> Dict[AgentID, Dict[str, Any]]:
-        """Distribute setpoints to subordinate agents."""
-        if parent_action is None:
-            return {sub_id: {} for sub_id in subordinate_observations}
+    Communication: Send setpoint assignments (informational)
+    Action: Centralized (coordinator directly controls devices)
 
-        # Distribute setpoints (parent_action should be dict of {sub_id: setpoint})
-        signals = {}
-        for sub_id in subordinate_observations:
-            if sub_id in parent_action:
-                signals[sub_id] = {"setpoint": parent_action[sub_id]}
-            else:
-                signals[sub_id] = {}
-
-        return signals
-
-    def coordinate_action(
-        self,
-        devices: Dict[AgentID, Agent],
-        observation: Observation,
-        action: Optional[Any] = None
-    ) -> None:
-        """Distribute actions (setpoints) directly to devices.
-
-        In centralized setpoint control, the parent computes an action vector
-        that contains setpoints for each device. This method distributes those
-        setpoints to the devices.
-
-        Args:
-            devices: Dictionary of subordinate device agents
-            observation: Current observation from parent (unused)
-            action: Action vector from parent (numpy array or dict)
-        """
-        if action is None:
-            return
-
-        # Convert action to device setpoints
-        device_list = list(devices.values())
-
-        if isinstance(action, dict):
-            # Action is already a dict of {device_id: setpoint}
-            for device_id, setpoint in action.items():
-                if device_id in devices:
-                    devices[device_id].act(
-                        devices[device_id].observation,
-                        upstream_action=setpoint
-                    )
-        else:
-            # Action is a numpy array - split among devices
-            import numpy as np
-            action = np.asarray(action)
-            offset = 0
-            for device in device_list:
-                # Get device action size
-                action_size = device.action.dim_c + device.action.dim_d
-                device_action = action[offset:offset + action_size]
-                device.act(device.observation, upstream_action=device_action)
-                offset += action_size
-
-    def coordinate_message(
-        self,
-        devices: Dict[AgentID, Agent],
-        observation: Observation,
-        action: Optional[Any] = None
-    ) -> None:
-        """Send setpoint assignments as messages to devices via mailbox.
-
-        In setpoint control, the coordinator sends explicit power setpoint commands
-        to each device. This is complementary to coordinate_action which directly
-        applies the actions.
-
-        Args:
-            devices: Dictionary of subordinate device agents
-            observation: Current observation from parent
-            action: Action/setpoints computed by parent
-        """
-        if action is None or not devices:
-            return
-
-        parent_id = "setpoint_coordinator"
-
-        if isinstance(action, dict):
-            # Action is dict of {device_id: setpoint}
-            for device_id, setpoint in action.items():
-                if device_id in devices:
-                    message = Message(
-                        sender=parent_id,
-                        content={"setpoint": setpoint, "type": "setpoint_command"},
-                        recipient=device_id,
-                        timestamp=observation.timestamp if observation else 0.0
-                    )
-                    devices[device_id].receive_message(message)
-        else:
-            # Action is numpy array - send portion to each device
-            action = np.asarray(action)
-            offset = 0
-            device_list = list(devices.values())
-
-            for device in device_list:
-                action_size = device.action.dim_c + device.action.dim_d
-                device_setpoint = action[offset:offset + action_size]
-
-                message = Message(
-                    sender=parent_id,
-                    content={"setpoint": device_setpoint.tolist(), "type": "setpoint_command"},
-                    recipient=device.agent_id,
-                    timestamp=observation.timestamp if observation else 0.0
-                )
-                device.receive_message(message)
-                offset += action_size
-
-
-class CentralizedSetpointProtocol(VerticalProtocol):
-    """Setpoint protocol optimized for centralized control without device observations.
-
-    This protocol distributes actions directly to devices by setting their internal
-    action state, bypassing the observation requirement of the standard SetpointProtocol.
-    This is more efficient for centralized control where the parent agent computes
-    all device setpoints and devices don't need their own observations to act.
+    This protocol works in both centralized and distributed modes:
+    - Centralized: Direct action application via subordinate.act()
+    - Distributed: Actions sent via message broker
     """
 
-    def coordinate(
-        self,
-        subordinate_observations: Dict[AgentID, Observation],
-        parent_action: Optional[Any] = None
-    ) -> Dict[AgentID, Dict[str, Any]]:
-        """Return empty coordination signals (actions set directly)."""
-        return {sub_id: {} for sub_id in subordinate_observations}
+    def __init__(self):
+        super().__init__(
+            communication_protocol=SetpointCommunicationProtocol(),
+            action_protocol=CentralizedActionProtocol()
+        )
 
-    def coordinate_action(
-        self,
-        devices: Dict[AgentID, Agent],
-        observation: Observation,
-        action: Optional[Any] = None
-    ) -> None:
-        """Distribute actions to devices by splitting the action vector.
 
-        Sets device actions directly via _set_device_action to bypass the
-        observation requirement, which is unnecessary in centralized control.
+class CentralizedSetpointProtocol(SetpointProtocol):
+    """Alias for SetpointProtocol for backward compatibility.
 
-        Args:
-            devices: Dictionary of subordinate device agents
-            observation: Current observation from parent (unused)
-            action: Action vector from parent (numpy array)
-        """
-        if action is None:
-            return
+    DEPRECATED: Use SetpointProtocol instead.
+    The unified SetpointProtocol handles both centralized and distributed modes.
+    """
 
-        action = np.asarray(action)
-        offset = 0
-        device_list = list(devices.values())
-
-        for device in device_list:
-            # Get device action size
-            action_size = device.action.dim_c + device.action.dim_d
-            device_action = action[offset:offset + action_size]
-            # Set action directly on the action object
-            if device.action.dim_c > 0:
-                device.action.c = device_action[:device.action.dim_c]
-            if device.action.dim_d > 0:
-                device.action.d = device_action[device.action.dim_c:].astype(np.int32)
-            offset += action_size
+    def __init__(self):
+        import warnings
+        warnings.warn(
+            "CentralizedSetpointProtocol is deprecated. Use SetpointProtocol instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        super().__init__()
 
 
 # =============================================================================
-# HORIZONTAL PROTOCOLS (Environment-owned: Peer ↔ Peer)
+# P2P TRADING PROTOCOL (Horizontal peer coordination)
 # =============================================================================
 
-class HorizontalProtocol(Protocol):
-    """Horizontal coordination protocol for peer-to-peer communication.
-
-    The environment owns and runs horizontal protocols, as they require
-    global view of all agents. Agents participate but don't run the protocol.
-
-    Example:
-        Environment runs PeerToPeerTradingProtocol to enable trading between
-        GridAgents MG1, MG2, and MG3.
-    """
-
-    @abstractmethod
-    def coordinate(
-        self,
-        agents: Dict[AgentID, Agent],
-        observations: Dict[AgentID, Observation],
-        topology: Optional[Dict] = None
-    ) -> Dict[AgentID, Dict[str, Any]]:
-        """Coordinate peer agents (requires global view).
-
-        Args:
-            agents: All participating agents
-            observations: Observations from all agents
-            topology: Optional network topology (e.g., adjacency matrix for trades)
-
-        Returns:
-            Dictionary mapping agent_id to coordination signal
-            Example: {'MG1': {'trades': [...]}, 'MG2': {'trades': [...]}}
-        """
-        pass
-
-    def coordinate_actions(
-        self,
-        agents: Dict[AgentID, Agent],
-        observations: Dict[AgentID, Observation],
-        actions: Dict[AgentID, Any],
-        net: Optional[Any] = None
-    ) -> None:
-        """Coordinate peer agents' actions (default: no-op).
-
-        Horizontal protocols can modify or coordinate actions across peer agents.
-        For example, P2P trading might adjust power setpoints based on trades.
-
-        Args:
-            agents: Dictionary of peer agents
-            observations: Observations from all agents
-            actions: Actions computed by each agent
-            net: Optional network object (e.g., PandaPower network)
-        """
-        pass
-
-
-class NoHorizontalProtocol(HorizontalProtocol):
-    """No peer coordination - agents act independently."""
-
-    def no_op(self) -> bool:
-        """NoHorizontalProtocol is a no-operation protocol."""
-        return True
-
-    def coordinate(
-        self,
-        agents: Dict[AgentID, Agent],
-        observations: Dict[AgentID, Observation],
-        topology: Optional[Dict] = None
-    ) -> Dict[AgentID, Dict[str, Any]]:
-        """Return empty signals for all agents."""
-        return {aid: {} for aid in agents}
-
-
-class PeerToPeerTradingProtocol(HorizontalProtocol):
-    """Peer-to-peer energy trading marketplace.
-
-    Agents submit bids/offers based on their net demand and marginal cost.
-    The environment (acting as market auctioneer) clears the market and
-    sends trade confirmations back to agents.
-
-    Attributes:
-        trading_fee: Transaction fee as fraction of trade price
-    """
+class TradingCommunicationProtocol(CommunicationProtocol):
+    """P2P market coordination messages."""
 
     def __init__(self, trading_fee: float = 0.01):
-        """Initialize P2P trading protocol.
-
-        Args:
-            trading_fee: Transaction fee as fraction of trade price
-        """
         self.trading_fee = trading_fee
 
-    def coordinate(
+    def compute_coordination_messages(
         self,
-        agents: Dict[AgentID, Agent],
-        observations: Dict[AgentID, Observation],
-        topology: Optional[Dict] = None
+        sender_state: Any,  # Not used in horizontal
+        receiver_states: Dict[AgentID, Any],
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[AgentID, Dict[str, Any]]:
-        """Run peer-to-peer market clearing."""
-        # Step 1: Collect bids and offers from all agents
+        """Run market clearing and generate trade confirmations."""
+        # Step 1: Collect bids/offers from receiver_states
         bids = {}
         offers = {}
 
-        for agent_id, obs in observations.items():
-            # Agents should compute these in their observe() method
-            net_demand = obs.local.get('net_demand', 0)
-            marginal_cost = obs.local.get('marginal_cost', 50)
+        for agent_id, state in receiver_states.items():
+            net_demand = state.get('net_demand', 0)
+            marginal_cost = state.get('marginal_cost', 50)
 
             if net_demand > 0:  # Need to buy
                 bids[agent_id] = {
                     'quantity': net_demand,
-                    'max_price': marginal_cost * 1.2  # Willing to pay 20% premium
+                    'max_price': marginal_cost * 1.2
                 }
             elif net_demand < 0:  # Can sell
                 offers[agent_id] = {
                     'quantity': -net_demand,
-                    'min_price': marginal_cost * 0.8  # Willing to sell at 20% discount
+                    'min_price': marginal_cost * 0.8
                 }
 
-        # Step 2: Market clearing
+        # Step 2: Clear market
         trades = self._clear_market(bids, offers)
 
-        # Step 3: Generate trade confirmations
-        signals = {}
-        for buyer, seller, quantity, price in trades:
-            if buyer not in signals:
-                signals[buyer] = {'trades': []}
-            if seller not in signals:
-                signals[seller] = {'trades': []}
+        # Step 3: Generate trade confirmation messages
+        messages = {}
+        for buyer_id, seller_id, quantity, price in trades:
+            if buyer_id not in messages:
+                messages[buyer_id] = {"type": "trade_confirmations", "trades": []}
+            if seller_id not in messages:
+                messages[seller_id] = {"type": "trade_confirmations", "trades": []}
 
-            signals[buyer]['trades'].append({
-                'counterparty': seller,
-                'quantity': quantity,  # Positive = buying
-                'price': price
+            messages[buyer_id]["trades"].append({
+                "counterparty": seller_id,
+                "quantity": quantity,
+                "price": price
             })
-            signals[seller]['trades'].append({
-                'counterparty': buyer,
-                'quantity': -quantity,  # Negative = selling
-                'price': price
+            messages[seller_id]["trades"].append({
+                "counterparty": buyer_id,
+                "quantity": -quantity,
+                "price": price
             })
 
-        return signals
+        return messages
 
     def _clear_market(
         self,
         bids: Dict[AgentID, Dict],
         offers: Dict[AgentID, Dict]
     ) -> List[Tuple[AgentID, AgentID, float, float]]:
-        """Simple market clearing algorithm.
-
-        Args:
-            bids: Dictionary of buyer bids {agent_id: {'quantity', 'max_price'}}
-            offers: Dictionary of seller offers {agent_id: {'quantity', 'min_price'}}
-
-        Returns:
-            List of trades as (buyer_id, seller_id, quantity, price) tuples
-        """
+        """Simple market clearing algorithm."""
         trades = []
 
         # Sort bids (descending by price) and offers (ascending by price)
@@ -604,17 +597,12 @@ class PeerToPeerTradingProtocol(HorizontalProtocol):
             buyer_id, bid = sorted_bids[bid_idx]
             seller_id, offer = sorted_offers[offer_idx]
 
-            # Check if trade is feasible
             if bid['max_price'] >= offer['min_price']:
-                # Trade price: midpoint of bid and offer
                 trade_price = (bid['max_price'] + offer['min_price']) / 2
-
-                # Trade quantity: min of bid and offer
                 trade_qty = min(bid['quantity'], offer['quantity'])
 
                 trades.append((buyer_id, seller_id, trade_qty, trade_price))
 
-                # Update remaining quantities
                 bid['quantity'] -= trade_qty
                 offer['quantity'] -= trade_qty
 
@@ -623,13 +611,165 @@ class PeerToPeerTradingProtocol(HorizontalProtocol):
                 if offer['quantity'] == 0:
                     offer_idx += 1
             else:
-                break  # No more feasible trades
+                break
 
         return trades
 
 
+class TradingActionProtocol(ActionProtocol):
+    """Adjust power setpoints based on trades."""
+
+    def compute_action_coordination(
+        self,
+        coordinator_action: Optional[Any],
+        subordinate_states: Dict[AgentID, Any],
+        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None
+    ) -> Dict[AgentID, Any]:
+        """Compute power adjustments based on cleared trades."""
+        if not coordination_messages:
+            return {sub_id: None for sub_id in subordinate_states}
+
+        # Compute net power change from trades
+        actions = {}
+        for agent_id, message in coordination_messages.items():
+            if "trades" in message:
+                net_trade = sum(t["quantity"] for t in message["trades"])
+                # Action = adjust power setpoint by net trade amount
+                actions[agent_id] = {"power_adjustment": net_trade}
+            else:
+                actions[agent_id] = None
+
+        return actions
+
+
+class PeerToPeerTradingProtocol(HorizontalProtocol):
+    """Peer-to-peer energy trading marketplace.
+
+    Communication: Market clearing and trade confirmations
+    Action: Adjust power setpoints based on trades
+
+    Agents submit bids/offers based on their net demand and marginal cost.
+    The environment (acting as market auctioneer) clears the market and
+    sends trade confirmations back to agents.
+
+    Attributes:
+        trading_fee: Transaction fee as fraction of trade price
+    """
+
+    def __init__(self, trading_fee: float = 0.01):
+        """Initialize P2P trading protocol.
+
+        Args:
+            trading_fee: Transaction fee as fraction of trade price
+        """
+        super().__init__(
+            communication_protocol=TradingCommunicationProtocol(trading_fee),
+            action_protocol=TradingActionProtocol()
+        )
+
+    @property
+    def trading_fee(self):
+        """Get trading fee."""
+        return self.communication_protocol.trading_fee
+
+    @trading_fee.setter
+    def trading_fee(self, value):
+        """Set trading fee."""
+        self.communication_protocol.trading_fee = value
+
+
+# =============================================================================
+# CONSENSUS PROTOCOL (Horizontal peer coordination)
+# =============================================================================
+
+class ConsensusCommunicationProtocol(CommunicationProtocol):
+    """Distributed consensus via gossip algorithm."""
+
+    def __init__(self, max_iterations: int = 10, tolerance: float = 0.01):
+        self.max_iterations = max_iterations
+        self.tolerance = tolerance
+
+    def compute_coordination_messages(
+        self,
+        sender_state: Any,
+        receiver_states: Dict[AgentID, Any],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[AgentID, Dict[str, Any]]:
+        """Run consensus algorithm (gossip) and return consensus values."""
+        context = context or {}
+        topology = context.get("topology")
+
+        # Initialize with local values
+        values = {
+            agent_id: state.get('control_value', 0)
+            for agent_id, state in receiver_states.items()
+        }
+
+        # Build adjacency from topology or use fully connected
+        if topology and 'adjacency' in topology:
+            adjacency = topology['adjacency']
+        else:
+            # Fully connected graph
+            adjacency = {
+                aid: [other for other in receiver_states if other != aid]
+                for aid in receiver_states
+            }
+
+        # Iterative consensus
+        for iteration in range(self.max_iterations):
+            new_values = {}
+
+            for agent_id in receiver_states:
+                # Average with neighbors
+                neighbors = adjacency.get(agent_id, [])
+                neighbor_vals = [values[nid] for nid in neighbors if nid in values]
+
+                if neighbor_vals:
+                    new_values[agent_id] = (
+                        values[agent_id] + sum(neighbor_vals)
+                    ) / (len(neighbor_vals) + 1)
+                else:
+                    new_values[agent_id] = values[agent_id]
+
+            # Check convergence
+            max_change = max(
+                abs(new_values[aid] - values[aid])
+                for aid in receiver_states
+            )
+
+            values = new_values
+
+            if max_change < self.tolerance:
+                break
+
+        # Return consensus values as messages
+        return {
+            agent_id: {
+                "type": "consensus_value",
+                "consensus_value": values[agent_id]
+            }
+            for agent_id in receiver_states
+        }
+
+
+class ConsensusActionProtocol(ActionProtocol):
+    """No direct action control for consensus - agents use consensus values."""
+
+    def compute_action_coordination(
+        self,
+        coordinator_action: Optional[Any],
+        subordinate_states: Dict[AgentID, Any],
+        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None
+    ) -> Dict[AgentID, Any]:
+        """Return None - agents use consensus values in their own policies."""
+        return {sub_id: None for sub_id in subordinate_states}
+
+
 class ConsensusProtocol(HorizontalProtocol):
     """Distributed consensus via gossip algorithm.
+
+    Communication: Iterative averaging until convergence
+    Action: None (agents use consensus values independently)
 
     Agents iteratively average their values with neighbors until convergence.
     Useful for coordinated frequency regulation or voltage control.
@@ -646,61 +786,37 @@ class ConsensusProtocol(HorizontalProtocol):
             max_iterations: Maximum gossip iterations
             tolerance: Convergence threshold
         """
-        self.max_iterations = max_iterations
-        self.tolerance = tolerance
+        super().__init__(
+            communication_protocol=ConsensusCommunicationProtocol(max_iterations, tolerance),
+            action_protocol=ConsensusActionProtocol()
+        )
 
-    def coordinate(
-        self,
-        agents: Dict[AgentID, Agent],
-        observations: Dict[AgentID, Observation],
-        topology: Optional[Dict] = None
-    ) -> Dict[AgentID, Dict[str, Any]]:
-        """Run consensus algorithm (gossip)."""
-        # Initialize with local values
-        values = {
-            agent_id: obs.local.get('control_value', 0)
-            for agent_id, obs in observations.items()
-        }
+    @property
+    def max_iterations(self):
+        """Get max iterations."""
+        return self.communication_protocol.max_iterations
 
-        # Build adjacency from topology or use fully connected
-        if topology and 'adjacency' in topology:
-            adjacency = topology['adjacency']
-        else:
-            # Fully connected graph
-            adjacency = {
-                aid: [other for other in agents if other != aid]
-                for aid in agents
-            }
+    @max_iterations.setter
+    def max_iterations(self, value):
+        """Set max iterations."""
+        self.communication_protocol.max_iterations = value
 
-        # Iterative consensus
-        for iteration in range(self.max_iterations):
-            new_values = {}
+    @property
+    def tolerance(self):
+        """Get tolerance."""
+        return self.communication_protocol.tolerance
 
-            for agent_id in agents:
-                # Average with neighbors
-                neighbors = adjacency.get(agent_id, [])
-                neighbor_vals = [values[nid] for nid in neighbors if nid in values]
+    @tolerance.setter
+    def tolerance(self, value):
+        """Set tolerance."""
+        self.communication_protocol.tolerance = value
 
-                if neighbor_vals:
-                    new_values[agent_id] = (
-                        values[agent_id] + sum(neighbor_vals)
-                    ) / (len(neighbor_vals) + 1)
-                else:
-                    new_values[agent_id] = values[agent_id]
 
-            # Check convergence
-            max_change = max(
-                abs(new_values[aid] - values[aid])
-                for aid in agents
-            )
+class NoHorizontalProtocol(HorizontalProtocol):
+    """No peer coordination - agents act independently."""
 
-            values = new_values
-
-            if max_change < self.tolerance:
-                break
-
-        # Return consensus values
-        return {
-            agent_id: {'consensus_value': values[agent_id]}
-            for agent_id in agents
-        }
+    def __init__(self):
+        super().__init__(
+            communication_protocol=NoCommunication(),
+            action_protocol=NoActionCoordination()
+        )

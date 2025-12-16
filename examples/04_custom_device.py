@@ -29,7 +29,7 @@ from typing import Any, Dict, Optional
 from powergrid.agents.device_agent import DeviceAgent
 from powergrid.agents.grid_agent import PowerGridAgent
 from powergrid.core.policies import Policy
-from powergrid.core.protocols import CentralizedSetpointProtocol, NoProtocol, Protocol
+from powergrid.core.protocols import SetpointProtocol, NoProtocol, Protocol
 from powergrid.core.state import DeviceState
 from powergrid.utils.phase import PhaseModel
 from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
@@ -391,7 +391,7 @@ class CustomDeviceEnv(NetworkedGridEnv):
             upstream_id=self._name,  # Environment is the upstream in distributed mode
             env_id=self._env_id,
             grid_config=grid_config,
-            protocol=CentralizedSetpointProtocol(),
+            protocol=SetpointProtocol(),
         )
 
         # Now manually add our custom solar panel device

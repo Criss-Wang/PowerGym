@@ -9,7 +9,7 @@ from typing import Dict, List
 import pandapower as pp
 
 from powergrid.agents.grid_agent import PowerGridAgent
-from powergrid.core.protocols import CentralizedSetpointProtocol
+from powergrid.core.protocols import SetpointProtocol
 from powergrid.data.data_loader import load_dataset
 from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
 from powergrid.networks.ieee13 import IEEE13Bus
@@ -92,7 +92,7 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
         """Build microgrid agent from config."""
         # Initialize protocol and policy
         # TODO: Make protocol configurable
-        protocol = CentralizedSetpointProtocol()
+        protocol = SetpointProtocol()
         policy = None
         
         # Create microgrid net

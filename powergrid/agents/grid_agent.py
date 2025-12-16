@@ -174,7 +174,7 @@ class GridAgent(Agent):
             upstream_action: Pre-computed action (if any)
 
         Raises:
-            NotImplementedError: If using decentralized mode (not yet implemented)
+            RuntimeError: If no action or policy is provided
         """
         # Get coordinator action from policy if available
         if upstream_action is not None:
@@ -184,7 +184,8 @@ class GridAgent(Agent):
         else:
             raise RuntimeError("No action or policy provided for GridAgent.")
 
-        self.coordinate_device(observation, action)
+        # Coordinate devices using new unified method
+        self.coordinate_devices(observation, action)
     
     # ============================================
     # Abstract Methods for Hierarchical Execution
@@ -326,15 +327,49 @@ class GridAgent(Agent):
     # Coordination Methods
     # ============================================
 
-    def coordinate_device(self, observation: Observation, action: Any) -> None:
-        """Coordinate device actions using the protocol.
+    def coordinate_devices(
+        self,
+        observation: Observation,
+        action: Any,
+        mode: Optional[str] = None
+    ) -> None:
+        """Unified coordination method for both execution modes.
+
+        Coordinates device actions using the protocol's communication and
+        action components. Handles both centralized and distributed modes.
 
         Args:
             observation: Current observation
             action: Computed action from coordinator
+            mode: Execution mode ("centralized" or "distributed").
+                  If None, auto-detected from message_broker presence.
         """
-        self.protocol.coordinate_action(self.devices, observation, action)
-        self.protocol.coordinate_message(self.devices, observation, action)
+        # Determine mode
+        if mode is None:
+            mode = "distributed" if self.message_broker else "centralized"
+
+        # Prepare subordinate states from device observations
+        device_obs = observation.local.get("device_obs", {})
+        subordinate_states = {
+            dev_id: obs.local for dev_id, obs in device_obs.items()
+        }
+
+        # Prepare context for protocol
+        context = {
+            "subordinates": self.devices,
+            "coordinator_id": self.agent_id,
+            "coordinator_action": action,
+            "timestamp": observation.timestamp,
+        }
+
+        # Execute unified coordination (communication + action)
+        self.protocol.coordinate(
+            coordinator_state=observation.local,
+            subordinate_states=subordinate_states,
+            coordinator_action=action,
+            mode=mode,
+            context=context
+        )
 
     def get_device_actions(
         self,

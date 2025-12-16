@@ -8,7 +8,7 @@ containing multiple devices controlled by a centralized GridAgent.
 What you'll learn:
 - Creating device agents (Generator, ESS, Grid connection)
 - Building a GridAgent to coordinate devices
-- Using CentralizedSetpointProtocol for direct control
+- Using SetpointProtocol for direct control
 - Creating a simple PettingZoo environment
 - Running a simulation loop with random actions
 
@@ -25,7 +25,7 @@ import pandapower as pp
 from pettingzoo import ParallelEnv
 
 from powergrid.agents.grid_agent import PowerGridAgent
-from powergrid.core.protocols import CentralizedSetpointProtocol
+from powergrid.core.protocols import SetpointProtocol
 from powergrid.devices.generator import Generator
 # Note: Grid device not used in this example (implementation incomplete)
 from powergrid.devices.storage import ESS
@@ -85,7 +85,7 @@ class SingleMicrogridEnv(NetworkedGridEnv):
                     },
                 ],
             },
-            protocol=CentralizedSetpointProtocol(),
+            protocol=SetpointProtocol(),
         )
 
         # Add dataset (simple synthetic data)
@@ -153,7 +153,7 @@ def main():
         "max_episode_steps": 24,  # 24-hour simulation
         "train": True,
         "centralized": True,  # Use centralized execution mode
-        "protocol": CentralizedSetpointProtocol(),  # No horizontal protocol needed
+        "protocol": SetpointProtocol(),  # No horizontal protocol needed
     }
 
     print("\n[1] Creating environment...")
