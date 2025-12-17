@@ -123,7 +123,7 @@ class GridAgent(Agent):
             self.policy.reset()
 
     def observe(self, global_state: Optional[DictType[str, Any]] = None, *args, **kwargs) -> Observation:
-        """Collect observations from device agents.
+        """Collect observations from device agents. [Only for synchronous direct execution]
 
         Args:
             global_state: Environment state
@@ -151,7 +151,7 @@ class GridAgent(Agent):
         )
 
     def _build_local_observation(self, device_obs: DictType[AgentID, Observation], *args, **kwargs) -> Any:
-        """Build local observation from device observations.
+        """Build local observation from device observations. 
 
         Args:
             device_obs: Dictionary mapping device IDs to their observations
@@ -167,7 +167,7 @@ class GridAgent(Agent):
         }
 
     def act(self, observation: Observation, upstream_action: Any = None) -> None:
-        """Compute coordination action and distribute to devices.
+        """Compute coordination action and distribute to devices. [Only for synchronous direct execution]
 
         Args:
             observation: Aggregated observation
@@ -331,22 +331,16 @@ class GridAgent(Agent):
         self,
         observation: Observation,
         action: Any,
-        mode: Optional[str] = None
     ) -> None:
         """Unified coordination method for both execution modes.
 
         Coordinates device actions using the protocol's communication and
-        action components. Handles both centralized and distributed modes.
+        action components. Handles only centralized execution.
 
         Args:
             observation: Current observation
             action: Computed action from coordinator
-            mode: Execution mode ("centralized" or "distributed").
-                  If None, auto-detected from message_broker presence.
         """
-        # Determine mode
-        if mode is None:
-            mode = "distributed" if self.message_broker else "centralized"
 
         # Prepare subordinate states from device observations
         device_obs = observation.local.get("device_obs", {})
@@ -363,13 +357,15 @@ class GridAgent(Agent):
         }
 
         # Execute unified coordination (communication + action)
-        self.protocol.coordinate(
+        messages, actions = self.protocol.coordinate(
             coordinator_state=observation.local,
             subordinate_states=subordinate_states,
             coordinator_action=action,
-            mode=mode,
             context=context
         )
+
+        # TODO: Send message & action to respective subordinates + neighbours
+
 
     def get_device_actions(
         self,

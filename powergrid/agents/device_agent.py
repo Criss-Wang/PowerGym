@@ -169,7 +169,6 @@ class DeviceAgent(Agent):
         # Observe other agents' states via a communication protocol
         if self.protocol.communication_protocol:
             for other_device in self.protocol.communication_protocol.neighbors:
-                assert isinstance(other_device, DeviceAgent)
                 other_device_obs_dict = other_device.state.observed_by(self.agent_id, self.level)
                 other_device_obs = np.concatenate(
                     list(other_device_obs_dict.values()), dtype=np.float32

@@ -11,7 +11,7 @@ Protocol Architecture:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 import numpy as np
 
@@ -30,6 +30,7 @@ class CommunicationProtocol(ABC):
     agents exchange coordination signals (prices, bids, consensus values, etc.).
     This is the "coordination signal computation" layer.
     """
+    neighbors: Set[Agent] # a list of neighboring agents that are reachable
 
     @abstractmethod
     def compute_coordination_messages(
@@ -53,43 +54,12 @@ class CommunicationProtocol(ABC):
         """
         pass
 
-    def deliver_messages(
-        self,
-        messages: Dict[AgentID, Dict[str, Any]],
-        receivers: Dict[AgentID, Agent],
-        sender_id: AgentID,
-        timestamp: float,
-        mode: str = "centralized"
-    ) -> None:
-        """Deliver computed messages to receivers.
+    def add_neighbor(self, agent: Agent):
+        self.neighbors.add(agent)
 
-        Handles mode-specific delivery:
-        - Centralized: Direct mailbox delivery
-        - Distributed: Via message broker (handled by agent's async methods)
+    def init_neighbors(self, neighbors: List[Agent]):
+        self.neighbors = neighbors
 
-        Args:
-            messages: Messages computed by compute_coordination_messages()
-            receivers: Target agents
-            sender_id: ID of coordinating agent
-            timestamp: Current timestamp
-            mode: "centralized" or "distributed"
-        """
-        for receiver_id, content in messages.items():
-            if receiver_id not in receivers or not content:
-                continue
-
-            receiver = receivers[receiver_id]
-            message = Message(
-                env_id="",  # Environment-agnostic for protocol messages
-                sender_id=sender_id,
-                recipient_id=receiver_id,
-                timestamp=timestamp,
-                message_type=MessageType.INFO,
-                payload=content
-            )
-
-            # Both modes use mailbox - distributed mode agents check mailbox async
-            receiver.receive_message(message)
 
 
 class ActionProtocol(ABC):
@@ -122,32 +92,7 @@ class ActionProtocol(ABC):
         """
         pass
 
-    def apply_actions(
-        self,
-        actions: Dict[AgentID, Any],
-        subordinates: Dict[AgentID, Agent],
-        mode: str = "centralized"
-    ) -> None:
-        """Apply coordinated actions to subordinates.
-
-        Handles mode-specific application:
-        - Centralized: Direct action setting via subordinate.act()
-        - Distributed: Actions sent via message broker (environment handles this)
-
-        Args:
-            actions: Actions computed by compute_action_coordination()
-            subordinates: Target agents
-            mode: "centralized" or "distributed"
-        """
-        if mode == "centralized":
-            # Centralized: directly call subordinate.act()
-            for sub_id, action in actions.items():
-                if sub_id not in subordinates or action is None:
-                    continue
-                subordinate = subordinates[sub_id]
-                subordinate.act(subordinate.observation, upstream_action=action)
-        # In distributed mode, environment handles action delivery via messages
-
+ 
 
 # =============================================================================
 # PROTOCOL: Composition of Communication + Action
@@ -185,7 +130,6 @@ class Protocol(ABC):
         coordinator_state: Any,
         subordinate_states: Dict[AgentID, Any],
         coordinator_action: Optional[Any] = None,
-        mode: str = "centralized",
         context: Optional[Dict[str, Any]] = None
     ) -> None:
         """Execute full coordination cycle.
@@ -198,13 +142,9 @@ class Protocol(ABC):
             coordinator_state: State of coordinating agent
             subordinate_states: States of subordinate agents
             coordinator_action: Action from coordinator policy (if any)
-            mode: "centralized" or "distributed"
             context: Additional context (subordinates dict, timestamp, etc.)
         """
         context = context or {}
-        subordinates = context.get("subordinates", {})
-        timestamp = context.get("timestamp", 0.0)
-        coordinator_id = context.get("coordinator_id", "coordinator")
 
         # Enrich context with coordinator_action
         context_with_action = {**context, "coordinator_action": coordinator_action}
@@ -216,26 +156,13 @@ class Protocol(ABC):
             context=context_with_action
         )
 
-        self.communication_protocol.deliver_messages(
-            messages=messages,
-            receivers=subordinates,
-            sender_id=coordinator_id,
-            timestamp=timestamp,
-            mode=mode
-        )
-
         # Step 2: Action coordination
         actions = self.action_protocol.compute_action_coordination(
             coordinator_action=coordinator_action,
             subordinate_states=subordinate_states,
             coordination_messages=messages
         )
-
-        self.action_protocol.apply_actions(
-            actions=actions,
-            subordinates=subordinates,
-            mode=mode
-        )
+        return messages, actions
 
 
 # =============================================================================
