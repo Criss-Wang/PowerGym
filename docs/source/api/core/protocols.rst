@@ -20,14 +20,19 @@ Design Philosophy
 **Separation of Concerns:**
 
 - **Protocols**: Define *how* to coordinate (the mechanism)
+
+  - **CommunicationProtocol**: Defines coordination messages (WHAT to communicate)
+  - **ActionProtocol**: Defines action coordination (HOW to coordinate actions)
+
 - **Policies**: Define *what* to coordinate (the strategy)
 - **Agents**: Execute coordination and actions
 
 **Key Benefits:**
 
+- Composable: Mix communication strategies with action strategies
+- Mode-agnostic: Works in both centralized and distributed execution
 - Plug-and-play: Swap protocols without changing agent code
-- Composable: Combine vertical and horizontal protocols
-- Testable: Protocols are independent, unit-testable components
+- Testable: Communication and action protocols are independently testable
 
 Architecture
 ~~~~~~~~~~~~
@@ -77,17 +82,27 @@ Execution Flow
 
 .. code-block:: python
 
-   # During environment step:
-   for grid_agent in agents:
-       # 1. Collect subordinate observations
-       sub_obs = {sub_id: sub.observe(global_state) for sub_id, sub in subordinates}
+   # During GridAgent.act():
+   def act(self, observation, upstream_action=None):
+       # 1. Get coordinator action from policy
+       action = self.policy.forward(observation) if self.policy else upstream_action
 
-       # 2. Run vertical protocol
-       signals = grid_agent.vertical_protocol.coordinate(sub_obs, parent_action)
+       # 2. Prepare subordinate states
+       device_obs = observation.local.get("device_obs", {})
+       subordinate_states = {dev_id: obs.local for dev_id, obs in device_obs.items()}
 
-       # 3. Send signals to subordinates
-       for sub_id, signal in signals.items():
-           subordinates[sub_id].receive_message(Message(content=signal))
+       # 3. Execute unified coordination (communication + action)
+       self.protocol.coordinate(
+           coordinator_state=observation.local,
+           subordinate_states=subordinate_states,
+           coordinator_action=action,
+           mode="centralized",  # or "distributed"
+           context={
+               "subordinates": self.devices,
+               "coordinator_id": self.agent_id,
+               "timestamp": observation.timestamp
+           }
+       )
 
 Built-in Vertical Protocols
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -97,22 +112,25 @@ NoProtocol
 
 **Use Case:** Independent device operation (baseline)
 
-**How it works:** Returns empty signals for all subordinates
+**How it works:** No coordination - devices act independently
+
+**Composition:**
+- Communication: NoCommunication (no messages)
+- Action: NoActionCoordination (no action decomposition)
 
 **Example:**
 
 .. code-block:: python
 
-   from powergrid.agents.protocols import NoProtocol
+   from powergrid.core.protocols import NoProtocol
 
    protocol = NoProtocol()
-   signals = protocol.coordinate(subordinate_observations, parent_action=None)
-   # → {'ESS1': {}, 'DG1': {}, 'PV1': {}}
+   # No messages sent, no actions coordinated
 
 **When to use:**
 
 - Benchmarking (compare against coordinated control)
-- Fully learned control (policy directly outputs device actions)
+- Fully decentralized control (each device has its own policy)
 
 PriceSignalProtocol
 ^^^^^^^^^^^^^^^^^^^
@@ -121,10 +139,14 @@ PriceSignalProtocol
 
 **How it works:**
 
-1. GridAgent broadcasts an electricity price ($/MWh)
+1. GridAgent broadcasts an electricity price ($/MWh) via messages
 2. Devices optimize locally to maximize profit at that price
 3. ESS charges when price is low, discharges when high
 4. DG generates more when price is high
+
+**Composition:**
+- Communication: PriceCommunicationProtocol (broadcasts price messages)
+- Action: DecentralizedActionProtocol (devices act independently)
 
 **Parameters:**
 
@@ -134,15 +156,20 @@ PriceSignalProtocol
 
 .. code-block:: python
 
-   from powergrid.agents.protocols import PriceSignalProtocol
+   from powergrid.core.protocols import PriceSignalProtocol
+   from powergrid.agents.grid_agent import PowerGridAgent
 
    protocol = PriceSignalProtocol(initial_price=50.0)
 
-   # Parent action: new price from learned policy
-   parent_action = 65.0  # $/MWh
+   agent = PowerGridAgent(
+       agent_id='MG1',
+       protocol=protocol,
+       ...
+   )
 
-   signals = protocol.coordinate(subordinate_obs, parent_action)
-   # → {'ESS1': {'price': 65.0}, 'DG1': {'price': 65.0}, 'PV1': {'price': 65.0}}
+   # Coordinator action: new price from learned policy
+   # Protocol broadcasts price to all devices via messages
+   agent.act(observation, upstream_action=65.0)
 
 **Implementation Details:**
 
@@ -150,31 +177,25 @@ PriceSignalProtocol
 
    class PriceSignalProtocol(VerticalProtocol):
        def __init__(self, initial_price: float = 50.0):
-           self.price = initial_price
+           super().__init__(
+               communication_protocol=PriceCommunicationProtocol(initial_price),
+               action_protocol=DecentralizedActionProtocol()
+           )
 
-       def coordinate(self, subordinate_observations, parent_action=None):
-           # Update price from parent action
-           if parent_action is not None:
-               if isinstance(parent_action, dict):
-                   self.price = parent_action.get("price", self.price)
-               else:
-                   self.price = float(parent_action)
-
-           # Broadcast to all subordinates
-           return {
-               sub_id: {"price": self.price}
-               for sub_id in subordinate_observations
-           }
+       @property
+       def price(self):
+           return self.communication_protocol.price
 
 **Advantages:**
 
 - Simple, interpretable
-- Devices can use local optimization (fast)
+- Devices act independently (decentralized)
 - Aligns incentives (price = marginal value)
+- Works in both centralized and distributed modes
 
 **Disadvantages:**
 
-- Requires price-responsive device models
+- Requires price-responsive device policies
 - May not satisfy hard constraints
 
 SetpointProtocol
@@ -185,37 +206,65 @@ SetpointProtocol
 **How it works:**
 
 1. GridAgent computes power setpoints for each device
-2. Devices track their assigned setpoints
-3. Useful for model-predictive control (MPC)
+2. Protocol decomposes action into per-device setpoints
+3. Devices directly execute their assigned setpoints
+4. Useful for model-predictive control (MPC)
+
+**Composition:**
+- Communication: SetpointCommunicationProtocol (sends setpoint messages)
+- Action: CentralizedActionProtocol (directly applies device actions)
 
 **Example:**
 
 .. code-block:: python
 
-   from powergrid.agents.protocols import SetpointProtocol
+   from powergrid.core.protocols import SetpointProtocol
+   from powergrid.agents.grid_agent import PowerGridAgent
 
    protocol = SetpointProtocol()
 
-   # Parent action: dict of setpoints
+   agent = PowerGridAgent(
+       agent_id='MG1',
+       protocol=protocol,
+       ...
+   )
+
+   # Coordinator action: dict of per-device setpoints
    parent_action = {
-       'ESS1': 0.3,   # Charge at 0.3 MW
-       'DG1': 0.5,    # Generate 0.5 MW
-       'PV1': 0.1     # Solar at 0.1 MW
+       'ESS1': np.array([0.3]),   # Charge at 0.3 MW
+       'DG1': np.array([0.5]),    # Generate 0.5 MW
+       'PV1': np.array([0.1])     # Solar at 0.1 MW
    }
 
-   signals = protocol.coordinate(subordinate_obs, parent_action)
-   # → {'ESS1': {'setpoint': 0.3}, 'DG1': {'setpoint': 0.5}, 'PV1': {'setpoint': 0.1}}
+   # Or flat array (auto-decomposed by protocol)
+   parent_action = np.array([0.3, 0.5, 0.1])
+
+   agent.act(observation, upstream_action=parent_action)
+
+**Implementation Details:**
+
+.. code-block:: python
+
+   class SetpointProtocol(VerticalProtocol):
+       def __init__(self):
+           super().__init__(
+               communication_protocol=SetpointCommunicationProtocol(),
+               action_protocol=CentralizedActionProtocol()
+           )
 
 **Advantages:**
 
 - Full control over device outputs
 - Can enforce hard constraints
 - Compatible with MPC, optimization-based control
+- Works in both centralized and distributed modes
 
 **Disadvantages:**
 
-- Requires accurate device models
 - High-dimensional action space (one setpoint per device)
+- Less flexible than decentralized coordination
+
+**Note:** ``CentralizedSetpointProtocol`` is now deprecated - use ``SetpointProtocol`` instead.
 
 Horizontal Protocols
 --------------------

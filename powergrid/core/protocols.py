@@ -15,7 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from powergrid.agents.base import Agent, AgentID, Message
+from powergrid.agents.base import Agent, AgentID
+from powergrid.messaging.base import Message, MessageType
 
 
 # =============================================================================
@@ -79,10 +80,12 @@ class CommunicationProtocol(ABC):
 
             receiver = receivers[receiver_id]
             message = Message(
-                sender=sender_id,
-                recipient=receiver_id,
-                content=content,
-                timestamp=timestamp
+                env_id="",  # Environment-agnostic for protocol messages
+                sender_id=sender_id,
+                recipient_id=receiver_id,
+                timestamp=timestamp,
+                message_type=MessageType.INFO,
+                payload=content
             )
 
             # Both modes use mailbox - distributed mode agents check mailbox async
@@ -458,21 +461,21 @@ class CentralizedActionProtocol(ActionProtocol):
         coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None
     ) -> Dict[AgentID, Any]:
         """Decompose coordinator action into subordinate actions."""
-        if coordinator_action is None:
-            return {sub_id: None for sub_id in subordinate_states}
-
+        # If coordinator_action is a dict, use it directly
         if isinstance(coordinator_action, dict):
             return coordinator_action  # Already per-device
 
-        # For array actions, decomposition happens in communication protocol
-        # Here we extract from messages
+        # For array actions or None, extract from coordination messages (setpoints)
         if coordination_messages:
             actions = {}
             for sub_id, msg in coordination_messages.items():
                 if "setpoint" in msg:
                     actions[sub_id] = msg["setpoint"]
+                else:
+                    actions[sub_id] = None
             return actions
 
+        # No action available
         return {sub_id: None for sub_id in subordinate_states}
 
 
