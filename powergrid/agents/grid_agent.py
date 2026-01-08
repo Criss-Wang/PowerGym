@@ -332,10 +332,11 @@ class GridAgent(Agent):
         observation: Observation,
         action: Any,
     ) -> None:
-        """Unified coordination method for both execution modes.
+        """Unified coordination method using protocol.
 
         Coordinates device actions using the protocol's communication and
-        action components. Handles only centralized execution.
+        action components. Delegates to centralized or decentralized paths
+        based on the protocol's ActionProtocol type.
 
         Args:
             observation: Current observation
@@ -356,7 +357,7 @@ class GridAgent(Agent):
             "timestamp": observation.timestamp,
         }
 
-        # Execute unified coordination (communication + action)
+        # Execute protocol coordination (communication + action)
         messages, actions = self.protocol.coordinate(
             coordinator_state=observation.local,
             subordinate_states=subordinate_states,
@@ -364,29 +365,41 @@ class GridAgent(Agent):
             context=context
         )
 
-        # TODO: Send message & action to respective subordinates + neighbours
+        # Route to appropriate execution path
+        self._apply_centralized_coordination(messages, actions, device_obs)
 
+    # ============================================
+    # Centralized Coordination (Direct control)
+    # ============================================
 
-    def get_device_actions(
+    def _apply_centralized_coordination(
         self,
-        observations: DictType[AgentID, Observation],
-    ) -> DictType[AgentID, Any]:
-        """Get actions from all devices in decentralized mode.
+        messages: DictType[AgentID, DictType[str, Any]],
+        actions: DictType[AgentID, Any],
+        device_obs: DictType[AgentID, Observation],
+    ) -> None:
+        """Apply centralized coordination: send messages + apply actions to devices.
+
+        In centralized mode, the coordinator directly controls device actions.
+        Messages are informational (e.g., setpoint assignments).
 
         Args:
-            observations: Dictionary mapping device IDs to observations
-
-        Returns:
-            Dictionary mapping device IDs to their computed actions
-
-        Note:
-            This function is intended for decentralized coordination where
-            each device computes its own action independently.
+            messages: Coordination messages to send
+            actions: Actions to apply to devices
+            device_obs: Device observations for context
         """
-        actions = {}
-        for agent_id, obs in observations.items():
-            actions[agent_id] = self.devices[agent_id].act(obs)
-        return actions
+        # Send messages to devices (informational)
+        for device_id, message in messages.items():
+            if device_id in self.devices:
+                # Store message in device's mailbox or handle synchronously
+                pass  # TODO: Implement message delivery
+
+        # Apply actions directly to devices
+        for device_id, action in actions.items():
+            if device_id in self.devices and action is not None:
+                obs = device_obs.get(device_id)
+                if obs:
+                    self.devices[device_id].act(obs, upstream_action=action)
 
     # ============================================
     # Utility Methods

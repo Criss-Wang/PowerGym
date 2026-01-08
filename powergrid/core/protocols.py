@@ -237,93 +237,10 @@ class NoProtocol(VerticalProtocol):
 
 
 # =============================================================================
-# PRICE SIGNAL PROTOCOL (Decentralized coordination via price messages)
+# CENTRALIZED VERTICAL PROTOCOLS (Direct action control)
 # =============================================================================
 
-class PriceCommunicationProtocol(CommunicationProtocol):
-    """Broadcasts price signals to subordinates."""
-
-    def __init__(self, initial_price: float = 50.0):
-        self.price = initial_price
-
-    def compute_coordination_messages(
-        self,
-        sender_state: Any,
-        receiver_states: Dict[AgentID, Any],
-        context: Optional[Dict[str, Any]] = None
-    ) -> Dict[AgentID, Dict[str, Any]]:
-        """Compute price messages to broadcast."""
-        context = context or {}
-
-        # Extract price from coordinator action if available
-        coordinator_action = context.get("coordinator_action")
-        if coordinator_action is not None:
-            if isinstance(coordinator_action, dict):
-                self.price = coordinator_action.get("price", self.price)
-            else:
-                try:
-                    self.price = float(coordinator_action)
-                except (TypeError, ValueError):
-                    pass  # Keep current price
-
-        # Broadcast same price to all subordinates
-        return {
-            receiver_id: {
-                "type": "price_signal",
-                "price": self.price
-            }
-            for receiver_id in receiver_states
-        }
-
-
-class DecentralizedActionProtocol(ActionProtocol):
-    """No direct action control - devices act independently based on messages."""
-
-    def compute_action_coordination(
-        self,
-        coordinator_action: Optional[Any],
-        subordinate_states: Dict[AgentID, Any],
-        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None
-    ) -> Dict[AgentID, Any]:
-        """Return empty actions - devices decide independently."""
-        return {sub_id: None for sub_id in subordinate_states}
-
-
-class PriceSignalProtocol(VerticalProtocol):
-    """Price-based coordination via marginal price signals.
-
-    Communication: Broadcast price signals
-    Action: Decentralized (devices respond to prices independently)
-
-    Attributes:
-        price: Current electricity price ($/MWh)
-    """
-
-    def __init__(self, initial_price: float = 50.0):
-        """Initialize price signal protocol.
-
-        Args:
-            initial_price: Initial electricity price ($/MWh)
-        """
-        super().__init__(
-            communication_protocol=PriceCommunicationProtocol(initial_price),
-            action_protocol=DecentralizedActionProtocol()
-        )
-
-    @property
-    def price(self):
-        """Get current price."""
-        return self.communication_protocol.price
-
-    @price.setter
-    def price(self, value):
-        """Set current price."""
-        self.communication_protocol.price = value
-
-
-# =============================================================================
 # SETPOINT PROTOCOL (Centralized control via direct action assignment)
-# =============================================================================
 
 class SetpointCommunicationProtocol(CommunicationProtocol):
     """Sends setpoint assignments as informational messages."""
@@ -442,8 +359,97 @@ class CentralizedSetpointProtocol(SetpointProtocol):
 
 
 # =============================================================================
-# P2P TRADING PROTOCOL (Horizontal peer coordination)
+# DECENTRALIZED VERTICAL PROTOCOLS (Indirect coordination via signals)
 # =============================================================================
+
+# PRICE SIGNAL PROTOCOL (Decentralized coordination via price messages)
+
+class PriceCommunicationProtocol(CommunicationProtocol):
+    """Broadcasts price signals to subordinates."""
+
+    def __init__(self, initial_price: float = 50.0):
+        self.price = initial_price
+
+    def compute_coordination_messages(
+        self,
+        sender_state: Any,
+        receiver_states: Dict[AgentID, Any],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[AgentID, Dict[str, Any]]:
+        """Compute price messages to broadcast."""
+        context = context or {}
+
+        # Extract price from coordinator action if available
+        coordinator_action = context.get("coordinator_action")
+        if coordinator_action is not None:
+            if isinstance(coordinator_action, dict):
+                self.price = coordinator_action.get("price", self.price)
+            else:
+                try:
+                    self.price = float(coordinator_action)
+                except (TypeError, ValueError):
+                    pass  # Keep current price
+
+        # Broadcast same price to all subordinates
+        return {
+            receiver_id: {
+                "type": "price_signal",
+                "price": self.price
+            }
+            for receiver_id in receiver_states
+        }
+
+
+class DecentralizedActionProtocol(ActionProtocol):
+    """No direct action control - devices act independently based on messages."""
+
+    def compute_action_coordination(
+        self,
+        coordinator_action: Optional[Any],
+        subordinate_states: Dict[AgentID, Any],
+        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None
+    ) -> Dict[AgentID, Any]:
+        """Return empty actions - devices decide independently."""
+        return {sub_id: None for sub_id in subordinate_states}
+
+
+class PriceSignalProtocol(VerticalProtocol):
+    """Price-based coordination via marginal price signals.
+
+    Communication: Broadcast price signals
+    Action: Decentralized (devices respond to prices independently)
+
+    Attributes:
+        price: Current electricity price ($/MWh)
+    """
+
+    def __init__(self, initial_price: float = 50.0):
+        """Initialize price signal protocol.
+
+        Args:
+            initial_price: Initial electricity price ($/MWh)
+        """
+        super().__init__(
+            communication_protocol=PriceCommunicationProtocol(initial_price),
+            action_protocol=DecentralizedActionProtocol()
+        )
+
+    @property
+    def price(self):
+        """Get current price."""
+        return self.communication_protocol.price
+
+    @price.setter
+    def price(self, value):
+        """Set current price."""
+        self.communication_protocol.price = value
+
+
+# =============================================================================
+# HORIZONTAL PROTOCOLS (Peer-to-peer coordination)
+# =============================================================================
+
+# P2P TRADING PROTOCOL (Horizontal peer coordination)
 
 class TradingCommunicationProtocol(CommunicationProtocol):
     """P2P market coordination messages."""
@@ -608,9 +614,7 @@ class PeerToPeerTradingProtocol(HorizontalProtocol):
         self.communication_protocol.trading_fee = value
 
 
-# =============================================================================
 # CONSENSUS PROTOCOL (Horizontal peer coordination)
-# =============================================================================
 
 class ConsensusCommunicationProtocol(CommunicationProtocol):
     """Distributed consensus via gossip algorithm."""
