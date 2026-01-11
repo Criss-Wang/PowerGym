@@ -38,7 +38,7 @@ import numpy as np
 import pandapower as pp
 
 from powergrid.agents.grid_agent import PowerGridAgent
-from powergrid.core.protocols import CentralizedSetpointProtocol, PeerToPeerTradingProtocol
+from powergrid.core.protocols import SetpointProtocol, PeerToPeerTradingProtocol
 from powergrid.devices.generator import Generator
 from powergrid.devices.storage import ESS
 from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
@@ -144,7 +144,7 @@ class MultiMicrogridP2PEnv(NetworkedGridEnv):
                         },
                     ],
                 },
-                protocol=CentralizedSetpointProtocol(),  # Vertical protocol for internal coordination
+                protocol=SetpointProtocol(),  # Vertical protocol for internal coordination
             )
 
             # Add microgrid-specific dataset

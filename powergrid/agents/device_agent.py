@@ -169,7 +169,6 @@ class DeviceAgent(Agent):
         # Observe other agents' states via a communication protocol
         if self.protocol.communication_protocol:
             for other_device in self.protocol.communication_protocol.neighbors:
-                assert isinstance(other_device, DeviceAgent)
                 other_device_obs_dict = other_device.state.observed_by(self.agent_id, self.level)
                 other_device_obs = np.concatenate(
                     list(other_device_obs_dict.values()), dtype=np.float32
@@ -216,24 +215,80 @@ class DeviceAgent(Agent):
         )
 
     def act(self, observation: Observation, upstream_action: Any = None) -> None:
-        """Compute action using policy.
+        """Compute and apply action.
+
+        Routes to centralized or decentralized action computation based on
+        whether upstream_action is provided.
 
         Args:
             observation: Structured observation
-            upstream_action: Action provided by the parent grid agent
+            upstream_action: Optional action from coordinator (centralized mode)
+        """
+        if upstream_action is not None:
+            # Centralized mode: Use coordinator's action directly
+            action = self._handle_centralized_action(upstream_action, observation)
+        else:
+            # Decentralized mode: Compute own action using policy
+            action = self._handle_decentralized_action(observation)
+
+        self.action.set_values(action)
+
+    # ============================================
+    # Centralized Action Handling (Direct control)
+    # ============================================
+
+    def _handle_centralized_action(
+        self,
+        upstream_action: Any,
+        observation: Observation
+    ) -> Any:
+        """Handle centralized action from coordinator.
+
+        In centralized mode, the coordinator directly assigns actions (setpoints).
+        The device follows these commands without using its own policy.
+
+        Args:
+            upstream_action: Action assigned by coordinator (e.g., power setpoint)
+            observation: Current observation (unused in pure centralized mode)
 
         Returns:
-            Action in format defined by action_space
+            Action to execute (passthrough of upstream_action)
         """
-        if upstream_action:
-            action = upstream_action
-        elif self.policy is not None:
-            action = self.policy.forward(observation)
-        else:
-            raise ValueError("No action provided and no policy defined for DeviceAgent.")
+        # TODO: Validate upstream_action against device constraints
+        return upstream_action
 
-        # TODO: Add communication logic (send/receive message) if needed
-        self.action.set_values(action)
+    # ============================================
+    # Decentralized Action Handling (Autonomous decision)
+    # ============================================
+
+    def _handle_decentralized_action(self, observation: Observation) -> Any:
+        """Handle decentralized action computation using local policy.
+
+        In decentralized mode, devices make their own decisions based on:
+        - Local observations (device state)
+        - Coordination signals from messages (e.g., prices)
+        - Local policy (learned or rule-based)
+
+        Args:
+            observation: Current observation including messages
+
+        Returns:
+            Action computed by local policy
+
+        Raises:
+            ValueError: If no policy is defined for decentralized mode
+        """
+        if self.policy is None:
+            raise ValueError(
+                "No policy defined for DeviceAgent in decentralized mode. "
+                "Device requires either upstream_action (centralized) or policy (decentralized)."
+            )
+
+        # TODO: Extract coordination signals from observation.messages
+        # and incorporate them into policy input (e.g., add price to observation)
+
+        action = self.policy.forward(observation)
+        return action
 
     # ============================================
     # Abstract Methods for Hierarchical Execution
