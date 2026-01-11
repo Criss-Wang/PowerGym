@@ -167,7 +167,7 @@ class DeviceAgent(Agent):
         obs_vec = self.state.vector()
 
         # Observe other agents' states via a communication protocol
-        if self.protocol.communication_protocol:
+        if self.protocol.communication_protocol and hasattr(self.protocol.communication_protocol, 'neighbors'):
             for other_device in self.protocol.communication_protocol.neighbors:
                 other_device_obs_dict = other_device.state.observed_by(self.agent_id, self.level)
                 other_device_obs = np.concatenate(

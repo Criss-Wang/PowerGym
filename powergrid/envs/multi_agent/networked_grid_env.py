@@ -452,6 +452,10 @@ class NetworkedGridEnv(ParallelEnv):
         except:
             self.net['converged'] = False
 
+        # In distributed mode, publish initial network state to agents via ProxyAgent
+        if not self.centralized and self.proxy_agent is not None:
+            self._publish_network_state_to_agents()
+
         info = {}
 
         return self._get_obs(), info
