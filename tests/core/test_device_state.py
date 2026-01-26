@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from powergrid.core.state import DeviceState
-from powergrid.core.state import PhaseModel, PhaseSpec
+from heron.core.state import DeviceState
+from powergrid.utils.phase import PhaseModel, PhaseSpec
 
 from powergrid.features.electrical import ElectricalBasePh
 from powergrid.features.status import StatusBlock

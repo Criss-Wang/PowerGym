@@ -3,9 +3,9 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from powergrid.features.base import FeatureProvider
-from powergrid.utils.registry import provider
-from powergrid.utils.array_utils import cat_f32
+from heron.features.base import FeatureProvider
+from heron.utils.registry import provider
+from heron.utils.array_utils import cat_f32
 
 
 @provider()

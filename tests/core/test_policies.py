@@ -3,8 +3,8 @@
 import pytest
 import numpy as np
 
-from powergrid.core.policies import Policy
-from powergrid.agents.base import Observation
+from heron.core.policies import Policy
+from heron.agents.base import Observation
 
 
 class MockPolicy(Policy):

@@ -2,8 +2,8 @@ import math
 import numpy as np
 import pytest
 
-from powergrid.devices.generator import Generator
-from powergrid.core.state import PhaseModel
+from powergrid.agents.generator import Generator
+from powergrid.utils.phase import PhaseModel
 
 
 def make_config(

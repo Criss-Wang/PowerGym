@@ -7,7 +7,7 @@ import numpy as np
 import pandapower as pp
 
 from deprecated.base_env import GridBaseEnv
-from powergrid.devices import *
+from powergrid.agents import *
 
 def read_data(train, load_area, renew_area, price_area):
     dir = dirname(dirname(dirname(dirname(abspath(__file__)))))

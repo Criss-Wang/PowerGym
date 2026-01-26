@@ -7,9 +7,9 @@ from unittest.mock import Mock, MagicMock, patch
 import gymnasium as gym
 
 from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
-from powergrid.agents.grid_agent import PowerGridAgent
-from powergrid.core.protocols import NoProtocol, Protocol
-from powergrid.agents.base import Observation
+from powergrid.agents.power_grid_agent import PowerGridAgent
+from heron.protocols.base import NoProtocol, Protocol
+from heron.agents.base import Observation
 from pettingzoo import ParallelEnv
 
 

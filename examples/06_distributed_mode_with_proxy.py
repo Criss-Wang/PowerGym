@@ -237,7 +237,7 @@ def demonstrate_visibility_rules():
     # Check what each agent can see by inspecting messages
     broker = env.message_broker
     for agent_id in env.possible_agents:
-        from powergrid.messaging.base import ChannelManager
+        from heron.messaging.base import ChannelManager
         channel = ChannelManager.info_channel("proxy_agent", agent_id, env._env_id)
         messages = broker.consume(channel, recipient_id=agent_id, env_id=env._env_id, clear=False)
 

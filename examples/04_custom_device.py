@@ -27,15 +27,16 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from powergrid.agents.device_agent import DeviceAgent
-from powergrid.agents.grid_agent import PowerGridAgent
-from powergrid.core.policies import Policy
-from powergrid.core.protocols import SetpointProtocol, NoProtocol, Protocol
-from powergrid.core.state import DeviceState
+from powergrid.agents.power_grid_agent import PowerGridAgent
+from heron.core.policies import Policy
+from heron.protocols.base import NoProtocol, Protocol
+from heron.protocols.vertical import SetpointProtocol
+from heron.core.state import DeviceState
 from powergrid.utils.phase import PhaseModel
 from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
 from powergrid.features.electrical import ElectricalBasePh
 from powergrid.features.connection import PhaseConnection
-from powergrid.features.base import FeatureProvider
+from heron.features.base import FeatureProvider
 from powergrid.networks.ieee13 import IEEE13Bus
 
 

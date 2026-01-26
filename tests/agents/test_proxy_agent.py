@@ -14,8 +14,8 @@ import pytest
 from typing import Dict, Any
 
 from powergrid.agents.proxy_agent import ProxyAgent, PROXY_LEVEL
-from powergrid.messaging.base import Message, MessageType, ChannelManager
-from powergrid.messaging.memory import InMemoryBroker
+from heron.messaging.base import Message, MessageType, ChannelManager
+from heron.messaging.memory import InMemoryBroker
 
 
 # =============================================================================
@@ -683,7 +683,7 @@ class TestProxyAgentLifecycle:
             env_id="env_0"
         )
 
-        from powergrid.core.observation import Observation
+        from heron.agents.base import Observation
         obs = Observation(timestamp=0.0, local={}, global_info={}, messages=[])
 
         result = proxy.act(obs)

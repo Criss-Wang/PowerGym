@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from powergrid.devices.compensation import Shunt
+from powergrid.agents.compensation import Shunt
 from powergrid.core.policies import Policy
 from powergrid.agents.base import Observation
 

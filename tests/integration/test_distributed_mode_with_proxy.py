@@ -16,7 +16,7 @@ import numpy as np
 import pandapower as pp
 from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogrids
 from powergrid.envs.configs.config_loader import load_config
-from powergrid.messaging.base import ChannelManager
+from heron.messaging.base import ChannelManager
 from powergrid.agents.proxy_agent import ProxyAgent
 
 

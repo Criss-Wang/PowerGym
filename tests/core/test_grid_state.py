@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from powergrid.core.state import GridState
+from heron.core.state import GridState
 from powergrid.features.network import BusVoltages, LineFlows, NetworkMetrics
 
 

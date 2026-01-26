@@ -1,13 +1,13 @@
 # Create provider for step-based discrete state
-from powergrid.utils.registry import provider
+from heron.utils.registry import provider
 from dataclasses import dataclass
 from typing import List, Optional
 
 import numpy as np
 
-from powergrid.features.base import FeatureProvider
+from heron.features.base import FeatureProvider
 from powergrid.utils.phase import PhaseModel, PhaseSpec
-from powergrid.utils.registry import provider
+from heron.utils.registry import provider
 
 @provider()
 @dataclass(slots=True)

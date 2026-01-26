@@ -14,9 +14,9 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandapower as pp
 
-from powergrid.agents.base import Agent, AgentID
-from powergrid.messaging.base import ChannelManager, Message, MessageBroker, MessageType
-from powergrid.core.observation import Observation
+from heron.agents.base import Agent, AgentID
+from heron.messaging.base import ChannelManager, Message, MessageBroker, MessageType
+from heron.core.observation import Observation
 
 
 PROXY_LEVEL = 3  # Level identifier for proxy-level agents (higher than grid)

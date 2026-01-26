@@ -10,7 +10,7 @@ Tests cover:
 
 Key protocols tested:
 - PriceSignalProtocol (vertical)
-- CentralizedSetpointProtocol (vertical)
+- SetpointProtocol (vertical)
 - PeerToPeerTradingProtocol (horizontal)
 - ConsensusProtocol (horizontal)
 """
@@ -19,16 +19,24 @@ import pytest
 import numpy as np
 import pandapower as pp
 
-from powergrid.agents.grid_agent import PowerGridAgent
-from powergrid.core.protocols import (
+from powergrid.agents.power_grid_agent import PowerGridAgent
+from heron.protocols.base import (
+    Protocol,
+    NoProtocol,
+    NoCommunication,
+    NoActionCoordination,
+)
+from heron.protocols.vertical import (
+    SetpointProtocol,
     PriceSignalProtocol,
-    CentralizedSetpointProtocol,
+)
+from heron.protocols.horizontal import (
+    HorizontalProtocol,
     PeerToPeerTradingProtocol,
     ConsensusProtocol,
-    HorizontalProtocol,
 )
-from powergrid.devices.generator import Generator
-from powergrid.devices.storage import ESS
+from powergrid.agents.generator import Generator
+from powergrid.agents.storage import ESS
 from powergrid.networks.ieee13 import IEEE13Bus
 
 
@@ -66,13 +74,13 @@ class TestVerticalProtocols:
                 "name": "ess1",
                 "device_state_config": {
                     "bus": "Bus 634",
-                    "capacity_MWh": 5.0,
-                    "max_e_MWh": 4.5,
-                    "min_e_MWh": 0.5,
-                    "max_p_MW": 1.5,
-                    "min_p_MW": -1.5,
-                    "max_q_MVAr": 0.7,
-                    "min_q_MVAr": -0.7,
+                    "e_capacity_MWh": 5.0,
+                    "soc_min": 0.1,
+                    "soc_max": 0.9,
+                    "p_max_MW": 1.5,
+                    "p_min_MW": -1.5,
+                    "q_max_MVAr": 0.7,
+                    "q_min_MVAr": -0.7,
                     "s_rated_MVA": 1.8,
                     "init_soc": 0.5,
                     "ch_eff": 0.95,
@@ -129,10 +137,10 @@ class TestVerticalProtocols:
                     assert price_msgs[0].content["price"] == 60.0
 
     def test_centralized_setpoint_protocol(self, microgrid_with_devices):
-        """Test CentralizedSetpointProtocol action distribution."""
+        """Test SetpointProtocol action distribution."""
         net, devices = microgrid_with_devices
 
-        protocol = CentralizedSetpointProtocol()
+        protocol = SetpointProtocol()
         mg_agent = PowerGridAgent(
             net=net,
             grid_config={"name": "MG1", "base_power": 1.0},
@@ -215,7 +223,7 @@ class TestHorizontalProtocols:
                 net=net,
                 grid_config={"name": f"MG{i+1}", "base_power": 1.0},
                 devices=[gen],
-                protocol=CentralizedSetpointProtocol(),
+                protocol=SetpointProtocol(),
                 centralized=True,
             )
 
@@ -400,7 +408,7 @@ class TestProtocolIntegration:
             },
         )
 
-        protocol = CentralizedSetpointProtocol()
+        protocol = SetpointProtocol()
         mg_agent = PowerGridAgent(
             net=net,
             grid_config={"name": "MG1", "base_power": 1.0},
@@ -413,7 +421,7 @@ class TestProtocolIntegration:
 
         # Protocol should be accessible
         assert mg_agent.protocol is protocol
-        assert isinstance(protocol, CentralizedSetpointProtocol)
+        assert isinstance(protocol, SetpointProtocol)
 
     def test_horizontal_protocol_environment_config(self):
         """Test horizontal protocol configuration at environment level."""
@@ -458,7 +466,7 @@ class TestProtocolEdgeCases:
         """Test protocol behavior when agent has no devices."""
         net = IEEE13Bus("MG1")
 
-        protocol = CentralizedSetpointProtocol()
+        protocol = SetpointProtocol()
         mg_agent = PowerGridAgent(
             net=net,
             grid_config={"name": "MG1", "base_power": 1.0},

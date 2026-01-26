@@ -1,10 +1,24 @@
+"""Safety evaluation functions for power systems.
+
+This module provides safety constraint violation calculations
+for power system operation including voltage, loading, and SOC limits.
+"""
+
 import math
 from dataclasses import dataclass
 from typing import Optional
 
+
 def s_over_rating(P: float, Q: float, sn_mva: Optional[float]) -> float:
     """Apparent power (S) overload as a fraction of nameplate.
-    Returns 0 if sn_mva is None/<=0 or NaN.
+
+    Args:
+        P: Active power (MW)
+        Q: Reactive power (MVAr)
+        sn_mva: Nameplate rating (MVA)
+
+    Returns:
+        Overload fraction (0 if within rating)
     """
     if sn_mva is None:
         return 0.0
@@ -18,7 +32,16 @@ def s_over_rating(P: float, Q: float, sn_mva: Optional[float]) -> float:
 
 
 def pf_penalty(P: float, Q: float, min_pf: Optional[float]) -> float:
-    """Penalty for violating minimum power factor (0 if OK or undefined)."""
+    """Penalty for violating minimum power factor.
+
+    Args:
+        P: Active power (MW)
+        Q: Reactive power (MVAr)
+        min_pf: Minimum power factor requirement
+
+    Returns:
+        Power factor violation penalty
+    """
     if min_pf is None:
         return 0.0
     S = math.hypot(P, Q)
@@ -28,16 +51,34 @@ def pf_penalty(P: float, Q: float, min_pf: Optional[float]) -> float:
 
 
 def voltage_deviation(V_pu: float, vmin_pu: float = 0.95, vmax_pu: float = 1.05) -> float:
-    """Voltage band violation (per-unit). Linear penalty outside [vmin, vmax]."""
+    """Voltage band violation (per-unit).
+
+    Args:
+        V_pu: Voltage magnitude (per-unit)
+        vmin_pu: Minimum voltage limit
+        vmax_pu: Maximum voltage limit
+
+    Returns:
+        Voltage deviation penalty
+    """
     if V_pu < vmin_pu:
         return (vmin_pu - V_pu) / max(1e-9, (vmin_pu - 0.0))
     if V_pu > vmax_pu:
-        return (V_pu - vmax_pu) / max(1e-9, (1.5 - vmax_pu))  # assume 1.5 pu worst-case bound
+        return (V_pu - vmax_pu) / max(1e-9, (1.5 - vmax_pu))
     return 0.0
 
 
 def soc_bounds_penalty(soc: float, min_soc: float, max_soc: float) -> float:
-    """Penalty if SOC goes outside [min_soc, max_soc]. Linear overflow measure."""
+    """Penalty if SOC goes outside bounds.
+
+    Args:
+        soc: State of charge (0-1)
+        min_soc: Minimum SOC limit
+        max_soc: Maximum SOC limit
+
+    Returns:
+        SOC violation penalty
+    """
     if soc > max_soc:
         return soc - max_soc
     if soc < min_soc:
@@ -46,12 +87,28 @@ def soc_bounds_penalty(soc: float, min_soc: float, max_soc: float) -> float:
 
 
 def loading_over_pct(loading_pct: float) -> float:
-    """Transformer/line loading over 100% (per-unit overflow)."""
+    """Transformer/line loading over 100%.
+
+    Args:
+        loading_pct: Loading percentage
+
+    Returns:
+        Overloading penalty (per-unit)
+    """
     return max(0.0, (loading_pct - 100.0) / 100.0)
 
 
 def rate_of_change_penalty(prev: float, curr: float, limit: float) -> float:
-    """Penalty if |curr-prev| exceeds a rate/step limit; normalized by limit."""
+    """Penalty if rate of change exceeds limit.
+
+    Args:
+        prev: Previous value
+        curr: Current value
+        limit: Rate limit
+
+    Returns:
+        Rate of change violation penalty
+    """
     delta = abs(curr - prev)
     if limit <= 0:
         return 0.0
@@ -60,9 +117,7 @@ def rate_of_change_penalty(prev: float, curr: float, limit: float) -> float:
 
 @dataclass
 class SafetySpec:
-    """Weights for composing a total safety score.
-    Any term with weight 0 is ignored.
-    """
+    """Weights for composing a total safety score."""
     s_over_rating_w: float = 1.0
     pf_w: float = 1.0
     voltage_w: float = 0.0
@@ -89,8 +144,23 @@ def total_safety(
     curr: Optional[float] = None,
     limit: float = 0.0,
 ) -> float:
-    """Compose multiple safety terms using weights in `spec`.
-    Provide only the arguments relevant to enabled weights.
+    """Compose multiple safety terms using weights.
+
+    Args:
+        spec: Safety specification with weights
+        P, Q: Power values for S overrating check
+        sn_mva: Nameplate rating
+        min_pf: Minimum power factor
+        V_pu: Voltage (per-unit)
+        vmin_pu, vmax_pu: Voltage limits
+        soc: State of charge
+        min_soc, max_soc: SOC limits
+        loading_pct: Loading percentage
+        prev, curr: Values for rate of change
+        limit: Rate limit
+
+    Returns:
+        Total weighted safety penalty
     """
     s = 0.0
     if spec.s_over_rating_w:

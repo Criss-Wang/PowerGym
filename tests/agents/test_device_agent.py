@@ -6,11 +6,11 @@ import gymnasium as gym
 from gymnasium.spaces import Box, Discrete, MultiDiscrete
 
 from powergrid.agents.device_agent import DeviceAgent
-from powergrid.agents.base import Observation
-from powergrid.core.action import Action
-from powergrid.core.state import DeviceState
-from powergrid.core.policies import Policy
-from powergrid.core.protocols import NoProtocol
+from heron.agents.base import Observation
+from heron.core.action import Action
+from heron.core.state import DeviceState
+from heron.core.policies import Policy
+from heron.protocols.base import NoProtocol
 
 
 class MockPolicy(Policy):
@@ -55,9 +55,9 @@ class ConcreteDeviceAgent(DeviceAgent):
     def __repr__(self):
         """String representation."""
         return f"ConcreteDeviceAgent(id={self.agent_id})"
-from powergrid.core.policies import RandomPolicy
-from powergrid.devices.storage import ESS
-from powergrid.devices.generator import DG
+from heron.core.policies import RandomPolicy
+from powergrid.agents.storage import ESS
+from powergrid.agents.generator import Generator
 
 
 class TestDeviceAgent:

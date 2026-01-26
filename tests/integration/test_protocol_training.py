@@ -23,7 +23,20 @@ except ImportError:
 
 from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogrids
 from powergrid.envs.configs.config_loader import load_config
-from powergrid.core.protocols import (
+from heron.protocols.base import (
+    Protocol,
+    NoProtocol,
+    NoCommunication,
+    NoActionCoordination,
+)
+from heron.protocols.vertical import (
+    SetpointProtocol,
+    PriceSignalProtocol,
+)
+from heron.protocols.horizontal import (
+    PeerToPeerTradingProtocol,
+    ConsensusProtocol,
+# Original: (
     NoHorizontalProtocol,
     PeerToPeerTradingProtocol,
     ConsensusProtocol,

@@ -24,11 +24,10 @@ import numpy as np
 import pandapower as pp
 from pettingzoo import ParallelEnv
 
-from powergrid.agents.grid_agent import PowerGridAgent
-from powergrid.core.protocols import SetpointProtocol
-from powergrid.devices.generator import Generator
-# Note: Grid device not used in this example (implementation incomplete)
-from powergrid.devices.storage import ESS
+from powergrid.agents.power_grid_agent import PowerGridAgent
+from heron.protocols.vertical import SetpointProtocol
+from powergrid.agents.generator import Generator
+from powergrid.agents.storage import ESS
 from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
 from powergrid.networks.ieee13 import IEEE13Bus
 

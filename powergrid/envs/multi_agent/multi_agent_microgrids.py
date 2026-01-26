@@ -8,13 +8,13 @@ from typing import Dict, List
 
 import pandapower as pp
 
-from powergrid.agents.grid_agent import PowerGridAgent
-from powergrid.core.protocols import SetpointProtocol
+from powergrid.agents.power_grid_agent import PowerGridAgent
+from heron.protocols.vertical import SetpointProtocol
 from powergrid.data.data_loader import load_dataset
 from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
 from powergrid.networks.ieee13 import IEEE13Bus
 from powergrid.networks.ieee34 import IEEE34Bus
-from powergrid.utils.typing import AgentID
+from heron.utils.typing import AgentID
 
 
 class MultiAgentMicrogrids(NetworkedGridEnv):

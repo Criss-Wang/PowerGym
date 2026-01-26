@@ -15,7 +15,7 @@ the external grid connection (not a controllable asset).
 import pytest
 import numpy as np
 
-from powergrid.devices.grid import Grid
+from powergrid.agents.grid import Grid
 
 
 class TestGridInitialization:

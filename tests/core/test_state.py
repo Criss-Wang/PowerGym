@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from powergrid.core.state import DeviceState
+from heron.core.state import DeviceState
 
 
 class TestDeviceState:

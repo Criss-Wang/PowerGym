@@ -12,13 +12,13 @@ import numpy as np
 from gymnasium.spaces import Box
 from gymnasium.spaces import Space
 
-from powergrid.agents.base import Agent, Observation
-from powergrid.core.state import DeviceState
-from powergrid.core.action import Action
-from powergrid.core.policies import Policy
-from powergrid.core.protocols import NoProtocol, Protocol
-from powergrid.utils.typing import AgentID
-from powergrid.messaging.base import MessageBroker
+from heron.agents.base import Agent, Observation
+from heron.core.state import DeviceState
+from heron.core.action import Action
+from heron.core.policies import Policy
+from heron.protocols.base import NoProtocol, Protocol
+from heron.utils.typing import AgentID
+from heron.messaging.base import MessageBroker
 
 DEVICE_LEVEL = 1  # Level identifier for device-level agents
 

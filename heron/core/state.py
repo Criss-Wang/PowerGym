@@ -1,0 +1,211 @@
+"""State abstractions for agent state management.
+
+This module provides generic state containers that compose FeatureProviders
+and support visibility-based observation filtering.
+"""
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple, Type
+
+import numpy as np
+
+from heron.features.base import FeatureProvider
+from heron.utils.array_utils import cat_f32
+
+
+KNOWN_FEATURES: Dict[str, Type[FeatureProvider]] = {}
+
+
+def _vec_names(feat: FeatureProvider) -> Tuple[np.ndarray, List[str]]:
+    """Extract vector and names from a feature provider."""
+    v = np.asarray(feat.vector(), np.float32).ravel()
+    n = feat.names()
+    if len(n) != v.size:
+        raise ValueError(
+            f"{feat.__class__.__name__}: names ({len(n)}) != vector size ({v.size})."
+        )
+    return v, n
+
+
+@dataclass(slots=True)
+class State(ABC):
+    """Generic agent state, defined by a list of feature providers.
+
+    States aggregate multiple FeatureProviders and provide:
+    - Vector representation for ML
+    - Visibility-filtered observations
+    - Batch update operations
+    - Serialization
+
+    Attributes:
+        owner_id: ID of the agent that owns this state
+        owner_level: Hierarchy level of owning agent (1=field, 2=coordinator, 3=system)
+        features: List of feature providers composing this state
+    """
+    owner_id: str
+    owner_level: int
+
+    # Raw features that make up this state
+    features: List[FeatureProvider] = field(default_factory=list)
+
+    def vector(self) -> np.ndarray:
+        """Concatenate all feature vectors into an array."""
+        feature_vectors: List[np.ndarray] = []
+        for feature in self.features:
+            feature_vectors.append(feature.vector())
+
+        return cat_f32(feature_vectors)
+
+    def reset(self, overrides: Optional[Dict[str, Dict[str, Any]]] = None) -> None:
+        """Reset all feature providers to their initial state.
+
+        This does not recreate the feature list; it just forwards
+        the reset to each feature that supports it.
+
+        Args:
+            overrides: Optional dict mapping feature names to override values
+        """
+        for feature in self.features:
+            feature.reset()
+
+        if overrides is not None:
+            self.update(overrides)
+
+    @abstractmethod
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        """Abstract state-update hook.
+
+        Subclasses must implement this with their own semantics.
+        For convenience, subclasses can use `update_feature(...)` for
+        individual feature updates.
+        """
+        raise NotImplementedError
+
+    def update_feature(self, feature_name: str, **values: Any) -> None:
+        """Update a single feature identified by its class name.
+
+        Args:
+            feature_name: Feature class name string
+            **values: Field values to update
+
+        Example:
+            state.update_feature("SomeFeature", field1=10.0, field2=2.0)
+        """
+        for feature in self.features:
+            if feature.feature_name == feature_name:
+                feature.set_values(**values)
+                break
+
+    def observed_by(self, requestor_id: str, requestor_level: int) -> Dict[str, np.ndarray]:
+        """Build observation dictionary visible to the requesting agent.
+
+        Filters state features based on visibility rules. Each feature's
+        `is_observable_by()` method determines if the requestor can see it.
+
+        Args:
+            requestor_id: ID of agent requesting observation
+            requestor_level: Hierarchy level of requesting agent
+                           (1=field, 2=coordinator, 3=system)
+
+        Returns:
+            Dict mapping feature names to observation vectors (float32 numpy arrays).
+            Only includes features the requestor is allowed to observe.
+
+        Example:
+            >>> state = FieldAgentState(owner_id="agent1", owner_level=1)
+            >>> # Owner observes own state
+            >>> obs = state.observed_by("agent1", requestor_level=1)
+            >>> # {"SomeFeature": array([1.0, 0.5, ...]), ...}
+            >>>
+            >>> # Non-owner with insufficient permissions
+            >>> obs = state.observed_by("agent2", requestor_level=1)
+            >>> # {} (empty - no observable features)
+        """
+        observable_feature_dict = {}
+
+        for feature in self.features:
+            if feature.is_observable_by(
+                requestor_id, requestor_level, self.owner_id, self.owner_level
+            ):
+                observable_feature_dict[feature.feature_name] = cat_f32([feature.vector()])
+
+        self.validate_observation_dict(observable_feature_dict)
+        return observable_feature_dict
+
+    def to_dict(self) -> Dict[str, Dict[str, Any]]:
+        """Serialize the State into a plain dict.
+
+        Returns:
+            Dict mapping feature names to their serialized representations.
+        """
+        feature_dict: Dict[str, Any] = {}
+
+        for feature in self.features:
+            feature_dict[feature.feature_name] = feature.to_dict()
+
+        return feature_dict
+
+    def validate_observation_dict(self, obs_dict: Dict[str, np.ndarray]) -> None:
+        """Validate the collected feature vectors for consistency.
+
+        Override in subclasses to add custom validation.
+        """
+        pass
+
+
+@dataclass(slots=True)
+class FieldAgentState(State):
+    """State for field-level (L1) agents.
+
+    Field agents are the lowest level in the hierarchy, typically
+    representing individual devices or units.
+    """
+    def update(self, updates: Dict[str, Dict[str, Any]]) -> None:
+        """Apply batch updates to features.
+
+        Args:
+            updates: Mapping of feature names to field updates:
+                {
+                    "FeatureA": {"field1": 5.0, "field2": 1.0},
+                    "FeatureB": {"state": "active"},
+                    ...
+                }
+        """
+        for feature in self.features:
+            if feature.feature_name in updates:
+                values = updates.get(feature.feature_name)
+                self.update_feature(feature.feature_name, **values)
+
+    def validate_observation_dict(self, obs_dict: Dict[str, np.ndarray]) -> None:
+        """Validate that all observation vectors are 1D."""
+        for vector in obs_dict.values():
+            if not (isinstance(vector, np.ndarray) and vector.ndim == 1):
+                raise NotImplementedError(
+                    "Only 1D vector observations supported. "
+                    "Got: " + str(type(vector))
+                )
+
+
+@dataclass(slots=True)
+class CoordinatorAgentState(State):
+    """State for coordinator-level (L2) agents.
+
+    Coordinator agents manage groups of field agents and aggregate
+    information from their subordinates.
+    """
+    def update(self, updates: Dict[str, Dict[str, Any]]) -> None:
+        """Apply batch updates to coordinator-level features.
+
+        Args:
+            updates: Mapping of feature names to field updates
+        """
+        for feature in self.features:
+            if feature.feature_name in updates:
+                values = updates.get(feature.feature_name)
+                self.update_feature(feature.feature_name, **values)
+
+
+# Aliases for backward compatibility with power domain
+DeviceState = FieldAgentState
+GridState = CoordinatorAgentState

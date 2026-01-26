@@ -12,13 +12,13 @@ import pandapower as pp
 from gymnasium.spaces import Box, Dict as SpaceDict, Discrete, MultiDiscrete
 from pettingzoo import ParallelEnv
 
-from powergrid.agents.grid_agent import PowerGridAgent
+from powergrid.agents.power_grid_agent import PowerGridAgent
 from powergrid.agents.proxy_agent import ProxyAgent
-from powergrid.core.protocols import NoProtocol, Protocol
-from powergrid.messaging.base import ChannelManager, Message, MessageBroker, MessageType
-from powergrid.messaging.memory import InMemoryBroker
+from heron.protocols.base import NoProtocol, Protocol
+from heron.messaging.base import ChannelManager, Message, MessageBroker, MessageType
+from heron.messaging.memory import InMemoryBroker
 from powergrid.utils.helpers import gen_uuid
-from powergrid.utils.typing import AgentID
+from heron.utils.typing import AgentID
 
 class NetworkedGridEnv(ParallelEnv):
     """Base environment for networked power grids with multi-agent control.

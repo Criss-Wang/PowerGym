@@ -33,8 +33,8 @@ Runtime: ~35 seconds for 24 timesteps
 import numpy as np
 import pandapower as pp
 
-from powergrid.agents.grid_agent import PowerGridAgent
-from powergrid.core.protocols import PriceSignalProtocol
+from powergrid.agents.power_grid_agent import PowerGridAgent
+from heron.protocols.vertical import PriceSignalProtocol
 from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
 from powergrid.networks.ieee13 import IEEE13Bus
 

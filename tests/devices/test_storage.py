@@ -3,10 +3,10 @@
 import numpy as np
 import pytest
 
-from powergrid.devices.storage import ESS
-from powergrid.core.policies import Policy
-from powergrid.agents.base import Observation
-from powergrid.core.state import PhaseModel
+from powergrid.agents.storage import ESS
+from heron.core.policies import Policy
+from heron.agents.base import Observation
+from powergrid.utils.phase import PhaseModel
 
 
 class MockPolicy(Policy):

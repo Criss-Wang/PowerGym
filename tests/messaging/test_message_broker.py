@@ -15,13 +15,13 @@ import threading
 import time
 from typing import List
 
-from powergrid.messaging.base import (
+from heron.messaging.base import (
     Message,
     MessageType,
     MessageBroker,
     ChannelManager
 )
-from powergrid.messaging.memory import InMemoryBroker
+from heron.messaging.memory import InMemoryBroker
 
 
 # =============================================================================

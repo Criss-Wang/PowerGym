@@ -23,7 +23,20 @@ except ImportError:
 
 from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogrids
 from powergrid.envs.configs.config_loader import load_config
-from powergrid.core.protocols import (
+from heron.protocols.base import (
+    Protocol,
+    NoProtocol,
+    NoCommunication,
+    NoActionCoordination,
+)
+from heron.protocols.vertical import (
+    SetpointProtocol,
+    PriceSignalProtocol,
+)
+from heron.protocols.horizontal import (
+    PeerToPeerTradingProtocol,
+    ConsensusProtocol,
+# Original: (
     NoHorizontalProtocol,
     PeerToPeerTradingProtocol,
     ConsensusProtocol,
@@ -330,7 +343,7 @@ class TestProtocolSpecificBehavior:
         protocol = PeerToPeerTradingProtocol(trading_fee=0.02)
 
         # Create scenario with buyer and seller
-        from powergrid.agents.base import Agent, Observation
+        from heron.agents.base import Agent, Observation
 
         class MockAgent(Agent):
             def __init__(self, agent_id, net_demand, marginal_cost):
@@ -411,7 +424,7 @@ class TestProtocolSpecificBehavior:
 
         protocol = ConsensusProtocol(max_iterations=50, tolerance=0.01)
 
-        from powergrid.agents.base import Agent, Observation
+        from heron.agents.base import Agent, Observation
 
         class MockAgent(Agent):
             def observe(self):

@@ -5,12 +5,12 @@ import numpy as np
 import gymnasium as gym
 from gymnasium.spaces import Box
 
-from powergrid.agents.base import (
+from heron.agents.base import (
     Agent,
     Observation,
     Message,
 )
-from powergrid.core.policies import Policy, RandomPolicy
+from heron.core.policies import Policy, RandomPolicy
 
 
 class DummyAgent(Agent):

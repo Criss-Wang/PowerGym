@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from powergrid.features.thermal import ThermalLoading
-from powergrid.core.state import PhaseModel, PhaseSpec
+from powergrid.utils.phase import PhaseModel, PhaseSpec
 
 
 def _assert_vec_names_consistent(b: ThermalLoading):

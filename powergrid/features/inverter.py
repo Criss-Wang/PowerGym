@@ -3,9 +3,10 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from powergrid.features.base import FeatureProvider
+from heron.features.base import FeatureProvider
 from powergrid.utils.phase import PhaseModel, PhaseSpec
-from powergrid.utils.registry import provider
+from heron.utils.registry import provider
+from heron.utils.typing import CtrlMode
 
 
 @provider()

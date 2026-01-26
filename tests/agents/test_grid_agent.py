@@ -4,12 +4,13 @@ import numpy as np
 import pytest
 import gymnasium as gym
 
-from powergrid.agents.grid_agent import GridAgent, PowerGridAgent
-from powergrid.agents.base import Observation, Agent
-from powergrid.core.policies import Policy
-from powergrid.core.protocols import NoProtocol, PriceSignalProtocol
-from powergrid.devices.storage import ESS
-from powergrid.devices.generator import DG
+from powergrid.agents.power_grid_agent import GridAgent, PowerGridAgent
+from heron.agents.base import Observation, Agent
+from heron.core.policies import Policy
+from heron.protocols.base import NoProtocol
+from heron.protocols.vertical import PriceSignalProtocol
+from powergrid.agents.storage import ESS
+from powergrid.agents.generator import Generator as DG
 
 
 class MockPolicy(Policy):

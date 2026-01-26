@@ -3,10 +3,10 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from powergrid.features.base import FeatureProvider
-from powergrid.utils.array_utils import as_f32, cat_f32
+from heron.features.base import FeatureProvider
+from heron.utils.array_utils import as_f32, cat_f32
 from powergrid.utils.phase import PhaseModel, PhaseSpec
-from powergrid.utils.registry import provider
+from heron.utils.registry import provider
 
 
 @provider()
