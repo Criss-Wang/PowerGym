@@ -8,6 +8,14 @@ from gymnasium.spaces import Box, Discrete, MultiDiscrete, Dict as SpaceDict
 
 from powergrid.utils.array_utils import cat_f32
 
+lib # blueprint
+powergrid
+|_action.py # custom class or import from lib
+|_agent.py # custom 
+|_env 
+|___env_1.py # using action.py/state.py or import from lib
+
+
 
 @dataclass(slots=True)
 class Action:

@@ -1,0 +1,103 @@
+% NeurIPS 2024/2025 Style File
+% Simplified version compatible with Overleaf
+% Based on official NeurIPS template specifications
+
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{neurips_2024}[2024/05/23 NeurIPS 2024 submission/camera-ready style file]
+
+% Options handling
+\newif\if@neuripsfinal\@neuripsfinalfalse
+\DeclareOption{final}{\@neuripsfinaltrue}
+\DeclareOption{preprint}{}
+\ProcessOptions\relax
+
+% Required packages
+\RequirePackage{times}
+\RequirePackage{latexsym}
+\RequirePackage{amsmath}
+\RequirePackage{amssymb}
+\RequirePackage{graphicx}
+\RequirePackage{natbib}
+\RequirePackage{hyperref}
+\RequirePackage{pifont}
+
+% Page layout for letter paper
+\RequirePackage[
+    paperwidth=8.5in,
+    paperheight=11in,
+    textwidth=5.5in,
+    textheight=9in,
+    top=1in,
+    left=1.5in
+]{geometry}
+
+% Line spacing
+\linespread{1.0}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.5em}
+
+% Title formatting
+\def\@maketitle{%
+  \newpage
+  \null
+  \vskip 2em%
+  \begin{center}%
+  \let \footnote \thanks
+    {\LARGE \@title \par}%
+    \vskip 1.5em%
+    {\large
+      \lineskip .5em%
+      \begin{tabular}[t]{c}%
+        \@author
+      \end{tabular}\par}%
+    \vskip 1em%
+    {\large \@date}%
+  \end{center}%
+  \par
+  \vskip 1.5em}
+
+% Section formatting
+\renewcommand\section{\@startsection {section}{1}{\z@}%
+                                   {-3.5ex \@plus -1ex \@minus -.2ex}%
+                                   {2.3ex \@plus.2ex}%
+                                   {\normalfont\Large\bfseries}}
+\renewcommand\subsection{\@startsection{subsection}{2}{\z@}%
+                                     {-3.25ex\@plus -1ex \@minus -.2ex}%
+                                     {1.5ex \@plus .2ex}%
+                                     {\normalfont\large\bfseries}}
+\renewcommand\subsubsection{\@startsection{subsubsection}{3}{\z@}%
+                                     {-3.25ex\@plus -1ex \@minus -.2ex}%
+                                     {1.5ex \@plus .2ex}%
+                                     {\normalfont\normalsize\bfseries}}
+
+% Abstract
+\renewenvironment{abstract}%
+{\centerline{\large\bfseries Abstract}\vspace{0.5ex}\begin{quote}}%
+{\par\end{quote}\vspace{2ex}}
+
+% Citation style
+\setcitestyle{authoryear,round,citesep={;},aysep={,},yysep={;}}
+
+% Hyperref setup
+\hypersetup{
+    colorlinks=true,
+    linkcolor=red,
+    filecolor=black,
+    citecolor=blue,
+    urlcolor=blue,
+}
+
+% Convenience commands
+\newcommand{\cmark}{\ding{51}}%
+\newcommand{\xmark}{\ding{55}}%
+
+% Float parameters
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.8}
+\setcounter{topnumber}{2}
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{4}
+\renewcommand{\textfraction}{0.07}
+\renewcommand{\floatpagefraction}{0.7}
+
+\endinput
