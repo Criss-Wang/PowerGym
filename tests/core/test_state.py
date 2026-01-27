@@ -3,287 +3,231 @@
 import numpy as np
 import pytest
 
-from heron.core.state import DeviceState
+from heron.core.state import DeviceState, FieldAgentState, CoordinatorAgentState
+from heron.features.base import FeatureProvider
 
 
-class TestDeviceState:
-    """Test DeviceState dataclass."""
+class MockFeature(FeatureProvider):
+    """Mock feature provider for testing."""
 
-    def test_device_state_initialization_default(self):
-        """Test device state initialization with default values."""
-        state = DeviceState()
+    feature_name = "MockFeature"
 
-        assert state.P == 0.0
-        assert state.Q == 0.0
-        assert state.on == 1
-        assert state.Pmax is None
-        assert state.Pmin is None
-        assert state.soc is None
+    def __init__(self, value1=0.0, value2=0.0, visibility=None):
+        self.value1 = value1
+        self.value2 = value2
+        self._visibility = visibility or ["owner"]
+        self._reset_value1 = value1
+        self._reset_value2 = value2
 
-    def test_device_state_custom_values(self):
-        """Test device state with custom values."""
-        state = DeviceState(
-            P=1.5,
-            Q=0.5,
-            on=0,
-            Pmax=2.0,
-            Pmin=0.0,
-            soc=0.8
+    def vector(self) -> np.ndarray:
+        return np.array([self.value1, self.value2], dtype=np.float32)
+
+    def names(self) -> list:
+        return ["value1", "value2"]
+
+    def reset(self):
+        self.value1 = self._reset_value1
+        self.value2 = self._reset_value2
+
+    def set_values(self, **kwargs):
+        if "value1" in kwargs:
+            self.value1 = kwargs["value1"]
+        if "value2" in kwargs:
+            self.value2 = kwargs["value2"]
+
+    def to_dict(self) -> dict:
+        return {"value1": self.value1, "value2": self.value2}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "MockFeature":
+        return cls(value1=d.get("value1", 0.0), value2=d.get("value2", 0.0))
+
+    def is_observable_by(
+        self,
+        requestor_id: str,
+        requestor_level: int,
+        owner_id: str,
+        owner_level: int
+    ) -> bool:
+        """Check if this feature is observable by the requestor."""
+        if "owner" in self._visibility and requestor_id == owner_id:
+            return True
+        return False
+
+
+class TestFieldAgentState:
+    """Test FieldAgentState (DeviceState) class."""
+
+    def test_state_initialization_empty(self):
+        """Test state initialization with no features."""
+        state = FieldAgentState(owner_id="agent1", owner_level=1)
+
+        assert state.owner_id == "agent1"
+        assert state.owner_level == 1
+        assert len(state.features) == 0
+
+    def test_state_with_features(self):
+        """Test state initialization with features."""
+        feature1 = MockFeature(value1=1.0, value2=2.0)
+        feature2 = MockFeature(value1=3.0, value2=4.0)
+
+        state = FieldAgentState(
+            owner_id="agent1",
+            owner_level=1,
+            features=[feature1, feature2]
         )
 
-        assert state.P == 1.5
-        assert state.Q == 0.5
-        assert state.on == 0
-        assert state.Pmax == 2.0
-        assert state.Pmin == 0.0
-        assert state.soc == 0.8
+        assert len(state.features) == 2
+        assert state.features[0] is feature1
+        assert state.features[1] is feature2
 
-    def test_as_vector_empty(self):
-        """Test as_vector with minimal state."""
-        state = DeviceState()
+    def test_vector_concatenation(self):
+        """Test that vector() concatenates all feature vectors."""
+        feature1 = MockFeature(value1=1.0, value2=2.0)
+        feature2 = MockFeature(value1=3.0, value2=4.0)
 
-        vec = state.as_vector()
+        state = FieldAgentState(
+            owner_id="agent1",
+            owner_level=1,
+            features=[feature1, feature2]
+        )
+
+        vec = state.vector()
 
         assert isinstance(vec, np.ndarray)
         assert vec.dtype == np.float32
-        # Should be empty since no optional fields are set
+        np.testing.assert_array_equal(vec, [1.0, 2.0, 3.0, 4.0])
+
+    def test_vector_empty_features(self):
+        """Test vector with no features."""
+        state = FieldAgentState(owner_id="agent1", owner_level=1)
+
+        vec = state.vector()
+
+        assert isinstance(vec, np.ndarray)
         assert len(vec) == 0
 
-    def test_as_vector_with_power_limits(self):
-        """Test as_vector includes P and Q when limits are set."""
-        state = DeviceState(
-            P=1.5,
-            Q=0.5,
-            Pmax=2.0,
-            Qmax=1.0
+    def test_reset_features(self):
+        """Test that reset() resets all features."""
+        feature = MockFeature(value1=1.0, value2=2.0)
+        state = FieldAgentState(
+            owner_id="agent1",
+            owner_level=1,
+            features=[feature]
         )
 
-        vec = state.as_vector()
+        # Modify feature
+        feature.value1 = 5.0
+        feature.value2 = 6.0
 
-        # Should include P and Q
-        assert len(vec) == 2
-        assert vec[0] == 1.5  # P
-        assert vec[1] == 0.5  # Q
+        # Reset
+        state.reset()
 
-    def test_as_vector_with_soc(self):
-        """Test as_vector includes SOC for storage devices."""
-        state = DeviceState(
-            P=1.0,
-            Q=0.5,
-            Pmax=2.0,
-            Qmax=1.0,
-            soc=0.8
+        assert feature.value1 == 1.0  # Reset value
+        assert feature.value2 == 2.0  # Reset value
+
+    def test_update_feature(self):
+        """Test updating a specific feature."""
+        feature = MockFeature(value1=1.0, value2=2.0)
+        state = FieldAgentState(
+            owner_id="agent1",
+            owner_level=1,
+            features=[feature]
         )
 
-        vec = state.as_vector()
+        state.update_feature("MockFeature", value1=10.0, value2=20.0)
 
-        # P, Q, soc
-        assert len(vec) == 3
-        np.testing.assert_almost_equal(vec[2], 0.8, decimal=6)  # SOC
+        assert feature.value1 == 10.0
+        assert feature.value2 == 20.0
 
-    def test_as_vector_with_uc_state(self):
-        """Test as_vector includes unit commitment state."""
-        state = DeviceState(
-            P=1.0,
-            Q=0.5,
-            on=1,
-            Pmax=2.0,
-            Qmax=1.0,
-            shutting=0,
-            starting=0
+    def test_update_batch(self):
+        """Test batch update via update() method."""
+        feature1 = MockFeature(value1=1.0, value2=2.0)
+        feature2 = MockFeature(value1=3.0, value2=4.0)
+        feature2.feature_name = "MockFeature2"
+
+        state = FieldAgentState(
+            owner_id="agent1",
+            owner_level=1,
+            features=[feature1, feature2]
         )
 
-        vec = state.as_vector()
+        state.update({
+            "MockFeature": {"value1": 10.0},
+            "MockFeature2": {"value2": 40.0}
+        })
 
-        # P, Q, on_state (2 elements), shutting, starting
-        assert len(vec) == 6
-        assert vec[2] == 0.0  # on_state[0] = off
-        assert vec[3] == 1.0  # on_state[1] = on
-        assert vec[4] == 0.0  # shutting
-        assert vec[5] == 0.0  # starting
+        assert feature1.value1 == 10.0
+        assert feature1.value2 == 2.0  # Unchanged
+        assert feature2.value1 == 3.0  # Unchanged
+        assert feature2.value2 == 40.0
 
-    def test_as_vector_uc_state_off(self):
-        """Test as_vector with unit off."""
-        state = DeviceState(
-            P=0.0,
-            Q=0.0,
-            on=0,
-            Pmax=2.0,
-            Qmax=1.0,
-            shutting=0,
-            starting=0
+    def test_observed_by_owner(self):
+        """Test that owner can observe their own state."""
+        feature = MockFeature(value1=1.0, value2=2.0, visibility=["owner"])
+        state = FieldAgentState(
+            owner_id="agent1",
+            owner_level=1,
+            features=[feature]
         )
 
-        vec = state.as_vector()
+        obs = state.observed_by("agent1", requestor_level=1)
 
-        # Check on_state one-hot encoding
-        assert vec[2] == 1.0  # on_state[0] = off
-        assert vec[3] == 0.0  # on_state[1] = on
+        assert "MockFeature" in obs
+        np.testing.assert_array_equal(obs["MockFeature"], [1.0, 2.0])
 
-    def test_as_vector_with_shunt_state(self):
-        """Test as_vector with shunt (stepped) device."""
-        state = DeviceState(
-            max_step=3,
-            step=np.array([0, 0, 1, 0], dtype=np.float32)  # Step 2 active
+    def test_to_dict(self):
+        """Test serialization to dict."""
+        feature = MockFeature(value1=1.0, value2=2.0)
+        state = FieldAgentState(
+            owner_id="agent1",
+            owner_level=1,
+            features=[feature]
         )
 
-        vec = state.as_vector()
+        d = state.to_dict()
 
-        # Should include the step one-hot vector
-        assert len(vec) == 4
-        np.testing.assert_array_equal(vec, [0, 0, 1, 0])
+        assert "MockFeature" in d
+        assert d["MockFeature"]["value1"] == 1.0
+        assert d["MockFeature"]["value2"] == 2.0
 
-    def test_as_vector_with_shunt_none_step(self):
-        """Test as_vector with shunt when step is None."""
-        state = DeviceState(max_step=2)
-        # step is None
 
-        vec = state.as_vector()
+class TestCoordinatorAgentState:
+    """Test CoordinatorAgentState class."""
 
-        # Should create zero vector
-        assert len(vec) == 3
-        np.testing.assert_array_equal(vec, [0, 0, 0])
+    def test_coordinator_state_initialization(self):
+        """Test coordinator state initialization."""
+        state = CoordinatorAgentState(owner_id="coordinator1", owner_level=2)
 
-    def test_as_vector_with_transformer_state(self):
-        """Test as_vector with transformer tap position."""
-        state = DeviceState(
-            tap_min=-2,
-            tap_max=2,
-            tap_position=1
+        assert state.owner_id == "coordinator1"
+        assert state.owner_level == 2
+        assert len(state.features) == 0
+
+    def test_coordinator_state_with_features(self):
+        """Test coordinator state with features."""
+        feature = MockFeature(value1=5.0, value2=6.0)
+        state = CoordinatorAgentState(
+            owner_id="coordinator1",
+            owner_level=2,
+            features=[feature]
         )
 
-        vec = state.as_vector()
+        assert len(state.features) == 1
+        vec = state.vector()
+        np.testing.assert_array_equal(vec, [5.0, 6.0])
 
-        # tap positions: -2, -1, 0, 1, 2 (5 positions)
-        # Position 1 is at index 3
-        assert len(vec) == 5
-        expected = np.array([0, 0, 0, 1, 0], dtype=np.float32)
-        np.testing.assert_array_equal(vec, expected)
 
-    def test_as_vector_with_transformer_loading(self):
-        """Test as_vector includes transformer loading."""
-        state = DeviceState(
-            tap_min=0,
-            tap_max=2,
-            tap_position=1,
-            loading_percentage=75.0
-        )
+class TestDeviceStateAlias:
+    """Test that DeviceState is an alias for FieldAgentState."""
 
-        vec = state.as_vector()
+    def test_alias(self):
+        """Test DeviceState is FieldAgentState."""
+        assert DeviceState is FieldAgentState
 
-        # 3 tap positions + loading
-        assert len(vec) == 4
-        assert vec[-1] == 0.75  # Loading normalized to [0, 1]
-
-    def test_as_vector_with_price(self):
-        """Test as_vector includes price information."""
-        state = DeviceState(
-            P=1.0,
-            Pmax=2.0,
-            price=50.0
-        )
-
-        vec = state.as_vector()
-
-        # P, price
-        assert len(vec) == 2
-        assert vec[0] == 1.0  # P
-        assert vec[1] == 0.5  # price / 100
-
-    def test_as_vector_comprehensive(self):
-        """Test as_vector with multiple state components."""
-        state = DeviceState(
-            P=1.5,
-            Q=0.5,
-            on=1,
-            Pmax=2.0,
-            Qmax=1.0,
-            price=75.0,
-            shutting=0,
-            starting=0,
-            soc=0.6
-        )
-
-        vec = state.as_vector()
-
-        assert isinstance(vec, np.ndarray)
-        assert vec.dtype == np.float32
-        # P, Q, price, on_state(2), shutting, starting, soc
-        assert len(vec) == 8
-
-    def test_as_vector_tap_position_clamping(self):
-        """Test tap position is clamped to valid range."""
-        state = DeviceState(
-            tap_min=-1,
-            tap_max=1,
-            tap_position=10  # Out of range
-        )
-
-        vec = state.as_vector()
-
-        # Should clamp to max position (1)
-        # Positions: -1, 0, 1 (index 2 for position 1)
-        assert len(vec) == 3
-        assert vec[2] == 1.0
-
-    def test_as_vector_tap_position_none(self):
-        """Test tap position defaults to tap_min when None."""
-        state = DeviceState(
-            tap_min=-1,
-            tap_max=1,
-            tap_position=None
-        )
-
-        vec = state.as_vector()
-
-        # Should default to tap_min (-1), which is index 0
-        assert vec[0] == 1.0
-        assert vec[1] == 0.0
-        assert vec[2] == 0.0
-
-    def test_as_vector_consistency(self):
-        """Test as_vector returns consistent results."""
-        state = DeviceState(
-            P=1.0,
-            Q=0.5,
-            Pmax=2.0,
-            Qmax=1.0,
-            soc=0.7
-        )
-
-        vec1 = state.as_vector()
-        vec2 = state.as_vector()
-
-        np.testing.assert_array_equal(vec1, vec2)
-
-    def test_state_modification(self):
-        """Test modifying state values."""
-        state = DeviceState(P=1.0, Q=0.5)
-
-        state.P = 2.0
-        state.Q = 1.0
-
-        assert state.P == 2.0
-        assert state.Q == 1.0
-
-    def test_state_optional_fields(self):
-        """Test optional fields remain None when not set."""
-        state = DeviceState()
-
-        assert state.Pmax is None
-        assert state.Pmin is None
-        assert state.Qmax is None
-        assert state.Qmin is None
-        assert state.shutting is None
-        assert state.starting is None
-        assert state.soc is None
-        assert state.max_step is None
-        assert state.step is None
-        assert state.tap_max is None
-        assert state.tap_min is None
-        assert state.tap_position is None
-        assert state.loading_percentage is None
-        assert state.price is None
+    def test_alias_usable(self):
+        """Test DeviceState can be used like FieldAgentState."""
+        state = DeviceState(owner_id="agent1", owner_level=1)
+        assert isinstance(state, FieldAgentState)
 
 
 if __name__ == "__main__":

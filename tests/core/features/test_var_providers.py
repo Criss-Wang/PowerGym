@@ -48,7 +48,7 @@ def test_good_three_phase_per_phase_only():
         phase_spec=PhaseSpec("ABC"),
         kvar_ph=[100.0, 150.0, 200.0],
     )
-    assert b.phase_spec.nph() == 3
+    assert b.phase_spec.nph == 3
     assert b.kvar_ph.shape == (3,)
     assert np.isclose(b.kvar_ph.sum(), 450.0)
 
@@ -289,7 +289,7 @@ def test_roundtrip_three_phase_per_phase_only():
         kvar_ph=[100.0, 150.0, 200.0],
     )
     _assert_vector_names_consistent(b0)
-    assert b0.phase_spec.nph() == 3
+    assert b0.phase_spec.nph == 3
 
     d = b0.to_dict()
     json.dumps(d)
@@ -297,7 +297,7 @@ def test_roundtrip_three_phase_per_phase_only():
     b1 = ShuntCapacitorBlock.from_dict(d)
     _assert_vector_names_consistent(b1)
 
-    assert b1.phase_spec.nph() == 3
+    assert b1.phase_spec.nph == 3
     assert np.allclose(b1.kvar_ph, [100, 150, 200])
 
     v0 = b0.vector()

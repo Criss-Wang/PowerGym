@@ -50,6 +50,8 @@ class GridAgent(Agent):
         env_id: Optional[str] = None,
 
         # GridAgent specific params
+        devices: Optional[List[Agent]] = None,
+        centralized: bool = True,
         grid_config: DictType[str, Any] = {},
     ):
         """Initialize grid coordinator.
@@ -61,20 +63,31 @@ class GridAgent(Agent):
             message_broker: Optional message broker for hierarchical execution
             upstream_id: Optional parent agent ID for hierarchical execution
             env_id: Optional environment ID for multi-environment isolation
+            devices: List of device agents to manage (alternative to grid_config)
+            centralized: If True, uses centralized policy; if False, devices act independently
             grid_config: Grid configuration dictionary
         """
         self.protocol = protocol
         self.policy = policy
+        self.centralized = centralized
         self.state = GridState(agent_id, GRID_LEVEL)
 
-        # Build device agents
-        device_configs = grid_config.get('devices', [])
-        self.devices = self._build_device_agents(
-            device_configs,
-            message_broker=message_broker,
-            env_id=env_id,
-            upstream_id=agent_id  # Devices' upstream is this GridAgent
-        )
+        # Build device agents either from list or config
+        if devices is not None:
+            # Direct device list provided
+            self.devices = {device.agent_id: device for device in devices}
+            # Set upstream relationship for devices
+            for device in devices:
+                device.upstream_id = agent_id
+        else:
+            # Build from config
+            device_configs = grid_config.get('devices', [])
+            self.devices = self._build_device_agents(
+                device_configs,
+                message_broker=message_broker,
+                env_id=env_id,
+                upstream_id=agent_id  # Devices' upstream is this GridAgent
+            )
 
         super().__init__(
             agent_id=agent_id,
@@ -166,16 +179,28 @@ class GridAgent(Agent):
             "grid_state": self.state.vector()
         }
 
-    def act(self, observation: Observation, upstream_action: Any = None) -> None:
+    def act(self, observation: Observation, upstream_action: Any = None) -> Any:
         """Compute coordination action and distribute to devices. [Only for synchronous direct execution]
 
         Args:
             observation: Aggregated observation
             upstream_action: Pre-computed action (if any)
 
+        Returns:
+            Joint action array (if centralized mode with policy)
+
         Raises:
-            RuntimeError: If no action or policy is provided
+            NotImplementedError: If decentralized mode without policy
+            RuntimeError: If centralized mode without action or policy
         """
+        # Check centralized vs decentralized mode
+        if not self.centralized:
+            if self.policy is None and upstream_action is None:
+                raise NotImplementedError(
+                    "Decentralized mode requires devices to act independently. "
+                    "Use device.act() directly or provide a policy."
+                )
+
         # Get coordinator action from policy if available
         if upstream_action is not None:
             action = upstream_action
@@ -186,6 +211,8 @@ class GridAgent(Agent):
 
         # Coordinate devices using new unified method
         self.coordinate_devices(observation, action)
+
+        return action
     
     # ============================================
     # Abstract Methods for Hierarchical Execution
@@ -401,6 +428,21 @@ class GridAgent(Agent):
                 if obs:
                     self.devices[device_id].act(obs, upstream_action=action)
 
+    def coordinate_device(
+        self,
+        observation: Observation,
+        action: Any,
+    ) -> None:
+        """Coordinate a single device or all devices with given action.
+
+        Alias for coordinate_devices for backward compatibility.
+
+        Args:
+            observation: Current observation
+            action: Computed action from coordinator
+        """
+        self.coordinate_devices(observation, action)
+
     # ============================================
     # Utility Methods
     # ============================================
@@ -469,6 +511,10 @@ class PowerGridAgent(GridAgent):
         env_id: Optional[str] = None,
         grid_config: DictType[str, Any] = {},
 
+        # GridAgent args
+        devices: Optional[List[Agent]] = None,
+        centralized: bool = True,
+
         # PowerGridAgent specific params
         net: Optional[pp.pandapowerNet] = None,
     ):
@@ -481,11 +527,13 @@ class PowerGridAgent(GridAgent):
             upstream_id: Optional parent agent ID for hierarchical execution
             env_id: Optional environment ID for multi-environment isolation
             grid_config: Grid configuration dictionary
+            devices: Optional list of device agents to manage
+            centralized: If True, uses centralized policy for coordination
             net: PandaPower network object (required)
         """
         if net is None:
             raise ValueError("PandaPower network 'net' must be provided to PowerGridAgent.")
-        
+
         self.net = net
         self.name = net.name
         self.sgen: DictType[str, Generator] = {}
@@ -501,6 +549,8 @@ class PowerGridAgent(GridAgent):
             message_broker=message_broker,
             upstream_id=upstream_id,
             env_id=env_id,
+            devices=devices,
+            centralized=centralized,
             grid_config=grid_config,
         )
 
@@ -624,6 +674,26 @@ class PowerGridAgent(GridAgent):
                 min_q_mvar=ess.limits.q_min_MVAr if ess.limits else 0.0,
             )
             self.storage[ess.config.name] = ess
+
+    def add_sgen(self, sgens: Iterable[Generator] | Generator):
+        """Add renewable generators (solar/wind) to the network.
+
+        Public API for adding sgen devices after initialization.
+
+        Args:
+            sgens: Single Generator instance or iterable of Generator instances
+        """
+        self._add_sgen(sgens)
+
+    def add_storage(self, storages: Iterable[ESS] | ESS):
+        """Add energy storage systems to the network.
+
+        Public API for adding ESS devices after initialization.
+
+        Args:
+            storages: Single ESS instance or iterable of ESS instances
+        """
+        self._add_storage(storages)
 
     def add_dataset(self, dataset):
         """Add time-series dataset for loads and renewables.

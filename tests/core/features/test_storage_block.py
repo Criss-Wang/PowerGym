@@ -1,12 +1,14 @@
+"""Tests for StorageBlock feature provider."""
+
 import json
 import numpy as np
 import pytest
 
 from powergrid.features.storage import StorageBlock
-from powergrid.utils.phase import PhaseModel, PhaseSpec
 
 
 def _assert_vec_names_consistent(b: StorageBlock):
+    """Assert vector and names have same length."""
     v = b.vector().ravel()
     n = b.names()
     assert v.ndim == 1
@@ -15,196 +17,410 @@ def _assert_vec_names_consistent(b: StorageBlock):
 
 # ----------------- GOOD EXAMPLES -----------------
 
-def test_good_minimal_soc_only():
-    b = StorageBlock(soc=0.5)
+def test_good_minimal_required_fields():
+    """Test StorageBlock with all required fields."""
+    b = StorageBlock(
+        soc=0.5,
+        soc_min=0.0,
+        soc_max=1.0,
+        e_capacity_MWh=10.0,
+        p_ch_max_MW=5.0,
+        p_dsc_max_MW=5.0,
+    )
     _assert_vec_names_consistent(b)
-    assert "soc_frac" in b.names()
+    assert "soc" in b.names()
+    assert b.soc == 0.5
+    assert b.soc_min == 0.0
+    assert b.soc_max == 1.0
+    assert b.e_capacity_MWh == 10.0
 
 
 def test_good_capacity_and_power_limits():
+    """Test StorageBlock with capacity and power limits."""
     b = StorageBlock(
         soc=0.6,
+        soc_min=0.0,
+        soc_max=1.0,
         e_capacity_MWh=8.0,
         p_ch_max_MW=2.0,
-        p_dis_max_MW=3.0,
+        p_dsc_max_MW=3.0,
     )
     _assert_vec_names_consistent(b)
-    ns = b.names()
-    assert "e_capacity_MWh" in ns and "p_dis_max_MW" in ns
+    assert b.p_ch_max_MW == 2.0
+    assert b.p_dsc_max_MW == 3.0
 
 
-def test_good_with_derived_features():
+def test_good_with_efficiency():
+    """Test StorageBlock with efficiency values."""
     b = StorageBlock(
         soc=0.4,
         soc_min=0.1,
         soc_max=0.9,
         e_capacity_MWh=10.0,
         p_ch_max_MW=5.0,
-        p_dis_max_MW=5.0,
-        eta_ch=0.9,
-        eta_dis=0.95,
-        include_derived=True,
+        p_dsc_max_MW=5.0,
+        ch_eff=0.9,
+        dsc_eff=0.95,
     )
-    names = b.names()
-    v = b.vector()
-    for nm in ["headroom_up_MWh", "headroom_down_MWh", "ttf_h", "tte_h"]:
-        assert nm in names
+    assert b.ch_eff == 0.9
+    assert b.dsc_eff == 0.95
     _assert_vec_names_consistent(b)
-    assert len(v) == len(names)
 
 
-def test_good_three_phase_context_subset_spec():
-    b = StorageBlock(
-        phase_model=PhaseModel.THREE_PHASE,
-        phase_spec=PhaseSpec("BC"),
-        e_capacity_MWh=12.0,
-    )
-    _assert_vec_names_consistent(b)
-    assert b.phase_spec.nph() == 2
-
-
-def test_good_reserves_in_order():
+def test_good_with_degradation_params():
+    """Test StorageBlock with degradation parameters."""
     b = StorageBlock(
         soc=0.5,
-        reserve_min_frac=0.1,
-        reserve_max_frac=0.3,
+        soc_min=0.0,
+        soc_max=1.0,
+        e_capacity_MWh=10.0,
+        p_ch_max_MW=5.0,
+        p_dsc_max_MW=5.0,
+        degr_cost_per_MWh=0.1,
+        degr_cost_per_cycle=1.0,
     )
+    assert b.degr_cost_per_MWh == 0.1
+    assert b.degr_cost_per_cycle == 1.0
     _assert_vec_names_consistent(b)
-    assert "reserve_min_frac" in b.names()
-    assert "reserve_max_frac" in b.names()
 
 
 def test_good_roundtrip_serialization():
+    """Test serialization and deserialization."""
     b0 = StorageBlock(
         soc=0.5,
+        soc_min=0.0,
+        soc_max=1.0,
         e_capacity_MWh=10.0,
-        include_derived=True,
+        p_ch_max_MW=5.0,
+        p_dsc_max_MW=5.0,
     )
     d = b0.to_dict()
     s = json.dumps(d)
     d2 = json.loads(s)
     b1 = StorageBlock.from_dict(d2)
     _assert_vec_names_consistent(b1)
-    # Names may include derived depending on feasibility; lengths match.
     assert len(b0.names()) == len(b1.names())
     assert np.allclose(b0.vector(), b1.vector())
 
 
 # ----------------- BAD EXAMPLES -----------------
 
-def test_bad_empty_block_rejected():
-    with pytest.raises(ValueError, match="requires at least one"):
-        StorageBlock()
-
-
-def test_bad_reserve_ordering_rejected():
-    with pytest.raises(ValueError, match="reserve_max_frac"):
-        StorageBlock(
-            soc=0.4,
-            reserve_min_frac=0.8,
-            reserve_max_frac=0.2,
-        )
-
-
-def test_bad_three_phase_missing_spec():
-    with pytest.raises(ValueError, match="requires a PhaseSpec"):
-        StorageBlock(
-            phase_model=PhaseModel.THREE_PHASE,
-            phase_spec=None,
-            soc=0.4,
-        )
-
-
-def test_bad_unsupported_phase_model():
-    with pytest.raises(ValueError, match="Unsupported phase model"):
-        StorageBlock(phase_model="WEIRD_PHASE", soc=0.4)  # type: ignore
-
-
-def test_bad_all_fields_none_same_as_empty():
-    with pytest.raises(ValueError, match="requires at least one"):
+def test_bad_missing_soc():
+    """Test that missing soc raises error."""
+    with pytest.raises(ValueError, match="soc is None"):
         StorageBlock(
             soc=None,
-            e_capacity_MWh=None,
-            p_ch_max_MW=None,
+            soc_min=0.0,
+            soc_max=1.0,
+            e_capacity_MWh=10.0,
+            p_ch_max_MW=5.0,
+            p_dsc_max_MW=5.0,
         )
 
 
-# ----------------- CLAMP & BOUNDS -----------------
+def test_bad_missing_soc_min():
+    """Test that missing soc_min raises error."""
+    with pytest.raises(ValueError, match="soc_min is None"):
+        StorageBlock(
+            soc=0.5,
+            soc_min=None,
+            soc_max=1.0,
+            e_capacity_MWh=10.0,
+            p_ch_max_MW=5.0,
+            p_dsc_max_MW=5.0,
+        )
 
-def test_clamp_fraction_and_nonnegatives():
+
+def test_bad_missing_soc_max():
+    """Test that missing soc_max raises error."""
+    with pytest.raises(ValueError, match="soc_max is None"):
+        StorageBlock(
+            soc=0.5,
+            soc_min=0.0,
+            soc_max=None,
+            e_capacity_MWh=10.0,
+            p_ch_max_MW=5.0,
+            p_dsc_max_MW=5.0,
+        )
+
+
+def test_bad_missing_capacity():
+    """Test that missing e_capacity_MWh raises error."""
+    with pytest.raises(ValueError, match="e_capacity_MWh is None"):
+        StorageBlock(
+            soc=0.5,
+            soc_min=0.0,
+            soc_max=1.0,
+            e_capacity_MWh=None,
+            p_ch_max_MW=5.0,
+            p_dsc_max_MW=5.0,
+        )
+
+
+def test_bad_missing_p_ch_max():
+    """Test that missing p_ch_max_MW raises error."""
+    with pytest.raises(ValueError, match="p_ch_max_MW is None"):
+        StorageBlock(
+            soc=0.5,
+            soc_min=0.0,
+            soc_max=1.0,
+            e_capacity_MWh=10.0,
+            p_ch_max_MW=None,
+            p_dsc_max_MW=5.0,
+        )
+
+
+def test_bad_missing_p_dsc_max():
+    """Test that missing p_dsc_max_MW raises error."""
+    with pytest.raises(ValueError, match="p_dsc_max_MW is None"):
+        StorageBlock(
+            soc=0.5,
+            soc_min=0.0,
+            soc_max=1.0,
+            e_capacity_MWh=10.0,
+            p_ch_max_MW=5.0,
+            p_dsc_max_MW=None,
+        )
+
+
+def test_bad_soc_bounds_reversed():
+    """Test that soc_min > soc_max raises error."""
+    with pytest.raises(ValueError, match="soc_min cannot be greater than soc_max"):
+        StorageBlock(
+            soc=0.5,
+            soc_min=0.8,
+            soc_max=0.2,
+            e_capacity_MWh=10.0,
+            p_ch_max_MW=5.0,
+            p_dsc_max_MW=5.0,
+        )
+
+
+def test_bad_soc_out_of_range():
+    """Test that soc out of [0, 1] raises error."""
+    with pytest.raises(ValueError, match="soc must be in"):
+        StorageBlock(
+            soc=1.5,
+            soc_min=0.0,
+            soc_max=1.0,
+            e_capacity_MWh=10.0,
+            p_ch_max_MW=5.0,
+            p_dsc_max_MW=5.0,
+        )
+
+
+def test_bad_negative_capacity():
+    """Test that negative capacity raises error."""
+    with pytest.raises(ValueError, match="e_capacity_MWh must be > 0"):
+        StorageBlock(
+            soc=0.5,
+            soc_min=0.0,
+            soc_max=1.0,
+            e_capacity_MWh=-5.0,
+            p_ch_max_MW=5.0,
+            p_dsc_max_MW=5.0,
+        )
+
+
+def test_bad_negative_power_limit():
+    """Test that negative power limit raises error."""
+    with pytest.raises(ValueError, match="p_ch_max_MW must be >= 0"):
+        StorageBlock(
+            soc=0.5,
+            soc_min=0.0,
+            soc_max=1.0,
+            e_capacity_MWh=10.0,
+            p_ch_max_MW=-2.0,
+            p_dsc_max_MW=5.0,
+        )
+
+
+def test_bad_efficiency_out_of_range():
+    """Test that efficiency out of (0, 1] raises error."""
+    with pytest.raises(ValueError, match="ch_eff must be in"):
+        StorageBlock(
+            soc=0.5,
+            soc_min=0.0,
+            soc_max=1.0,
+            e_capacity_MWh=10.0,
+            p_ch_max_MW=5.0,
+            p_dsc_max_MW=5.0,
+            ch_eff=1.5,
+        )
+
+
+# ----------------- CLIP & BOUNDS -----------------
+
+def test_clip_clamps_soc():
+    """Test clip_() clamps SOC to bounds."""
     b = StorageBlock(
-        soc=-0.2,
-        soc_min=0.7,
-        soc_max=0.6,           # reversed; clamp_ swaps
-        e_capacity_MWh=-5.0,   # -> 0.0
-        p_ch_max_MW=-2.0,      # -> 0.0
-        degradation_frac=1.5,  # -> 1.0
+        soc=0.5,
+        soc_min=0.3,
+        soc_max=0.7,
+        e_capacity_MWh=10.0,
+        p_ch_max_MW=5.0,
+        p_dsc_max_MW=5.0,
     )
-    # __post_init__ already calls clamp_(), but call again to be explicit
-    b.clamp_()
-    assert 0.0 <= b.soc <= 1.0
-    assert b.soc_min <= b.soc_max
-    assert b.e_capacity_MWh == 0.0
-    assert b.p_ch_max_MW == 0.0
-    assert 0.0 <= b.degradation_frac <= 1.0
+    # Manually set soc outside bounds and clip
+    b.soc = 0.1
+    b.clip_()
+    assert b.soc == 0.3  # Clamped to soc_min
 
 
-def test_clamp_reserve_ordering_swap():
+def test_clip_clamps_efficiency():
+    """Test clip_() clamps efficiency to valid range."""
     b = StorageBlock(
-        soc=0.55,
-        reserve_min_frac=0.8,
-        reserve_max_frac=0.9,
+        soc=0.5,
+        soc_min=0.0,
+        soc_max=1.0,
+        e_capacity_MWh=10.0,
+        p_ch_max_MW=5.0,
+        p_dsc_max_MW=5.0,
     )
-    # valid as-is; ensure clamp does not break
-    b.clamp_()
-    assert b.reserve_min_frac <= b.reserve_max_frac
+    # Test that clip keeps efficiency in valid range
+    b.ch_eff = 1.5
+    b.clip_()
+    assert b.ch_eff == 1.0
 
 
-def test_vector_names_alignment_minimal():
-    b = StorageBlock(soc=0.33)
+# ----------------- VECTOR & NAMES -----------------
+
+def test_vector_names_alignment():
+    """Test vector and names are aligned."""
+    b = StorageBlock(
+        soc=0.5,
+        soc_min=0.0,
+        soc_max=1.0,
+        e_capacity_MWh=10.0,
+        p_ch_max_MW=5.0,
+        p_dsc_max_MW=5.0,
+    )
     _assert_vec_names_consistent(b)
-    assert b.names() == ["soc_frac"]
-
-
-def test_vector_names_with_many_fields():
-    b = StorageBlock(
-        soc=0.25, soc_min=0.1, soc_max=0.9,
-        e_capacity_MWh=8.0,
-        p_ch_max_MW=2.0, p_dis_max_MW=3.0,
-        eta_ch=0.9, eta_dis=0.95, soh_frac=0.8,
-        reserve_min_frac=0.2, reserve_max_frac=0.9,
-        cycle_throughput_MWh=12.0, degradation_frac=0.1,
-        include_derived=True,
-    )
+    # Current implementation includes: soc, e_throughput_MWh, equiv_full_cycles
     names = b.names()
-    v = b.vector()
-    _assert_vec_names_consistent(b)
-    assert "soc_frac" in names and "tte_h" in names
-    assert len(v) == len(names)
+    assert "soc" in names
+    assert "e_throughput_MWh" in names
+    assert "equiv_full_cycles" in names
 
 
-def test_three_phase_settings():
-    # Single-phase connection on a 3φ bus (phase B), even split (only one phase)
-    sb1 = StorageBlock(
-        phase_model=PhaseModel.THREE_PHASE,
-        phase_spec=PhaseSpec("B"),
-        e_capacity_MWh=10.0, p_ch_max_MW=3.0, p_dis_max_MW=3.0, soc=0.5,
+# ----------------- DEGRADATION -----------------
+
+def test_accumulate_throughput():
+    """Test degradation throughput accumulation."""
+    b = StorageBlock(
+        soc=0.5,
+        soc_min=0.0,
+        soc_max=1.0,
+        e_capacity_MWh=10.0,
+        p_ch_max_MW=5.0,
+        p_dsc_max_MW=5.0,
+        degr_cost_per_MWh=0.1,
+        degr_cost_per_cycle=1.0,
     )
-    assert sb1.connected_phases() == "B"
-    assert sb1.get_phase_allocation().tolist() == [1.0]
 
-    # Two-phase connection (BC) with explicit 70/30 split
-    sb2 = StorageBlock(
-        phase_model=PhaseModel.THREE_PHASE,
-        phase_spec=PhaseSpec("BC"),
-        alloc_frac_ph=[0.7, 0.3],
-        e_capacity_MWh=12.0, p_ch_max_MW=6.0, p_dis_max_MW=6.0, soc=0.4,
+    assert b.e_throughput_MWh == 0.0
+    assert b.equiv_full_cycles == 0.0
+
+    # Accumulate 5 MWh throughput
+    cost = b.accumulate_throughput(5.0)
+
+    assert b.e_throughput_MWh == 5.0
+    assert b.equiv_full_cycles == 0.5  # 5 / 10 capacity
+    assert cost > 0  # Should have some cost
+
+
+def test_soc_violation():
+    """Test SOC violation computation."""
+    b = StorageBlock(
+        soc=0.5,
+        soc_min=0.2,
+        soc_max=0.8,
+        e_capacity_MWh=10.0,
+        p_ch_max_MW=5.0,
+        p_dsc_max_MW=5.0,
     )
-    assert sb2.connected_phases() == "BC"
-    alloc = sb2.get_phase_allocation()
-    assert np.isclose(np.sum(alloc), 1.0)  # sums to 1.0 after normalization
-    # allocation matches provided split after normalization
-    np.testing.assert_allclose(alloc, np.array([0.7, 0.3], dtype=np.float32))
+
+    # No violation when soc is within bounds
+    assert b.soc_violation() == 0.0
+
+    # Violation when below min
+    b.soc = 0.1
+    assert b.soc_violation() == 0.1  # 0.2 - 0.1
+
+
+# ----------------- RESET -----------------
+
+def test_reset_basic():
+    """Test basic reset functionality."""
+    b = StorageBlock(
+        soc=0.5,
+        soc_min=0.0,
+        soc_max=1.0,
+        e_capacity_MWh=10.0,
+        p_ch_max_MW=5.0,
+        p_dsc_max_MW=5.0,
+    )
+
+    # Add some throughput
+    b.accumulate_throughput(5.0)
+    assert b.e_throughput_MWh > 0
+
+    # Reset
+    b.reset(soc=0.3, reset_degradation=True)
+
+    assert b.soc == 0.3
+    assert b.e_throughput_MWh == 0.0
+    assert b.degr_cost_cum == 0.0
+
+
+def test_reset_random():
+    """Test random reset functionality."""
+    b = StorageBlock(
+        soc=0.5,
+        soc_min=0.2,
+        soc_max=0.8,
+        e_capacity_MWh=10.0,
+        p_ch_max_MW=5.0,
+        p_dsc_max_MW=5.0,
+    )
+
+    b.reset(random_init=True, seed=42)
+
+    assert 0.2 <= b.soc <= 0.8
+
+
+# ----------------- SET_VALUES -----------------
+
+def test_set_values():
+    """Test set_values method."""
+    b = StorageBlock(
+        soc=0.5,
+        soc_min=0.0,
+        soc_max=1.0,
+        e_capacity_MWh=10.0,
+        p_ch_max_MW=5.0,
+        p_dsc_max_MW=5.0,
+    )
+
+    b.set_values(soc=0.7, p_ch_max_MW=3.0)
+
+    assert b.soc == 0.7
+    assert b.p_ch_max_MW == 3.0
+
+
+def test_set_values_unknown_field():
+    """Test set_values rejects unknown fields."""
+    b = StorageBlock(
+        soc=0.5,
+        soc_min=0.0,
+        soc_max=1.0,
+        e_capacity_MWh=10.0,
+        p_ch_max_MW=5.0,
+        p_dsc_max_MW=5.0,
+    )
+
+    with pytest.raises(AttributeError, match="unknown fields"):
+        b.set_values(unknown_field=1.0)
 
 
 if __name__ == "__main__":

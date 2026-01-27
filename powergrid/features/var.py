@@ -48,7 +48,7 @@ class ShuntCapacitorBlock(FeatureProvider):
         elif self.phase_model == PhaseModel.THREE_PHASE:
             if not isinstance(self.phase_spec, PhaseSpec):
                 raise ValueError("THREE_PHASE requires a PhaseSpec.")
-            n = self.phase_spec.nph()
+            n = self.phase_spec.nph
             if n not in (1, 2, 3):
                 raise ValueError(
                     "THREE_PHASE requires PhaseSpec with 1, 2, or 3 phases "
@@ -168,7 +168,7 @@ class ShuntCapacitorBlock(FeatureProvider):
             return
 
         # THREE_PHASE (supports nph = 1, 2, or 3)
-        n = self.phase_spec.nph()
+        n = self.phase_spec.nph
         has_scalar = self.kvar_total is not None
         has_ph = self.kvar_ph is not None
         has_staged = (
@@ -256,7 +256,7 @@ class ShuntCapacitorBlock(FeatureProvider):
                 self.stage_enabled = as_f32(self.stage_enabled).ravel()
     
         if self.phase_model == PhaseModel.THREE_PHASE:
-            n = self.phase_spec.nph()
+            n = self.phase_spec.nph
 
             if self.kvar_ph is not None:
                 a = as_f32(self.kvar_ph).ravel()
@@ -456,7 +456,7 @@ class VoltVarCurve(FeatureProvider):
     q_points_pu_ph: Optional[np.ndarray] = None  # (nph, k)
 
     def __post_init__(self):
-        if self.phase_model == PhaseModel.BALANCED_1PH and self.phase_spec.nph() != 1:
+        if self.phase_model == PhaseModel.BALANCED_1PH and self.phase_spec.nph != 1:
             ps = self.phase_spec
             self.phase_spec = PhaseSpec(ps.phases[0], ps.has_neutral, ps.earth_bond)
 
@@ -477,7 +477,7 @@ class VoltVarCurve(FeatureProvider):
         self.v_points_pu, self.q_points_pu = v, q
 
     def _ensure_per_phase_(self) -> None:
-        n = self.phase_spec.nph()
+        n = self.phase_spec.nph
         if self.enabled_ph is not None:
             e = as_f32(self.enabled_ph).ravel()
             if e.shape != (n,):
@@ -633,7 +633,7 @@ class VoltVarCurve(FeatureProvider):
             )
 
         # THREE_PHASE target: remap per-phase matrices to new spec
-        n = spec.nph()
+        n = spec.nph
         def remap1d(a: Optional[np.ndarray]) -> Optional[np.ndarray]:
             if a is None:
                 return None
@@ -699,7 +699,7 @@ class VoltVarCurve(FeatureProvider):
     def __post_init__(self):
         # Balanced must be single-phase; keep first listed phase.
         if (self.phase_model == PhaseModel.BALANCED_1PH
-                and self.phase_spec.nph() != 1):
+                and self.phase_spec.nph != 1):
             ps = self.phase_spec
             self.phase_spec = PhaseSpec(
                 ps.phases[0], ps.has_neutral, ps.earth_bond
@@ -740,7 +740,7 @@ class VoltVarCurve(FeatureProvider):
         if self.phase_model != PhaseModel.THREE_PHASE:
             return
 
-        nph = self.phase_spec.nph()
+        nph = self.phase_spec.nph
 
         # enabled_ph
         if self.enabled_ph is not None:
@@ -942,7 +942,7 @@ class VoltVarCurve(FeatureProvider):
 
         # Expand / remap to THREE_PHASE: carry shared curve as-is,
         # remap per-phase matrices to new nph via pad/truncate rows.
-        nph_new = spec.nph()
+        nph_new = spec.nph
 
         def remap_row(a: Optional[np.ndarray]) -> Optional[np.ndarray]:
             if a is None:

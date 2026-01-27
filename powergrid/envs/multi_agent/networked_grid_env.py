@@ -17,6 +17,7 @@ from powergrid.agents.proxy_agent import ProxyAgent
 from heron.protocols.base import NoProtocol, Protocol
 from heron.messaging.base import ChannelManager, Message, MessageBroker, MessageType
 from heron.messaging.memory import InMemoryBroker
+from powergrid.messaging.channels import PowerGridChannelManager
 from powergrid.utils.helpers import gen_uuid
 from heron.utils.typing import AgentID
 
@@ -284,13 +285,13 @@ class NetworkedGridEnv(ParallelEnv):
             aggregated_network_state['agents'][agent.agent_id] = agent_network_state
 
         # Send aggregated network state to ProxyAgent
-        channel = ChannelManager.power_flow_result_channel(self._env_id, "proxy_agent")
+        channel = PowerGridChannelManager.power_flow_result_channel(self._env_id, "proxy_agent")
         message = Message(
             env_id=self._env_id,
             sender_id="environment",
             recipient_id="proxy_agent",
             timestamp=self._t,
-            message_type=MessageType.POWER_FLOW_RESULT,
+            message_type=MessageType.RESULT,
             payload=aggregated_network_state
         )
         self.message_broker.publish(channel, message)

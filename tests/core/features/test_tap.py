@@ -221,7 +221,7 @@ def test_roundtrip_three_phase_subset():
     s = json.dumps(d)
     b1 = TapChangerPh.from_dict(json.loads(s))
     _assert_vec_names_consistent(b1)
-    assert b1.phase_spec.nph() == 2
+    assert b1.phase_spec.nph == 2
     assert np.allclose(b0.vector(), b1.vector())
 
 

@@ -145,7 +145,7 @@ def test_roundtrip_three_phase_subset():
     d2 = json.loads(s)
     b1 = ThermalLoading.from_dict(d2)
     _assert_vec_names_consistent(b1)
-    assert b1.phase_spec.nph() == 2
+    assert b1.phase_spec.nph == 2
     assert np.allclose(b0.vector(), b1.vector())
 
 

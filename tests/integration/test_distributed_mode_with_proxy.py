@@ -17,6 +17,7 @@ import pandapower as pp
 from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogrids
 from powergrid.envs.configs.config_loader import load_config
 from heron.messaging.base import ChannelManager
+from powergrid.messaging.channels import PowerGridChannelManager
 from powergrid.agents.proxy_agent import ProxyAgent
 
 
@@ -79,7 +80,7 @@ class TestDistributedModeWithProxy:
         broker = distributed_env.message_broker
 
         # Check environment-to-proxy channel exists
-        env_to_proxy_channel = ChannelManager.power_flow_result_channel(
+        env_to_proxy_channel = PowerGridChannelManager.power_flow_result_channel(
             distributed_env._env_id,
             "proxy_agent"
         )

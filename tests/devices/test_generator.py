@@ -36,8 +36,8 @@ def make_config(
         cfg["device_state_config"]["q_max_MVAr"] = qmax
         cfg["device_state_config"]["pf_min_abs"] = pfmin
     if with_uc:
-        cfg["device_state_config"]["startup_time"] = 2
-        cfg["device_state_config"]["shutdown_time"] = 2
+        cfg["device_state_config"]["startup_time_hr"] = 2
+        cfg["device_state_config"]["shutdown_time_hr"] = 2
         cfg["device_state_config"]["startup_cost"] = 5.0
         cfg["device_state_config"]["shutdown_cost"] = 1.0
     return cfg
@@ -49,11 +49,10 @@ def test_features_and_observation_vector_parity():
     kinds = {type(f).__name__ for f in dg.state.features}
     assert "ElectricalBasePh" in kinds
     assert "StatusBlock" in kinds
-    assert "GeneratorLimits" in kinds
+    assert "PowerLimits" in kinds  # Not "GeneratorLimits"
 
     # Observation space shape == state.vector().shape
     vec = dg.state.vector()
-    names = dg.state.names()
     obs = dg.observe()
     assert vec.dtype == np.float32
     assert obs.local["state"].shape == vec.shape
@@ -62,29 +61,28 @@ def test_features_and_observation_vector_parity():
 def test_action_space_continuous_only_and_mixed_uc():
     # P + Q + UC; DeviceAgent action space is built from continuous part (Box)
     dg = Generator(
-        agent_id="G1", 
+        agent_id="G1",
         device_config=make_config(with_q=True, with_uc=True)
     )
-    assert dg.action.dim_c == 2 # Control bothe P and Q
-    assert dg.action.dim_d == 1 # Control when to startup or shutdown 
+    assert dg.action.dim_c == 2  # Control both P and Q
+    assert dg.action.dim_d == 1  # Control when to startup or shutdown
     low, high = dg.action.range
     assert low.shape == (2,) and high.shape == (2,)
-    # UC head exists with 2 categories
-    assert dg.action.ncats == 2
+    # UC head exists with 2 categories (off=0, on=1)
+    assert dg.action.ncats == [2]
 
 
 def test_projection_applies_limits():
     dg = Generator(
-        agent_id="G1", 
+        agent_id="G1",
         device_config=make_config(with_q=True, with_uc=False)
     )
     # ask for an over-limit action: P>pmax and Q>qmax → must be projected
-    a = np.array([9.0, 4.0], dtype=np.float32)  # [P, Q] over the limits
-    # base API expects one flat vector with dim_c + dim_d
-    dg._set_device_action(a)
+    # Set action directly
+    dg.action.c[:] = np.array([9.0, 4.0], dtype=np.float32)
     dg.update_state()
-    e = dg._electrical()
-    lim = dg._limits()
+    e = dg.electrical
+    lim = dg.limits
 
     # within static bounds
     assert lim.p_min_MW <= e.P_MW <= lim.p_max_MW
@@ -100,78 +98,78 @@ def test_projection_applies_limits():
 
 def test_uc_shutdown_then_startup_costs_and_states():
     dg = Generator(
-        agent_id="G1", 
+        agent_id="G1",
         device_config=make_config(with_q=True, with_uc=True)
     )
     dg.reset_device()
-    # dg._status().state == "online"
+    # dg.status.state == "online"
 
-    # Request OFF: d=0; include continuous c to satisfy _set_device_action
-    a = np.array([5.0, 0.0, 0], dtype=np.float32)  # [P,Q,d], d for UC control
-    dg._set_device_action(a)
+    # Request OFF: d=0; set continuous c as well
+    dg.action.c[:] = np.array([5.0, 0.0], dtype=np.float32)
+    dg.action.d[:] = np.array([0], dtype=np.int32)  # UC command: turn off
     dg.update_state()
     # first step: entering "shutdown"
-    assert dg._status().state == "shutdown"
+    assert dg.status.state == "shutdown"
 
-    # advance one more step to complete shutdown (t_stop=1)
-    dg._set_device_action(a)
+    # advance one more step to complete shutdown (shutdown_time_hr=2)
+    dg.action.d[:] = np.array([0], dtype=np.int32)
     dg.update_state()
     dg.update_cost_safety()
-    assert dg._status().state == "offline"
+    assert dg.status.state == "offline"
     # shutdown cost applied on completion
-    assert dg.cost >= dg._shutdown_cost * dg._dt_h
+    assert dg.cost >= dg._generator_config.shutdown_cost * dg._generator_config.dt_h
 
-    # Now request ON: d=1, two steps to start (t_start=2)
-    a_on = np.array([5.0, 0.0, 1], dtype=np.float32)
-    dg._set_device_action(a_on)
+    # Now request ON: d=1, two steps to start (startup_time_hr=2)
+    dg.action.d[:] = np.array([1], dtype=np.int32)  # UC command: turn on
     dg.update_state()
-    assert dg._status().state == "startup"
+    assert dg.status.state == "startup"
 
-    dg._set_device_action(a_on)
+    dg.action.d[:] = np.array([1], dtype=np.int32)
     dg.update_state()
     dg.update_cost_safety()
-    assert dg._status().state == "online"
+    assert dg.status.state == "online"
     # startup cost applied on completion
-    assert dg.cost >= dg._startup_cost * dg._dt_h
+    assert dg.cost >= dg._generator_config.startup_cost * dg._generator_config.dt_h
 
 
 def test_uc_timers_startup_shutdown():
     dg = Generator(
-        agent_id="G1", 
+        agent_id="G1",
         device_config=make_config(with_q=True, with_uc=True)
     )
     dg.reset_device()
 
     # Request OFF (d=0) → enter shutdown → next step complete → offline
-    dg._set_device_action(np.array([5.0, 0.0, 0], np.float32))
+    dg.action.c[:] = np.array([5.0, 0.0], dtype=np.float32)
+    dg.action.d[:] = np.array([0], dtype=np.int32)
     dg.update_state()
-    assert dg._status().state == "shutdown"
+    assert dg.status.state == "shutdown"
 
-    dg._set_device_action(np.array([5.0, 0.0, 0], np.float32))
+    dg.action.d[:] = np.array([0], dtype=np.int32)
     dg.update_state()
     dg.update_cost_safety()
-    assert dg._status().state == "offline"
-    assert dg.cost >= dg._shutdown_cost * dg._dt_h
+    assert dg.status.state == "offline"
+    assert dg.cost >= dg._generator_config.shutdown_cost * dg._generator_config.dt_h
 
     # Request ON (d=1) → startup spans 2 steps → online and startup_cost
-    dg._set_device_action(np.array([5.0, 0.0, 1], np.float32))
+    dg.action.d[:] = np.array([1], dtype=np.int32)
     dg.update_state()
-    assert dg._status().state == "startup"
+    assert dg.status.state == "startup"
 
-    dg._set_device_action(np.array([5.0, 0.0, 1], np.float32))
+    dg.action.d[:] = np.array([1], dtype=np.int32)
     dg.update_state()
     dg.update_cost_safety()
-    assert dg._status().state == "online"
-    assert dg.cost >= dg._startup_cost * dg._dt_h
+    assert dg.status.state == "online"
+    assert dg.cost >= dg._generator_config.startup_cost * dg._generator_config.dt_h
+
 
 def test_cost_and_safety_accounting():
     dg = Generator(
-        agent_id="G1", 
+        agent_id="G1",
         device_config=make_config(with_q=True, with_uc=False)
     )
     # Set a feasible but nonzero (P,Q)
-    a = np.array([6.0, 2.0], dtype=np.float32)
-    dg._set_device_action(a)
+    dg.action.c[:] = np.array([6.0, 2.0], dtype=np.float32)
     dg.update_state()
     dg.update_cost_safety()
     # Cost should be positive when online and P>0
@@ -182,14 +180,15 @@ def test_cost_and_safety_accounting():
 
 def test_feasible_action_preclips_action_vector():
     dg = Generator(
-        agent_id="G1", 
+        agent_id="G1",
         device_config=make_config(with_q=True, with_uc=False)
     )
     # Action far outside bounds
     dg.action.c[:] = np.array([999.0, 999.0], dtype=np.float32)
-    dg.feasible_action()
+    # Call clip to get into range (feasible_action is for ESS, not generator)
+    dg.action.clip()
     P, Q = dg.action.c.tolist()
-    lim = dg._limits()
+    lim = dg.limits
     assert lim.p_min_MW <= P <= lim.p_max_MW
     assert lim.q_min_MVAr <= Q <= lim.q_max_MVAr
 

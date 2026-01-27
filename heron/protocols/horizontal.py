@@ -57,8 +57,17 @@ class TradingCommunicationProtocol(CommunicationProtocol):
         offers = {}
 
         for agent_id, state in receiver_states.items():
-            net_demand = state.get('net_demand', 0)
-            marginal_cost = state.get('marginal_cost', 50)
+            # Handle both dict-like objects and Observation objects
+            if hasattr(state, 'local'):
+                # Observation object - access local dict
+                local = state.local
+            elif hasattr(state, 'get'):
+                # dict-like object
+                local = state
+            else:
+                local = {}
+            net_demand = local.get('net_demand', 0)
+            marginal_cost = local.get('marginal_cost', 50)
 
             if net_demand > 0:  # Need to buy
                 bids[agent_id] = {
@@ -225,8 +234,15 @@ class ConsensusCommunicationProtocol(CommunicationProtocol):
         topology = context.get("topology")
 
         # Initialize with local values
+        def get_control_value(state):
+            if hasattr(state, 'local'):
+                return state.local.get('control_value', 0)
+            elif hasattr(state, 'get'):
+                return state.get('control_value', 0)
+            return 0
+
         values = {
-            agent_id: state.get('control_value', 0)
+            agent_id: get_control_value(state)
             for agent_id, state in receiver_states.items()
         }
 

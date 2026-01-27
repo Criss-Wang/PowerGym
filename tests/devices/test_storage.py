@@ -24,44 +24,49 @@ class MockPolicy(Policy):
 
 def make_ess_config(
     bus="Bus1",
-    min_p_MW=-2.0,
-    max_p_MW=2.0,
-    capacity_MWh=10.0,
-    max_e_MWh=None,
-    min_e_MWh=0.0,
+    p_min_MW=-2.0,
+    p_max_MW=2.0,
+    e_capacity_MWh=10.0,
+    soc_min=0.0,
+    soc_max=1.0,
     init_soc=0.5,
-    min_q_MVAr=None,
-    max_q_MVAr=None,
+    q_min_MVAr=None,
+    q_max_MVAr=None,
     s_rated_MVA=None,
     ch_eff=0.98,
     dsc_eff=0.98,
-    cost_curve_coefs=(0.0, 0.0, 0.0),
     dt_h=1.0,
 ):
-    """Helper to create ESS device config."""
+    """Helper to create ESS device config.
+
+    Field names match ESS implementation's expected config keys:
+    - p_min_MW: minimum power (negative for discharge)
+    - p_max_MW: maximum power (positive for charge)
+    - e_capacity_MWh: nameplate energy capacity
+    - soc_min/soc_max: SOC bounds [0, 1]
+    - init_soc: initial SOC [0, 1]
+    """
     config = {
         "device_state_config": {
             "phase_model": PhaseModel.BALANCED_1PH.value,
             "bus": bus,
-            "min_p_MW": min_p_MW,
-            "max_p_MW": max_p_MW,
-            "capacity_MWh": capacity_MWh,
-            "min_e_MWh": min_e_MWh,
+            "p_min_MW": p_min_MW,
+            "p_max_MW": p_max_MW,
+            "e_capacity_MWh": e_capacity_MWh,
+            "soc_min": soc_min,
+            "soc_max": soc_max,
             "init_soc": init_soc,
             "ch_eff": ch_eff,
             "dsc_eff": dsc_eff,
-            "cost_curve_coefs": cost_curve_coefs,
             "dt_h": dt_h,
         }
     }
-    if max_e_MWh is not None:
-        config["device_state_config"]["max_e_MWh"] = max_e_MWh
     if s_rated_MVA is not None:
         config["device_state_config"]["s_rated_MVA"] = s_rated_MVA
-    if min_q_MVAr is not None:
-        config["device_state_config"]["min_q_MVAr"] = min_q_MVAr
-    if max_q_MVAr is not None:
-        config["device_state_config"]["max_q_MVAr"] = max_q_MVAr
+    if q_min_MVAr is not None:
+        config["device_state_config"]["q_min_MVAr"] = q_min_MVAr
+    if q_max_MVAr is not None:
+        config["device_state_config"]["q_max_MVAr"] = q_max_MVAr
     return config
 
 
@@ -78,21 +83,25 @@ class TestESS:
 
         assert ess.agent_id == "ESS1"
         assert ess.bus == "Bus1"
-        assert ess._storage_config.min_p_MW == -2.0
-        assert ess._storage_config.max_p_MW == 2.0
-        assert ess._storage_config.capacity_MWh == 10.0
+        assert ess._storage_config.p_min_MW == -2.0
+        assert ess._storage_config.p_max_MW == 2.0
+        assert ess._storage_config.e_capacity_MWh == 10.0
 
     def test_ess_with_q_control(self):
         """Test ESS with reactive power control."""
         ess = ESS(
             agent_id="ESS1",
             policy=MockPolicy(),
-            device_config=make_ess_config(s_rated_MVA=3.0)
+            device_config=make_ess_config(
+                s_rated_MVA=3.0,
+                q_min_MVAr=-1.5,
+                q_max_MVAr=1.5
+            )
         )
 
-        # Should compute Q limits from s_rated_MVA
-        assert ess._storage_config.min_q_MVAr is not None
-        assert ess._storage_config.max_q_MVAr is not None
+        # Should have Q limits
+        assert ess._storage_config.q_min_MVAr == -1.5
+        assert ess._storage_config.q_max_MVAr == 1.5
         assert ess.action.dim_c == 2  # P and Q
 
     def test_ess_action_space_p_only(self):
@@ -163,7 +172,11 @@ class TestESS:
         ess = ESS(
             agent_id="ESS1",
             policy=MockPolicy([1.0, 0.5]),
-            device_config=make_ess_config(s_rated_MVA=3.0)
+            device_config=make_ess_config(
+                s_rated_MVA=3.0,
+                q_min_MVAr=-1.5,
+                q_max_MVAr=1.5
+            )
         )
 
         ess.action.c = np.array([1.0, 0.5], dtype=np.float32)
@@ -177,17 +190,14 @@ class TestESS:
         ess = ESS(
             agent_id="ESS1",
             policy=MockPolicy(),
-            device_config=make_ess_config(
-                cost_curve_coefs=(1.0, 2.0, 3.0),
-                dt_h=1.0
-            )
+            device_config=make_ess_config(dt_h=1.0)
         )
 
         ess.electrical.P_MW = 1.0
         ess.storage.soc = 0.5
         ess.update_cost_safety()
 
-        # Cost should be calculated from curve
+        # Cost should be calculated (may include degradation cost)
         assert ess.cost >= 0
         assert ess.safety >= 0
 
@@ -197,8 +207,8 @@ class TestESS:
             agent_id="ESS1",
             policy=MockPolicy(),
             device_config=make_ess_config(
-                min_e_MWh=1.0,
-                max_e_MWh=9.0,
+                soc_min=0.1,
+                soc_max=0.9,
                 ch_eff=1.0,
                 dsc_eff=1.0,
                 dt_h=1.0
@@ -208,15 +218,13 @@ class TestESS:
         # Set SOC near minimum
         ess.storage.soc = 0.15  # 1.5 MWh out of 10 MWh capacity
 
-        # Try to discharge at max power
-        ess.action.c = np.array([-2.0], dtype=np.float32)
+        # Try to discharge at max power - feasible_action returns clipped value
+        P_req = -2.0
+        P_clipped = ess.feasible_action(P_req)
 
-        # Apply feasibility constraint
-        ess.feasible_action()
-
-        # Should be clamped to prevent going below min_e_MWh
+        # Should be clamped to prevent going below soc_min
         # Available discharge: (0.15 - 0.1) * 10 = 0.5 MWh over 1 hour = 0.5 MW
-        assert ess.action.c[0] >= -0.5
+        assert P_clipped >= -0.5
 
     def test_ess_feasible_action_charging(self):
         """Test feasible action clamping during charging."""
@@ -224,7 +232,7 @@ class TestESS:
             agent_id="ESS1",
             policy=MockPolicy(),
             device_config=make_ess_config(
-                max_e_MWh=9.0,
+                soc_max=0.9,
                 ch_eff=1.0,
                 dt_h=1.0
             )
@@ -233,15 +241,13 @@ class TestESS:
         # Set SOC near maximum
         ess.storage.soc = 0.85  # 8.5 MWh out of 10 MWh capacity
 
-        # Try to charge at max power
-        ess.action.c = np.array([2.0], dtype=np.float32)
+        # Try to charge at max power - feasible_action returns clipped value
+        P_req = 2.0
+        P_clipped = ess.feasible_action(P_req)
 
-        # Apply feasibility constraint
-        ess.feasible_action()
-
-        # Should be clamped to prevent exceeding max_e_MWh
+        # Should be clamped to prevent exceeding soc_max
         # Available charge: (0.9 - 0.85) * 10 = 0.5 MWh over 1 hour = 0.5 MW
-        assert ess.action.c[0] <= 0.5
+        np.testing.assert_almost_equal(P_clipped, 0.5, decimal=5)
 
     def test_ess_reset(self):
         """Test ESS reset."""
@@ -249,8 +255,8 @@ class TestESS:
             agent_id="ESS1",
             policy=MockPolicy(),
             device_config=make_ess_config(
-                min_e_MWh=2.0,
-                max_e_MWh=8.0
+                soc_min=0.2,
+                soc_max=0.8
             )
         )
 
@@ -260,7 +266,7 @@ class TestESS:
         ess.cost = 100.0
 
         # Reset with specific SOC
-        ess.reset_device(init_soc=0.6)
+        ess.reset_device(soc=0.6)
 
         assert ess.electrical.P_MW == 0.0
         assert ess.storage.soc == 0.6
@@ -273,18 +279,16 @@ class TestESS:
             agent_id="ESS1",
             policy=MockPolicy(),
             device_config=make_ess_config(
-                min_e_MWh=2.0,
-                max_e_MWh=8.0
+                soc_min=0.2,
+                soc_max=0.8
             )
         )
 
-        rnd = np.random.RandomState(42)
-        ess.reset_device(rnd=rnd)
+        # Reset with random init
+        ess.reset_device(random_init_soc=True, seed=42)
 
-        # SOC should be between min and max
-        min_soc = ess._storage_config.min_e_MWh / ess._storage_config.capacity_MWh
-        max_soc = ess._storage_config.max_e_MWh / ess._storage_config.capacity_MWh
-        assert min_soc <= ess.storage.soc <= max_soc
+        # SOC should be between soc_min and soc_max
+        assert ess._storage_config.soc_min <= ess.storage.soc <= ess._storage_config.soc_max
 
     def test_ess_full_lifecycle(self):
         """Test full ESS lifecycle."""
@@ -304,8 +308,8 @@ class TestESS:
         assert isinstance(obs, Observation)
 
         # Act - charge
-        action = ess.act(obs)
-        assert action[0] == 1.0
+        ess.act(obs)
+        np.testing.assert_array_almost_equal(ess.action.c, [1.0])
 
         # Update
         ess.update_state()

@@ -41,7 +41,7 @@ class ThermalLoading(FeatureProvider):
         elif self.phase_model == PhaseModel.THREE_PHASE:
             if not isinstance(self.phase_spec, PhaseSpec):
                 raise ValueError("THREE_PHASE requires a PhaseSpec.")
-            n = self.phase_spec.nph()
+            n = self.phase_spec.nph
             if n not in (1, 2, 3):
                 raise ValueError(
                     "THREE_PHASE requires PhaseSpec with 1, 2, or 3 phases "
@@ -77,7 +77,7 @@ class ThermalLoading(FeatureProvider):
 
     def _ensure_shapes_(self) -> None:
         if self.phase_model == PhaseModel.THREE_PHASE:
-            n = self.phase_spec.nph()
+            n = self.phase_spec.nph
             arr = as_f32(self.loading_percentage_ph).ravel()
             if arr.shape != (n,):
                 raise ValueError(

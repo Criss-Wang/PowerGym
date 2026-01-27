@@ -11,12 +11,57 @@ from typing import Any, Callable, Dict, List, Optional
 
 
 class MessageType(Enum):
-    """Generic message types for agent communication."""
+    """Generic message types for agent communication.
+
+    Domains can register additional message types via MessageTypeRegistry.
+    """
     ACTION = "action"
     INFO = "info"
     BROADCAST = "broadcast"
     STATE_UPDATE = "state_update"
     RESULT = "result"  # Generic result message
+    CUSTOM = "custom"  # For domain-specific message types
+
+
+class MessageTypeRegistry:
+    """Registry for domain-specific message types.
+
+    Allows domains to register custom message type identifiers that can be
+    used in the payload's 'custom_type' field when MessageType.CUSTOM is used.
+
+    Example:
+        # In powergrid domain initialization
+        MessageTypeRegistry.register("power_flow_result")
+        MessageTypeRegistry.register("voltage_update")
+
+        # When creating a message
+        msg = Message(
+            ...,
+            message_type=MessageType.CUSTOM,
+            payload={"custom_type": "power_flow_result", "data": {...}}
+        )
+    """
+    _registered_types: Dict[str, str] = {}
+
+    @classmethod
+    def register(cls, type_name: str, description: str = "") -> None:
+        """Register a domain-specific message type.
+
+        Args:
+            type_name: Unique identifier for the custom type
+            description: Optional description of the message type
+        """
+        cls._registered_types[type_name] = description
+
+    @classmethod
+    def is_registered(cls, type_name: str) -> bool:
+        """Check if a custom type is registered."""
+        return type_name in cls._registered_types
+
+    @classmethod
+    def get_all(cls) -> Dict[str, str]:
+        """Get all registered custom types."""
+        return cls._registered_types.copy()
 
 
 @dataclass
@@ -140,18 +185,58 @@ class MessageBroker(ABC):
         pass
 
 
+class ChannelRegistry:
+    """Registry for domain-specific channel types.
+
+    Allows domains to document their custom channel types.
+
+    Example:
+        # In powergrid domain initialization
+        ChannelRegistry.register("power_flow", "Power flow results from environment")
+
+        # When creating a channel
+        channel = ChannelManager.custom_channel("power_flow", env_id, agent_id)
+    """
+    _registered_types: Dict[str, str] = {}
+
+    @classmethod
+    def register(cls, channel_type: str, description: str = "") -> None:
+        """Register a domain-specific channel type.
+
+        Args:
+            channel_type: Unique identifier for the channel type
+            description: Description of the channel's purpose
+        """
+        cls._registered_types[channel_type] = description
+
+    @classmethod
+    def is_registered(cls, channel_type: str) -> bool:
+        """Check if a channel type is registered."""
+        return channel_type in cls._registered_types
+
+    @classmethod
+    def get_all(cls) -> Dict[str, str]:
+        """Get all registered channel types."""
+        return cls._registered_types.copy()
+
+
 class ChannelManager:
     """Channel name management for agent communication.
 
     This class generates channel names following a consistent naming convention.
     It's independent of the broker implementation.
 
-    Channel naming convention:
+    Core channel naming convention:
     - env_{env_id}__action__{upstream_id}_to_{node_id}
     - env_{env_id}__info__{node_id}_to_{upstream_id}
     - env_{env_id}__broadcast__{agent_id}
     - env_{env_id}__state_updates
     - env_{env_id}__results__{agent_id}
+
+    Custom channels (domain-specific):
+    - env_{env_id}__{channel_type}__{agent_id}
+
+    Domains can use custom_channel() for domain-specific communication patterns.
     """
 
     @staticmethod
@@ -219,6 +304,23 @@ class ChannelManager:
             Channel name string
         """
         return f"env_{env_id}__results__{agent_id}"
+
+    @staticmethod
+    def custom_channel(channel_type: str, env_id: str, agent_id: str) -> str:
+        """Generate a custom channel for domain-specific communication.
+
+        This is a generic method for domains to create their own channel types.
+        The channel_type should be registered via ChannelRegistry for documentation.
+
+        Args:
+            channel_type: Domain-specific channel type identifier
+            env_id: Environment ID
+            agent_id: Agent ID
+
+        Returns:
+            Channel name string
+        """
+        return f"env_{env_id}__{channel_type}__{agent_id}"
 
     @staticmethod
     def agent_channels(

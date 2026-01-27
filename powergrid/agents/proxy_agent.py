@@ -17,6 +17,7 @@ import pandapower as pp
 from heron.agents.base import Agent, AgentID
 from heron.messaging.base import ChannelManager, Message, MessageBroker, MessageType
 from heron.core.observation import Observation
+from powergrid.messaging.channels import PowerGridChannelManager
 
 
 PROXY_LEVEL = 3  # Level identifier for proxy-level agents (higher than grid)
@@ -85,7 +86,7 @@ class ProxyAgent(Agent):
             return
 
         # Channel for receiving network state from environment
-        env_to_proxy_channel = ChannelManager.power_flow_result_channel(
+        env_to_proxy_channel = PowerGridChannelManager.power_flow_result_channel(
             self.env_id,
             self.agent_id
         )
@@ -109,7 +110,7 @@ class ProxyAgent(Agent):
         if not self.message_broker or not self.env_id:
             return None
 
-        channel = ChannelManager.power_flow_result_channel(self.env_id, self.agent_id)
+        channel = PowerGridChannelManager.power_flow_result_channel(self.env_id, self.agent_id)
         messages = self.message_broker.consume(
             channel,
             recipient_id=self.agent_id,

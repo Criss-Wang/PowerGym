@@ -152,13 +152,13 @@ class TestMultiAgentMicrogrids:
         # Check MG1 devices
         mg1 = env.agent_dict['MG1']
         mg1_devices = mg1.devices  # dict of {device_id: device}
-        assert len(mg1_devices) == 4  # ESS, DG, 2xRES
+        assert len(mg1_devices) == 2  # Config has: Generator (solar) and ESS
 
         # Check device types (devices is a dict)
         device_types = [type(d).__name__ for d in mg1_devices.values()]
         assert 'ESS' in device_types
-        assert 'DG' in device_types
-        assert device_types.count('RES') == 2
+        # Generator type shows as 'Generator' not 'DG'
+        assert 'Generator' in device_types
 
     def test_dataset_loaded(self, env_config):
         """Test that dataset is properly loaded."""

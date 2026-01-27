@@ -52,7 +52,7 @@ def test_roundtrip_three_phase():
     d = pc0.to_dict()
     pc1 = PhaseConnection.from_dict(json.loads(json.dumps(d)))
     _assert_vec_names_consistent(pc1)
-    assert pc1.phase_spec.nph() == 2
+    assert pc1.phase_spec.nph == 2
     assert pc1.connection == "BC"
 
 def test_balanced_presence_only_vector_and_names_empty_when_none():

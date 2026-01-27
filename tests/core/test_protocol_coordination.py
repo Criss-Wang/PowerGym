@@ -118,23 +118,25 @@ class TestVerticalProtocols:
         # Reset to initialize
         mg_agent.reset(seed=42)
 
-        # Update price and send messages via protocol
+        # Update price
         protocol.price = 60.0
-        protocol.coordinate_message(
-            devices={d.agent_id: d for d in devices},
-            observation=None,
-            action={"price": 60.0}
+
+        # Use protocol.coordinate() which returns (messages, actions)
+        device_dict = {d.agent_id: d for d in devices}
+        device_states = {d.agent_id: {} for d in devices}
+        context = {"subordinates": device_dict}
+
+        messages, actions = protocol.coordinate(
+            coordinator_state={},
+            subordinate_states=device_states,
+            coordinator_action={"price": 60.0},
+            context=context
         )
 
-        # Check that devices received price signal
-        for device in devices:
-            # Check mailbox for price message
-            # mailbox is a list of messages
-            if device.mailbox:
-                # Should have price signal message
-                price_msgs = [m for m in device.mailbox if "price" in m.content]
-                if price_msgs:
-                    assert price_msgs[0].content["price"] == 60.0
+        # Check that protocol generated price messages
+        for device_id, msg in messages.items():
+            assert "price" in msg
+            assert msg["price"] == 60.0
 
     def test_centralized_setpoint_protocol(self, microgrid_with_devices):
         """Test SetpointProtocol action distribution."""
@@ -155,22 +157,29 @@ class TestVerticalProtocols:
         # Reset
         mg_agent.reset(seed=42)
 
-        # Create a mock action (concatenated device actions)
-        # Gen: 2 continuous (P, Q) + 1 discrete (on/off) = 3
-        # ESS: 2 continuous (P, Q) = 2
-        # Total: 5 actions
-        action = np.array([1.0, 0.5, 1.0, 0.8, 0.3])
+        # Create per-device actions as dict for setpoint protocol
+        device_dict = {d.agent_id: d for d in devices}
+        device_states = {d.agent_id: {} for d in devices}
+        context = {"subordinates": device_dict}
+
+        # Pass action as dict mapping device_id -> setpoint
+        action = {
+            devices[0].agent_id: np.array([1.0, 0.5]),  # Gen: P, Q
+            devices[1].agent_id: np.array([0.8, 0.3]),  # ESS: P, Q
+        }
 
         # Protocol should distribute action to devices
-        protocol.coordinate_action(
-            devices={d.agent_id: d for d in devices},
-            observation=None,
-            action=action
+        messages, actions = protocol.coordinate(
+            coordinator_state={},
+            subordinate_states=device_states,
+            coordinator_action=action,
+            context=context
         )
 
-        # Devices should have received actions (check via internal state)
-        for device in devices:
-            assert device.action is not None
+        # Setpoint protocol should return actions for each device
+        for device_id, device_action in actions.items():
+            if device_action is not None:
+                assert device_id in device_dict
 
     def test_protocol_ownership_vertical(self, microgrid_with_devices):
         """Test that vertical protocols are owned by agents."""
@@ -253,8 +262,8 @@ class TestHorizontalProtocols:
             "MG3": {"quantity": 0.5, "min_price": 48.0},
         }
 
-        # Test market clearing
-        trades = protocol._clear_market(bids, offers)
+        # Test market clearing via communication_protocol
+        trades = protocol.communication_protocol._clear_market(bids, offers)
 
         # Should have at least one trade (MG1 buying from MG2/MG3)
         assert len(trades) > 0
@@ -351,25 +360,26 @@ class TestMessageDelivery:
         assert gen.mailbox is not None
 
     def test_message_delivery_to_device(self, agent_with_devices):
-        """Test that messages are delivered to device mailbox."""
+        """Test that protocol generates messages for devices."""
         mg_agent, gen = agent_with_devices
 
-        # Clear mailbox
-        gen.mailbox.clear()
-
-        # Send message via protocol
+        # Use protocol.coordinate() which returns (messages, actions)
         mg_agent.protocol.price = 60.0
-        mg_agent.protocol.coordinate_message(
-            devices={gen.agent_id: gen},
-            observation=None,
-            action={"price": 60.0}
+        device_dict = {gen.agent_id: gen}
+        device_states = {gen.agent_id: {}}
+        context = {"subordinates": device_dict}
+
+        messages, actions = mg_agent.protocol.coordinate(
+            coordinator_state={},
+            subordinate_states=device_states,
+            coordinator_action={"price": 60.0},
+            context=context
         )
 
-        # Check mailbox has message
-        assert gen.mailbox is not None
-        # mailbox is a list
-        if gen.mailbox:
-            assert len(gen.mailbox) > 0
+        # Check that messages were generated for the device
+        assert gen.agent_id in messages
+        assert "price" in messages[gen.agent_id]
+        assert messages[gen.agent_id]["price"] == 60.0
 
     def test_mailbox_clear(self, agent_with_devices):
         """Test mailbox clearing between timesteps."""

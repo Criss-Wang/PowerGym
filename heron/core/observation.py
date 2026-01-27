@@ -43,6 +43,14 @@ class Observation:
 
         return vec.astype(np.float32)
 
+    def as_vector(self) -> np.ndarray:
+        """Alias for vector() method.
+
+        Returns:
+            Flattened observation vector
+        """
+        return self.vector()
+
     def _flatten_dict(self, d: Dict, vec: np.ndarray) -> np.ndarray:
         """Recursively flatten a dictionary into a numpy array.
 
@@ -74,8 +82,10 @@ class Message:
         content: Message payload (e.g., price signals, setpoints, constraints)
         recipient: Target agent(s), None for broadcast
         timestamp: Time when message was sent
+        priority: Message priority (higher = more important)
     """
     sender: AgentID
     content: Dict[str, Any]
     recipient: Optional[Union[AgentID, List[AgentID]]] = None  # None = broadcast
     timestamp: float = 0.0
+    priority: int = 0

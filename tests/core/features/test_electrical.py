@@ -7,7 +7,7 @@ from powergrid.utils.phase import PhaseModel, PhaseSpec
 
 
 def _assert_vec_names_consistent(b: ElectricalBasePh):
-    v = b.as_vector().ravel()
+    v = b.vector().ravel()
     n = b.names()
     assert isinstance(n, list)
     assert v.ndim == 1

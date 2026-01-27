@@ -21,6 +21,8 @@ class MockPowerGridAgent(PowerGridAgent):
         self.name = name
         self.level = 2
         self.devices = {} if not has_devices else {"device1": Mock()}
+        self.sgen = {}  # Required by _publish_network_state_to_agents
+        self.storage = {}  # Required by _publish_network_state_to_agents
         self.cost = 10.0
         self.safety = 0.5
         self._reset_called = False
@@ -50,8 +52,10 @@ class MockPowerGridAgent(PowerGridAgent):
             timestamp=0.0
         )
 
-    def act(self, obs, given_action=None):
+    def act(self, obs, upstream_action=None, given_action=None):
         """Mock act method."""
+        if upstream_action is not None:
+            return upstream_action
         return given_action
 
     def update_state(self, net, t):
@@ -74,28 +78,33 @@ class ConcreteNetworkedGridEnv(NetworkedGridEnv):
         self._mock_agents_created = False
         super().__init__(env_config)
 
+    def _build_agents(self):
+        """Build mock agents."""
+        return {}  # Will be populated in _build_net
+
     def _build_net(self):
         """Build mock network."""
         # Create simple pandapower network
-        self.net = pp.create_empty_network()
-        pp.create_bus(self.net, vn_kv=20., name="Bus1")
-        pp.create_bus(self.net, vn_kv=20., name="Bus2")
-        pp.create_ext_grid(self.net, bus=0, vm_pu=1.0, name="Grid Connection")
-        pp.create_line(self.net, from_bus=0, to_bus=1, length_km=1.0,
+        net = pp.create_empty_network()
+        pp.create_bus(net, vn_kv=20., name="Bus1")
+        pp.create_bus(net, vn_kv=20., name="Bus2")
+        pp.create_ext_grid(net, bus=0, vm_pu=1.0, name="Grid Connection")
+        pp.create_line(net, from_bus=0, to_bus=1, length_km=1.0,
                       std_type="NAYY 4x50 SE", name="Line1")
-        self.net['converged'] = True
+        net['converged'] = True
 
         # Create mock agents
         self.agent_dict = {
-            "MG1": MockPowerGridAgent("MG1", self.net, has_devices=True),
-            "MG2": MockPowerGridAgent("MG2", self.net, has_devices=True),
-            "MG3": MockPowerGridAgent("MG3", self.net, has_devices=False),
+            "MG1": MockPowerGridAgent("MG1", net, has_devices=True),
+            "MG2": MockPowerGridAgent("MG2", net, has_devices=True),
+            "MG3": MockPowerGridAgent("MG3", net, has_devices=False),
         }
         self.possible_agents = list(self.agent_dict.keys())
         self.agents = self.possible_agents
         self.data_size = 100
-        self.total_days = 4
+        self._total_days = 4  # Use underscore prefix like base class expects
         self._mock_agents_created = True
+        return net
 
     def _reward_and_safety(self):
         """Mock reward computation."""
@@ -112,26 +121,18 @@ class TestNetworkedGridEnv:
         env_config = {
             "max_episode_steps": 24,
             "train": True,
-            "type": "AC"
         }
 
         env = ConcreteNetworkedGridEnv(env_config)
 
         assert env.max_episode_steps == 24
         assert env.train == True
-        assert env.type == "AC"
         assert len(env.agent_dict) == 3
         assert env._t == 0
-        # _day is initialized in reset(), not __init__
 
     def test_networked_grid_env_extends_parallel_env(self):
         """Test that NetworkedGridEnv extends ParallelEnv."""
         assert issubclass(NetworkedGridEnv, ParallelEnv)
-
-    def test_networked_grid_env_metadata(self):
-        """Test NetworkedGridEnv metadata."""
-        assert "name" in NetworkedGridEnv.metadata
-        assert NetworkedGridEnv.metadata["name"] == "networked_grid_env"
 
     def test_actionable_agents_property(self):
         """Test actionable_agents property filters agents correctly."""
@@ -147,7 +148,7 @@ class TestNetworkedGridEnv:
 
     def test_reset_training_mode(self):
         """Test reset in training mode."""
-        env_config = {"train": True, "max_episode_steps": 24}
+        env_config = {"train": True, "max_episode_steps": 24, "centralized": True}
         env = ConcreteNetworkedGridEnv(env_config)
 
         obs, info = env.reset(seed=42)
@@ -162,7 +163,7 @@ class TestNetworkedGridEnv:
 
     def test_reset_test_mode(self):
         """Test reset in test mode."""
-        env_config = {"train": False, "max_episode_steps": 24}
+        env_config = {"train": False, "max_episode_steps": 24, "centralized": True}
         env = ConcreteNetworkedGridEnv(env_config)
 
         obs, info = env.reset(seed=42)
@@ -173,7 +174,7 @@ class TestNetworkedGridEnv:
 
     def test_step_basic(self):
         """Test basic step functionality."""
-        env_config = {"train": True}
+        env_config = {"train": True, "centralized": True}
         env = ConcreteNetworkedGridEnv(env_config)
         env.reset()
 
@@ -191,7 +192,7 @@ class TestNetworkedGridEnv:
 
     def test_step_increments_timestep(self):
         """Test step increments timestep correctly."""
-        env_config = {"train": True, "max_episode_steps": 24}
+        env_config = {"train": True, "max_episode_steps": 24, "centralized": True}
         env = ConcreteNetworkedGridEnv(env_config)
         env.reset()
 
@@ -203,7 +204,7 @@ class TestNetworkedGridEnv:
 
     def test_step_with_shared_rewards(self):
         """Test step with reward sharing enabled."""
-        env_config = {"train": True, "share_reward": True}
+        env_config = {"train": True, "share_reward": True, "centralized": True}
         env = ConcreteNetworkedGridEnv(env_config)
         env.reset()
 

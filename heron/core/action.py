@@ -70,7 +70,8 @@ class Action:
         if self.dim_d:
             return _build_discrete_space()
 
-        raise ValueError("Action must have either continuous or discrete components.")
+        # Empty action space - return a single no-op action
+        return Discrete(1)
 
     def _validate_and_prepare(self) -> None:
         """Validate action specs and initialize buffers."""

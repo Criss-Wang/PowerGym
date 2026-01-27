@@ -36,7 +36,7 @@ class TapChangerPh(FeatureProvider):
         elif self.phase_model == PhaseModel.THREE_PHASE:
             if not isinstance(self.phase_spec, PhaseSpec):
                 raise ValueError("THREE_PHASE requires a PhaseSpec.")
-            n = self.phase_spec.nph()
+            n = self.phase_spec.nph
             if n not in (1, 2, 3):
                 raise ValueError(
                     "THREE_PHASE requires PhaseSpec with 1, 2, or 3 phases."
@@ -75,7 +75,7 @@ class TapChangerPh(FeatureProvider):
                 raise ValueError(
                     "THREE_PHASE requires 'tap_pos_ph' with shape (nph,)."
                 )
-            n = self.phase_spec.nph()  # type: ignore
+            n = self.phase_spec.nph  # type: ignore
             a = as_f32(self.tap_pos_ph).ravel()
             if a.shape != (n,):
                 raise ValueError(
@@ -96,7 +96,7 @@ class TapChangerPh(FeatureProvider):
             return np.array([frac], np.float32)
 
         # THREE_PHASE
-        n = self.phase_spec.nph()  # type: ignore
+        n = self.phase_spec.nph  # type: ignore
         outs: List[np.ndarray] = []
         base = int(self.tap_min)  # type: ignore
         for p in np.asarray(self.tap_pos_ph, dtype=np.int32).ravel():

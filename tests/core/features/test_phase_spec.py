@@ -5,12 +5,22 @@ import pytest
 from powergrid.utils.phase import PhaseModel, PhaseSpec, check_phase_model_consistency
 
 
-def test_default_is_three_phase_with_neutral_and_bond():
+def test_default_is_empty_spec():
+    """Default PhaseSpec has empty phases."""
     ps = PhaseSpec()
+    assert ps.phases == ""
+    assert ps.has_neutral is False
+    assert ps.earth_bond is False
+    assert ps.nph == 0
+
+
+def test_explicit_three_phase_with_neutral_and_bond():
+    """Explicit 3-phase with neutral and earth bond."""
+    ps = PhaseSpec("ABC", has_neutral=True, earth_bond=True)
     assert ps.phases == "ABC"
     assert ps.has_neutral is True
     assert ps.earth_bond is True
-    assert ps.nph() == 3
+    assert ps.nph == 3
 
 
 def test_no_neutral_forces_no_earth_bond():
@@ -20,24 +30,24 @@ def test_no_neutral_forces_no_earth_bond():
     assert ps.earth_bond is False
 
 
-def test_sanitizes_phases_case_duplicates_and_order():
-    # lower-case, scrambled, duplicates -> canonical "ABC" ordering of subset
+def test_sanitizes_phases_case_duplicates():
+    # lower-case -> uppercase, keeps order
     ps = PhaseSpec("bca")
     assert ps.phases == "BCA"
 
     ps2 = PhaseSpec("AAB")
-    # "AAB" -> subset AB, then canonical order "AB"
+    # "AAB" -> removes duplicates keeping first occurrence: "AB"
     assert ps2.phases == "AB"
 
-    ps3 = PhaseSpec("D")  # non-ABC letters ignored -> fallback to "A"
+    ps3 = PhaseSpec("D")  # non-ABC letters ignored -> empty
     assert ps3.phases == ""
-    assert ps3.nph() == 0
+    assert ps3.nph == 0
 
 
 def test_index_and_nph():
     ps = PhaseSpec("ABC")
     assert ps.index("B") == 1
-    assert ps.nph() == 3
+    assert ps.nph == 3
 
 
 def test_align_array_drops_missing_dest_phases():

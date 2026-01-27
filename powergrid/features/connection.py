@@ -125,7 +125,7 @@ class PhaseConnection(FeatureProvider):
             )
 
     def _mask(self) -> np.ndarray:
-        n = self.phase_spec.nph()  # type: ignore
+        n = self.phase_spec.nph  # type: ignore
         m = np.zeros(n, np.float32)
         if self.connection is None:
             return m

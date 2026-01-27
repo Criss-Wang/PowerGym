@@ -60,7 +60,7 @@ class InverterBasedSource(FeatureProvider):
         elif self.phase_model == PhaseModel.THREE_PHASE:
             if not isinstance(self.phase_spec, PhaseSpec):
                 raise ValueError("THREE_PHASE requires a PhaseSpec.")
-            n = self.phase_spec.nph()
+            n = self.phase_spec.nph
             if n not in (1, 2, 3):
                 raise ValueError("PhaseSpec must have 1, 2, or 3 phases.")
             self._ensure_alloc_(n)
@@ -139,7 +139,7 @@ class InverterBasedSource(FeatureProvider):
     def _alloc(self) -> Optional[np.ndarray]:
         if self.phase_model != PhaseModel.THREE_PHASE:
             return None
-        n = self.phase_spec.nph()  # type: ignore
+        n = self.phase_spec.nph  # type: ignore
         if self.alloc_frac_ph is None:
             return np.ones(n, np.float32) / float(n)
         return np.asarray(self.alloc_frac_ph, np.float32).ravel()

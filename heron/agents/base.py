@@ -82,7 +82,8 @@ class Agent(ABC):
         self.action_space = action_space
 
         # Direct execution attributes
-        self._timestep: int = 0
+        self._timestep: float = 0.0
+        self.mailbox: List[Message] = []  # Incoming messages from other agents
 
         # Hierarchical execution attributes (optional)
         self.message_broker = message_broker
@@ -106,7 +107,62 @@ class Agent(ABC):
             seed: Random seed for reproducibility
             **kwargs: Additional reset parameters
         """
-        self._timestep = 0
+        self._timestep = 0.0
+        self.mailbox = []
+
+    # ============================================
+    # Direct Execution Message Methods
+    # ============================================
+
+    def send_message(
+        self,
+        content: Dict[str, Any],
+        recipients: Optional[List[str]] = None,
+        priority: int = 0,
+    ) -> Message:
+        """Create a message from this agent.
+
+        Args:
+            content: Message payload
+            recipients: Target agent IDs (None for broadcast)
+            priority: Message priority (higher = more important)
+
+        Returns:
+            Created Message object
+        """
+        return Message(
+            sender=self.agent_id,
+            content=content,
+            recipient=recipients,
+            timestamp=self._timestep,
+            priority=priority,
+        )
+
+    def receive_message(self, message: Message) -> None:
+        """Add a message to the agent's mailbox.
+
+        Args:
+            message: Message to receive
+        """
+        self.mailbox.append(message)
+
+    def clear_mailbox(self) -> List[Message]:
+        """Clear and return all messages from mailbox.
+
+        Returns:
+            List of all messages that were in the mailbox
+        """
+        messages = self.mailbox.copy()
+        self.mailbox = []
+        return messages
+
+    def update_timestep(self, timestep: float) -> None:
+        """Update the internal timestep.
+
+        Args:
+            timestep: New timestep value
+        """
+        self._timestep = timestep
 
     # ============================================
     # Direct Execution Mode (Original API)
