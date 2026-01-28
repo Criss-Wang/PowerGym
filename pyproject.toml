@@ -65,6 +65,13 @@ Issues = "https://github.com/Criss-Wang/PowerGym/issues"
 include-package-data = true
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = [".", "case_studies/power"]
 include = ["heron*", "powergrid*"]
 exclude = ["tests*", "docs*", "build*", "dist*", "*.egg-info"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "case_studies/power/tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--import-mode=importlib"

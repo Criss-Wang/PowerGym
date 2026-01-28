@@ -615,7 +615,7 @@ python examples/train_my_agent.py
 
 The repository includes a complete **Power Grid** case study demonstrating HERON applied to multi-agent microgrid control with PandaPower integration.
 
-📖 **See [powergrid/README.md](powergrid/README.md) for full documentation**, including:
+📖 **See [case_studies/power/README.md](case_studies/power/README.md) for full documentation**, including:
 - IEEE 13, 34, 123-bus test networks
 - Device models (Generator, ESS, Transformer)
 - Single and multi-agent environments
@@ -627,6 +627,20 @@ pip install -e ".[powergrid]"      # Power grid support
 pip install -e ".[all]"            # Full installation with RL
 ```
 
+### Adding a New Case Study to This Repo
+
+To contribute a new domain case study (e.g., robotics, traffic):
+
+1. Copy the `case_studies/power/` structure as a template
+2. Update `pyproject.toml` to include your package path:
+   ```toml
+   [tool.setuptools.packages.find]
+   where = [".", "case_studies/power", "case_studies/your_domain"]
+   ```
+3. Add optional dependencies under `[project.optional-dependencies]` if needed
+
+> 💡 **For standalone projects** (separate repository), use `make new-project` or follow [Setting Up Your Own Project](#setting-up-your-own-project).
+
 ---
 
 ## Development
@@ -637,27 +651,30 @@ pip install -e ".[all]"            # Full installation with RL
 # Install dev dependencies
 pip install -e ".[dev,all]"
 
-# Run all tests
+# Run heron core tests
 pytest tests/ -v
 
-# Run specific test file
-pytest tests/core/test_actions.py -v
+# Run power grid case study tests
+pytest case_studies/power/tests/ -v
+
+# Run all tests
+pytest tests/ case_studies/power/tests/ -v
 
 # Run with coverage
-pytest tests/ --cov=heron --cov=powergrid --cov-report=html
+pytest tests/ case_studies/power/tests/ --cov=heron --cov=powergrid --cov-report=html
 ```
 
 ### Code Style
 
 ```bash
 # Format code
-black heron/ powergrid/ tests/
+black heron/ case_studies/ tests/
 
 # Lint code
-ruff check heron/ powergrid/ tests/
+ruff check heron/ case_studies/ tests/
 
 # Type check
-mypy heron/ powergrid/
+mypy heron/ case_studies/power/powergrid/
 ```
 
 ---

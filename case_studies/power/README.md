@@ -1,6 +1,6 @@
 # Power Grid Domain - HERON Case Study
 
-The `powergrid/` package demonstrates HERON applied to power systems with multi-agent microgrid control.
+This case study demonstrates HERON applied to power systems with multi-agent microgrid control.
 
 ---
 
@@ -19,43 +19,52 @@ The `powergrid/` package demonstrates HERON applied to power systems with multi-
 ## Architecture
 
 ```
-powergrid/                      # Power systems case study
-├── agents/                     # Power-specific agents
-│   ├── power_grid_agent.py     # Coordinator with PandaPower integration
-│   ├── device_agent.py         # Base for power device agents
-│   ├── generator.py            # Dispatchable generator device
-│   ├── storage.py              # Energy storage system (ESS)
-│   ├── transformer.py          # Transformer with tap changer
-│   └── proxy_agent.py          # System agent for distributed mode
+case_studies/power/
+├── powergrid/                  # Python package
+│   ├── agents/                 # Power-specific agents
+│   │   ├── power_grid_agent.py # Coordinator with PandaPower integration
+│   │   ├── device_agent.py     # Base for power device agents
+│   │   ├── generator.py        # Dispatchable generator device
+│   │   ├── storage.py          # Energy storage system (ESS)
+│   │   ├── transformer.py      # Transformer with tap changer
+│   │   └── proxy_agent.py      # System agent for distributed mode
+│   │
+│   ├── features/               # Power-specific features
+│   │   ├── electrical.py       # P, Q, voltage features
+│   │   ├── network.py          # Bus voltages, line flows
+│   │   ├── storage.py          # SOC, energy capacity
+│   │   ├── power_limits.py     # Power limit features
+│   │   ├── thermal.py          # Thermal constraint features
+│   │   └── ...                 # inverter, tap_changer, var, etc.
+│   │
+│   ├── networks/               # IEEE/CIGRE test networks
+│   │   ├── ieee13.py           # IEEE 13-bus feeder
+│   │   ├── ieee34.py           # IEEE 34-bus feeder
+│   │   ├── ieee123.py          # IEEE 123-bus feeder
+│   │   ├── cigre_lv.py         # CIGRE low-voltage network
+│   │   └── ...                 # Additional network utilities
+│   │
+│   ├── envs/                   # Power environments
+│   │   ├── multi_agent/
+│   │   │   ├── networked_grid_env.py
+│   │   │   └── multi_agent_microgrids.py
+│   │   └── single_agent/
+│   │       ├── ieee13_mg.py
+│   │       ├── ieee34_mg.py
+│   │       └── cigre_mv.py
+│   │
+│   ├── optimization/           # Power system optimization
+│   │   └── misocp.py           # Mixed-integer SOCP solver
+│   │
+│   └── utils/                  # Power-specific utilities
+│       ├── cost.py             # Cost functions
+│       ├── safety.py           # Safety penalties
+│       └── phase.py            # Phase utilities
 │
-├── features/                   # Power-specific features
-│   ├── electrical.py           # P, Q, voltage features
-│   ├── network.py              # Bus voltages, line flows, network metrics
-│   ├── storage.py              # SOC, energy capacity features
-│   ├── power_limits.py         # Power limit features
-│   └── thermal.py              # Thermal constraint features
-│
-├── networks/                   # IEEE/CIGRE test networks
-│   ├── ieee13.py               # IEEE 13-bus feeder
-│   ├── ieee34.py               # IEEE 34-bus feeder
-│   ├── ieee123.py              # IEEE 123-bus feeder
-│   └── cigre_lv.py             # CIGRE low-voltage network
-│
-├── envs/                       # Power environments
-│   ├── multi_agent/            # Multi-agent environments
-│   │   ├── networked_grid_env.py
-│   │   └── multi_agent_microgrids.py
-│   └── single_agent/           # Single-agent environments
-│       ├── ieee13_mg.py
-│       └── ieee34_mg.py
-│
-├── optimization/               # Power system optimization
-│   └── misocp.py               # Mixed-integer SOCP solver
-│
-└── utils/                      # Power-specific utilities
-    ├── cost.py                 # Cost functions (quadratic, piecewise)
-    ├── safety.py               # Safety penalties (voltage, SOC, loading)
-    └── phase.py                # Phase utilities for 3-phase systems
+├── data/                       # Power grid data files
+├── examples/                   # Example scripts
+├── tests/                      # Power grid tests
+└── README.md                   # This file
 ```
 
 ## Overview
@@ -83,22 +92,6 @@ pip install -e ".[all]"
 
 ## Quick Start
 
-### Single Microgrid
-
-```python
-from powergrid.envs.single_agent.ieee13_mg import IEEE13Env
-
-# Create environment
-env = IEEE13Env({"episode_length": 24, "train": True})
-obs, info = env.reset()
-
-# Run simulation
-for _ in range(24):
-    action = env.action_space.sample()
-    obs, reward, terminated, truncated, info = env.step(action)
-    print(f"Reward: {reward:.2f}, Converged: {info.get('converged')}")
-```
-
 ### Multi-Agent Microgrids
 
 ```python
@@ -120,6 +113,8 @@ for _ in range(24):
     obs_dict, rewards, terminateds, truncateds, infos = env.step(actions)
 ```
 
+> ⚠️ **Note**: Single-agent environments (`ieee13_mg.py`, `ieee34_mg.py`) are currently deprecated and need migration to the new base classes.
+
 ---
 
 ## Example Networks
@@ -127,18 +122,19 @@ for _ in range(24):
 The repository includes standard IEEE test systems:
 
 ### IEEE 13-Bus System
-<img src="../docs/images/ieee13.png" alt="IEEE 13 Bus System" width="500"/>
+<img src="../../docs/images/ieee13.png" alt="IEEE 13 Bus System" width="500"/>
 
 ### IEEE 34-Bus System
-<img src="../docs/images/ieee34.png" alt="IEEE 34 Bus System" width="700"/>
+<img src="../../docs/images/ieee34.png" alt="IEEE 34 Bus System" width="700"/>
 
 ---
 
 ## Running Examples
 
 ```bash
-# Activate virtual environment
+# From project root, activate virtual environment and cd into case study
 source .venv/bin/activate
+cd case_studies/power
 
 # Example 1: Single microgrid with centralized control
 python examples/01_single_microgrid_basic.py
@@ -164,8 +160,11 @@ python examples/06_distributed_mode_with_proxy.py
 ## MAPPO Training with RLlib
 
 ```bash
-# Install RLlib dependencies
+# Install RLlib dependencies (from project root)
 pip install -e ".[multi_agent]"
+
+# cd into case study directory
+cd case_studies/power
 
 # Run training
 python examples/05_mappo_training.py --iterations 100 --num-workers 2
