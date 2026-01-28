@@ -45,20 +45,21 @@ powergrid = [
 ]
 multi_agent = [
     "pettingzoo>=1.24.0",
-    "ray[rllib]==2.9.0",
+    "ray[rllib]>=2.31.0",
+    "torch>=2.0.0",
 ]
 logging = [
     "wandb>=0.15.0",
     "tensorboard>=2.13.0",
 ]
 all = [
-    "heron-marl[powergrid,multi_agent,logging]",
+    "heron-marl[powergrid,multi_agent,logging,dev]",
 ]
 
 [project.urls]
-Homepage = "https://github.com/hepengli/powergrid"
-Source = "https://github.com/hepengli/powergrid"
-Issues = "https://github.com/hepengli/powergrid/issues"
+Homepage = "https://github.com/Criss-Wang/PowerGym"
+Source = "https://github.com/Criss-Wang/PowerGym"
+Issues = "https://github.com/Criss-Wang/PowerGym/issues"
 
 [tool.setuptools]
 include-package-data = true

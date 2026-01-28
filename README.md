@@ -11,82 +11,78 @@ A **domain-agnostic Multi-Agent Reinforcement Learning (MARL) framework** with a
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Setting Up Your Own Project](#setting-up-your-own-project)
-- [Running Examples](#running-examples)
-- [Power Grid Domain (Case Study)](#power-grid-domain-case-study)
+- [Included Case Study](#included-case-study)
 - [Development](#development)
 
 ---
 
 ## Features
 
-### Core Framework (`heron/`)
-- **Hierarchical Agent System**: Field (L1), Coordinator (L2), and System (L3) agents
-- **Feature-based State Representation**: Composable `FeatureProvider` system with 4 visibility levels
+### Core Framework
+- **Hierarchical Agent System**: Multi-level hierarchy with configurable depth (e.g., Field → Coordinator → System)
+- **Feature-based State**: Composable `FeatureProvider` system with extensible visibility tags (defaults: `owner`, `coordinator`, `system`, `global`)
 - **Coordination Protocols**: Vertical (Setpoint, Price Signal) and Horizontal (P2P Trading, Consensus)
 - **Message Broker System**: InMemoryBroker with extensible interface for Kafka/RabbitMQ
 - **Flexible Action System**: `Action` class with scale/unscale for normalized [-1, 1] control
 - **Mixed Action Spaces**: Continuous (`Box`) and discrete (`Discrete`/`MultiDiscrete`)
-
-### Power Grid Domain (`powergrid/`)
-- **PandaPower Integration**: Seamless network modeling and power flow
-- **Device Models**: Generator, ESS, Transformer with realistic dynamics
-- **IEEE Test Networks**: IEEE 13, 34, 123-bus systems included
-- **Safety Framework**: Penalties for voltage, loading, SOC, power factor violations
-- **Cost Helpers**: Quadratic, piecewise linear, ramping costs
 
 ### RL Integration
 - Works with **RLlib** (MAPPO/IPPO), **Stable-Baselines3**, and custom agents
 - **PettingZoo ParallelEnv** for multi-agent environments
 - Centralized and distributed execution modes
 
+### Included Case Study: Power Grid
+- PandaPower integration for network modeling
+- Device models: Generator, ESS, Transformer
+- IEEE 13, 34, 123-bus test networks
+- Safety and cost utilities
+
 ---
 
 ## Architecture Overview
 
+HERON provides a layered architecture with clear separation of concerns:
+
 ```
 heron/                          # Domain-agnostic MARL framework
 ├── agents/                     # Hierarchical agent abstractions
-│   ├── base.py                 # Agent base class
-│   ├── field_agent.py          # Level 1 (device-level)
-│   ├── coordinator_agent.py    # Level 2 (area coordinator)
-│   └── system_agent.py         # Level 3 (system operator)
+│   ├── base.py                 # Agent base class with level property
+│   ├── field_agent.py          # Leaf-level agents (local sensing/actuation)
+│   ├── coordinator_agent.py    # Mid-level agents (manages child agents)
+│   └── system_agent.py         # Top-level agents (global coordination)
+│
 ├── core/                       # Core abstractions
 │   ├── action.py               # Action with continuous/discrete support
 │   ├── observation.py          # Observation with local/global/messages
 │   ├── state.py                # State with FeatureProvider composition
-│   └── policies.py             # Policy abstractions
+│   └── policies.py             # Policy abstractions (random, rule-based)
+│
 ├── protocols/                  # Coordination protocols
-│   ├── base.py                 # Protocol interfaces
-│   ├── vertical.py             # Setpoint, Price Signal protocols
-│   └── horizontal.py           # P2P Trading, Consensus protocols
+│   ├── base.py                 # Protocol, CommunicationProtocol interfaces
+│   ├── vertical.py             # SetpointProtocol, PriceSignalProtocol
+│   └── horizontal.py           # P2PTradingProtocol, ConsensusProtocol
+│
 ├── messaging/                  # Message broker system
-│   ├── base.py                 # MessageBroker interface
+│   ├── base.py                 # MessageBroker interface, ChannelManager
 │   └── memory.py               # InMemoryBroker implementation
+│
 ├── features/                   # Feature system
-│   └── base.py                 # FeatureProvider with visibility levels
-└── envs/                       # Base environment interfaces
-
-powergrid/                      # Power systems case study
-├── agents/                     # Power-specific agents
-│   ├── power_grid_agent.py     # Coordinator with PandaPower
-│   ├── generator.py            # Dispatchable generator
-│   ├── storage.py              # Energy storage system
-│   └── proxy_agent.py          # System agent for distributed mode
-├── features/                   # Power-specific features
-│   ├── electrical.py           # P, Q, voltage features
-│   ├── network.py              # Bus voltages, line flows
-│   └── storage.py              # SOC, energy features
-├── networks/                   # IEEE/CIGRE test networks
-│   ├── ieee13.py
-│   ├── ieee34.py
-│   └── ieee123.py
-├── envs/                       # Power environments
-│   ├── multi_agent/            # Multi-agent environments
-│   └── single_agent/           # Single-agent environments
-└── utils/                      # Power-specific utilities
-    ├── cost.py
-    └── safety.py
+│   └── base.py                 # FeatureProvider with extensible visibility tags
+│
+├── envs/                       # Base environment interfaces
+│   └── base.py                 # Abstract environment classes
+│
+└── utils/                      # Common utilities
+    ├── typing.py               # Type definitions
+    └── registry.py             # Feature registry
 ```
+
+### Key Design Principles
+
+1. **Hierarchical Agents**: Multi-level hierarchy with configurable depth; agents at each level have distinct responsibilities
+2. **Feature-based State**: Composable `FeatureProvider` with extensible visibility tags for information sharing control
+3. **Protocol-driven Coordination**: Vertical protocols for top-down control, horizontal protocols for peer coordination
+4. **Message Broker Abstraction**: Decoupled communication via `MessageBroker` interface
 
 ---
 
@@ -100,8 +96,8 @@ powergrid/                      # Power systems case study
 ### Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/hepengli/powergrid.git
-cd powergrid
+git clone https://github.com/Criss-Wang/PowerGym.git
+cd PowerGym
 ```
 
 ### Step 2: Create Virtual Environment
@@ -145,7 +141,7 @@ pip install -e ".[dev,all]"
 
 ```bash
 # Test the installation
-python -c "import heron; import powergrid; print('Installation successful!')"
+python -c "import heron; import powergrid; print('Installation successful')"
 
 # Run tests (optional)
 pytest tests/ -v
@@ -155,42 +151,113 @@ pytest tests/ -v
 
 ## Quick Start
 
-### Single Microgrid Environment
+### Core Concepts
+
+HERON provides a hierarchical agent framework with configurable levels:
 
 ```python
-from powergrid.envs.single_agent.ieee13_mg import IEEE13Env
+from heron.agents.base import Agent
+from heron.core.observation import Observation
+from heron.core.action import Action
+from heron.features.base import FeatureProvider
 
-# Create environment
-env = IEEE13Env({"episode_length": 24, "train": True})
-obs, info = env.reset()
+# 1. Define Features with visibility levels
+class TemperatureFeature(FeatureProvider):
+    """A feature visible only to its owner."""
 
-# Run simulation
-for _ in range(24):
-    action = env.action_space.sample()
-    obs, reward, terminated, truncated, info = env.step(action)
-    print(f"Reward: {reward:.2f}, Converged: {info.get('converged')}")
+    def __init__(self, value: float = 20.0):
+        self.value = value
+
+    def to_array(self) -> np.ndarray:
+        return np.array([self.value], dtype=np.float32)
+
+    @property
+    def visibility(self) -> list[str]:
+        return ["owner"]  # Default tags: "owner", "coordinator", "system", "global" (extensible)
+
+# 2. Create Agents at different hierarchy levels
+class SensorAgent(Agent):
+    """Field agent at level 1 - collects local observations."""
+    level = 1  # Configurable: can be any positive integer
+
+    def observe(self) -> Observation:
+        return Observation(local={"temp": self.temperature.to_array()})
+
+    def act(self, obs: Observation, action: Action) -> Action:
+        # Process action from coordinator
+        return action
+
+# 3. Use Protocols for coordination
+from heron.protocols.vertical import SetpointProtocol
+from heron.protocols.horizontal import ConsensusProtocol
+
+# Vertical: coordinator sends setpoints to field agents
+vertical_protocol = SetpointProtocol()
+
+# Horizontal: peer agents reach consensus
+horizontal_protocol = ConsensusProtocol(max_iterations=10, tolerance=0.01)
 ```
 
-### Multi-Agent Environment (Centralized)
+> 💡 The code above shows **direct execution** (`observe()` → `act()`). For distributed hierarchical control with message passing, agents can use `await agent.step_distributed()` which recursively coordinates through the agent tree via the message broker.
+
+### Agent Hierarchy
+
+Agents are organized in a tree structure where each level has distinct responsibilities:
+
+| Level | Role | Example |
+|-------|------|---------|
+| Leaf | **Field Agent** - Local sensing and actuation | Sensor, Device |
+| Mid | **Coordinator** - Manages child agents in a subtree | Zone Controller |
+| Root | **System Agent** - Global coordination | System Operator |
+
+The hierarchy depth is configurable. A simple setup might use 2 levels (Field + Coordinator), while complex systems can use 4+ levels.
+
+### Visibility Levels
+
+Features use string-based visibility tags to control information sharing. HERON provides 4 default tags, but you can define custom tags for your domain:
 
 ```python
-from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogrids
+# Default visibility tags
+local_feature.visibility = ["owner"]                    # Only the owning agent
+shared_feature.visibility = ["owner", "coordinator"]    # Owner and its coordinator
+system_feature.visibility = ["system"]                  # System-level agents only
+public_feature.visibility = ["global"]                  # Everyone
 
-# Create multi-agent environment
-env_config = {
-    "centralized": True,
-    "max_episode_steps": 24,
-    "train": True,
-}
-env = MultiAgentMicrogrids(env_config)
-obs_dict, info = env.reset()
-
-# Each agent acts independently
-for _ in range(24):
-    actions = {agent_id: env.action_spaces[agent_id].sample()
-               for agent_id in env.agents}
-    obs_dict, rewards, terminateds, truncateds, infos = env.step(actions)
+# Custom visibility tags (domain-specific)
+neighbor_feature.visibility = ["owner", "neighbor"]     # Owner and neighboring agents
+region_feature.visibility = ["region_a"]                # Agents in region A only
 ```
+
+The visibility system is tag-based: an agent can see a feature if it holds any of the feature's visibility tags.
+
+### Message Broker
+
+For hierarchical execution with `step_distributed()`, agents communicate through a `MessageBroker`:
+
+```python
+from heron.messaging.memory import InMemoryBroker
+from heron.messaging.base import ChannelManager
+
+# Create broker
+broker = InMemoryBroker()
+
+# Create agents with broker
+coordinator = CoordinatorAgent(
+    agent_id="coordinator",
+    message_broker=broker,
+    subordinates={"field_1": field_agent_1, "field_2": field_agent_2}
+)
+field_agent = FieldAgent(
+    agent_id="field_1",
+    message_broker=broker,
+    upstream_id="coordinator"
+)
+
+# Hierarchical execution (async)
+await coordinator.step_distributed()  # Recursively coordinates all subordinates
+```
+
+The `MessageBroker` interface can be extended for distributed systems (e.g., Kafka, RabbitMQ) by implementing `publish()`, `consume()`, and `create_channel()`.
 
 ---
 
@@ -200,7 +267,7 @@ This section guides you through creating a new project that uses HERON as a depe
 
 ### Project Structure
 
-Create a new directory with this structure:
+Your new project will have this structure:
 
 ```
 my_project/
@@ -228,7 +295,28 @@ my_project/
 └── README.md
 ```
 
-### Step-by-Step Setup
+### Quick Setup (Recommended)
+
+From the cloned PowerGym repository:
+
+```bash
+make new-project NAME=my_project DOMAIN=my_domain
+```
+
+This creates the entire project structure with `pyproject.toml` and `README.md`. Then:
+
+```bash
+cd my_project
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[heron,dev]"
+```
+
+Then create the `pyproject.toml` manually (see Step 3 below).
+
+---
+
+### Manual Step-by-Step Setup
 
 #### 1. Create Project Directory
 
@@ -268,7 +356,7 @@ dependencies = [
 [project.optional-dependencies]
 heron = [
     # Install HERON from GitHub
-    "heron-marl @ git+https://github.com/hepengli/powergrid.git",
+    "heron-marl @ git+https://github.com/Criss-Wang/PowerGym.git",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -297,10 +385,10 @@ touch my_domain/utils/__init__.py
 
 ```bash
 # Install your project with HERON
-pip install -e ".[heron]"
+pip install -e ".[heron,dev]"
 
 # Or install HERON directly from source (for development)
-pip install -e /path/to/powergrid[all]
+pip install -e /path/to/PowerGym[all]
 ```
 
 #### 6. Create a Custom Agent
@@ -523,116 +611,20 @@ python examples/train_my_agent.py
 
 ---
 
-## Running Examples
+## Included Case Study
 
-The repository includes several ready-to-run examples:
+The repository includes a complete **Power Grid** case study demonstrating HERON applied to multi-agent microgrid control with PandaPower integration.
 
+📖 **See [powergrid/README.md](powergrid/README.md) for full documentation**, including:
+- IEEE 13, 34, 123-bus test networks
+- Device models (Generator, ESS, Transformer)
+- Single and multi-agent environments
+- MAPPO training examples with RLlib
+
+Quick install:
 ```bash
-# Activate virtual environment
-source .venv/bin/activate
-
-# Example 1: Single microgrid with centralized control
-python examples/01_single_microgrid_basic.py
-
-# Example 2: Multi-microgrid with P2P trading
-python examples/02_multi_microgrid_p2p.py
-
-# Example 3: Price coordination protocol
-python examples/03_price_coordination.py
-
-# Example 4: Custom device implementation
-python examples/04_custom_device.py
-
-# Example 5: MAPPO training (requires ray[rllib])
-python examples/05_mappo_training.py --test
-
-# Example 6: Distributed mode with proxy agent
-python examples/06_distributed_mode_with_proxy.py
-```
-
-### MAPPO Training with RLlib
-
-```bash
-# Install RLlib dependencies
-pip install -e ".[multi_agent]"
-
-# Run training
-python examples/05_mappo_training.py --iterations 100 --num-workers 2
-
-# Quick test run
-python examples/05_mappo_training.py --test
-```
-
----
-
-## Power Grid Domain (Case Study)
-
-### Example Networks
-
-The repository includes standard IEEE test systems:
-
-#### IEEE 13-Bus System
-<img src="docs/images/ieee13.png" alt="IEEE 13 Bus System" width="500"/>
-
-#### IEEE 34-Bus System
-<img src="docs/images/ieee34.png" alt="IEEE 34 Bus System" width="700"/>
-
-### Creating a Power Grid Environment
-
-```python
-from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
-from powergrid.agents.power_grid_agent import PowerGridAgent
-from powergrid.networks.ieee13 import IEEE13Bus
-from heron.protocols.vertical import SetpointProtocol
-
-
-class MyPowerGridEnv(NetworkedGridEnv):
-    """Custom power grid environment."""
-
-    def _build_net(self):
-        # Create IEEE 13-bus network
-        net = IEEE13Bus("MG1")
-
-        # Create grid agent with devices
-        mg_agent = PowerGridAgent(
-            net=net,
-            grid_config={
-                "name": "MG1",
-                "base_power": 1.0,
-                "devices": [
-                    {
-                        "type": "Generator",
-                        "name": "gen1",
-                        "device_state_config": {
-                            "bus": "Bus 633",
-                            "p_max_MW": 2.0,
-                            "p_min_MW": 0.5,
-                        },
-                    },
-                    {
-                        "type": "ESS",
-                        "name": "ess1",
-                        "device_state_config": {
-                            "bus": "Bus 634",
-                            "e_capacity_MWh": 5.0,
-                            "p_max_MW": 1.0,
-                        },
-                    },
-                ],
-            },
-            protocol=SetpointProtocol(),
-        )
-
-        self.possible_agents = ["MG1"]
-        self.agent_dict = {"MG1": mg_agent}
-        self.net = net
-
-        return net
-
-    def _reward_and_safety(self):
-        rewards = {aid: -agent.cost for aid, agent in self.agent_dict.items()}
-        safety = {aid: agent.safety for aid, agent in self.agent_dict.items()}
-        return rewards, safety
+pip install -e ".[powergrid]"      # Power grid support
+pip install -e ".[all]"            # Full installation with RL
 ```
 
 ---
@@ -677,16 +669,9 @@ This project is licensed under the MIT License - see the [LICENSE.txt](LICENSE.t
 ## Citation
 
 If you use HERON in your research, please cite:
-
-```bibtex
-@article{heron2024,
-  title={HERON: Hierarchical Environments for Realistic Observability in Networks},
-  author={Li, Hepeng and Wang, Zhenlin},
-  year={2024}
-}
-```
+TBD
 
 ## Contact
 
-- **Issues**: [GitHub Issues](https://github.com/hepengli/powergrid/issues)
-- **Email**: hepeng.li@maine.edu
+- **Issues**: [GitHub Issues](https://github.com/Criss-Wang/PowerGym/issues)
+- **Email**: zhenlin.wang.criss@gmail.com
