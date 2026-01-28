@@ -31,12 +31,12 @@ from powergrid.agents.power_grid_agent import PowerGridAgent
 from heron.core.policies import Policy
 from heron.protocols.base import NoProtocol, Protocol
 from heron.protocols.vertical import SetpointProtocol
-from heron.core.state import DeviceState
+from powergrid.core.state.state import DeviceState
 from powergrid.utils.phase import PhaseModel
-from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
-from powergrid.features.electrical import ElectricalBasePh
-from powergrid.features.connection import PhaseConnection
-from heron.features.base import FeatureProvider
+from powergrid.envs.networked_grid_env import NetworkedGridEnv
+from powergrid.core.features.electrical import ElectricalBasePh
+from powergrid.core.features.connection import PhaseConnection
+from heron.core.feature import FeatureProvider
 from powergrid.networks.ieee13 import IEEE13Bus
 
 

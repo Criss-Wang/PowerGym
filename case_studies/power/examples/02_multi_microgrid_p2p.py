@@ -42,7 +42,7 @@ from heron.protocols.vertical import SetpointProtocol
 from heron.protocols.horizontal import PeerToPeerTradingProtocol
 from powergrid.agents.generator import Generator
 from powergrid.agents.storage import ESS
-from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
+from powergrid.envs.networked_grid_env import NetworkedGridEnv
 from powergrid.networks.ieee13 import IEEE13Bus
 
 

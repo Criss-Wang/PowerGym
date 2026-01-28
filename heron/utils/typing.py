@@ -1,13 +1,10 @@
 """Type aliases for the HERON framework."""
 
-from typing import Any, Literal
+from typing import Any
 
 
-# Agent and control types
+# Agent ID type
 AgentID = str
-
-# Control mode for inverter-based sources
-CtrlMode = Literal["q_set", "pf_set", "volt_var", "off"]
 
 
 def float_if_not_none(x: Any) -> Any:

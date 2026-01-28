@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from heron.core.state import DeviceState, FieldAgentState, CoordinatorAgentState
-from heron.features.base import FeatureProvider
+from heron.core.state import FieldAgentState, CoordinatorAgentState
+from heron.core.feature import FeatureProvider
 
 
 class MockFeature(FeatureProvider):
@@ -215,19 +215,6 @@ class TestCoordinatorAgentState:
         assert len(state.features) == 1
         vec = state.vector()
         np.testing.assert_array_equal(vec, [5.0, 6.0])
-
-
-class TestDeviceStateAlias:
-    """Test that DeviceState is an alias for FieldAgentState."""
-
-    def test_alias(self):
-        """Test DeviceState is FieldAgentState."""
-        assert DeviceState is FieldAgentState
-
-    def test_alias_usable(self):
-        """Test DeviceState can be used like FieldAgentState."""
-        state = DeviceState(owner_id="agent1", owner_level=1)
-        assert isinstance(state, FieldAgentState)
 
 
 if __name__ == "__main__":

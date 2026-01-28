@@ -32,8 +32,8 @@ Runtime: ~30 seconds for 24 timesteps
 """
 
 import numpy as np
-from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogrids
-from powergrid.envs.configs.config_loader import load_config
+from powergrid.envs.multi_agent_microgrids import MultiAgentMicrogrids
+from powergrid.setups.loader import load_setup
 
 
 def run_distributed_mode_example():
@@ -51,7 +51,7 @@ def run_distributed_mode_example():
     print("-" * 80)
 
     # Load configuration
-    config = load_config('ieee34_ieee13')
+    config = load_setup('ieee34_ieee13')
     config['max_episode_steps'] = 24
     config['centralized'] = False  # Enable distributed mode
     config['message_broker'] = 'in_memory'  # Use in-memory message broker
@@ -155,11 +155,11 @@ def compare_centralized_vs_distributed():
     print()
 
     # Create both environments
-    config_cent = load_config('ieee34_ieee13')
+    config_cent = load_setup('ieee34_ieee13')
     config_cent['max_episode_steps'] = 24
     config_cent['centralized'] = True
 
-    config_dist = load_config('ieee34_ieee13')
+    config_dist = load_setup('ieee34_ieee13')
     config_dist['max_episode_steps'] = 24
     config_dist['centralized'] = False
     config_dist['message_broker'] = 'in_memory'
@@ -201,7 +201,7 @@ def demonstrate_visibility_rules():
     print()
 
     # Create environment
-    config = load_config('ieee34_ieee13')
+    config = load_setup('ieee34_ieee13')
     config['max_episode_steps'] = 24
     config['centralized'] = False
     config['message_broker'] = 'in_memory'

@@ -395,7 +395,7 @@ class TestProtocolIntegration:
 
     def test_vertical_protocol_in_environment(self):
         """Test vertical protocol works within environment context."""
-        from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
+        from powergrid.envs.networked_grid_env import NetworkedGridEnv
 
         # Create simple environment with vertical protocol
         net = IEEE13Bus("MG1")

@@ -3,11 +3,12 @@
 import numpy as np
 import pytest
 
-from heron.core.state import DeviceState, FieldAgentState
+from heron.core.state import FieldAgentState
+from powergrid.core.state.state import DeviceState
 from powergrid.utils.phase import PhaseModel, PhaseSpec
-from powergrid.features.electrical import ElectricalBasePh
-from powergrid.features.status import StatusBlock
-from powergrid.features.connection import PhaseConnection
+from powergrid.core.features.electrical import ElectricalBasePh
+from powergrid.core.features.status import StatusBlock
+from powergrid.core.features.connection import PhaseConnection
 
 
 def assert_f32(vec: np.ndarray):

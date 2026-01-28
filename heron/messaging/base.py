@@ -30,15 +30,15 @@ class MessageTypeRegistry:
     used in the payload's 'custom_type' field when MessageType.CUSTOM is used.
 
     Example:
-        # In powergrid domain initialization
-        MessageTypeRegistry.register("power_flow_result")
-        MessageTypeRegistry.register("voltage_update")
+        # In domain initialization
+        MessageTypeRegistry.register("simulation_result")
+        MessageTypeRegistry.register("sensor_update")
 
         # When creating a message
         msg = Message(
             ...,
             message_type=MessageType.CUSTOM,
-            payload={"custom_type": "power_flow_result", "data": {...}}
+            payload={"custom_type": "simulation_result", "data": {...}}
         )
     """
     _registered_types: Dict[str, str] = {}
@@ -191,11 +191,11 @@ class ChannelRegistry:
     Allows domains to document their custom channel types.
 
     Example:
-        # In powergrid domain initialization
-        ChannelRegistry.register("power_flow", "Power flow results from environment")
+        # In domain initialization
+        ChannelRegistry.register("simulation", "Simulation results from environment")
 
         # When creating a channel
-        channel = ChannelManager.custom_channel("power_flow", env_id, agent_id)
+        channel = ChannelManager.custom_channel("simulation", env_id, agent_id)
     """
     _registered_types: Dict[str, str] = {}
 

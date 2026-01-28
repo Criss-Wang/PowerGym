@@ -16,7 +16,6 @@ from typing import Dict, Any
 from powergrid.agents.proxy_agent import ProxyAgent, PROXY_LEVEL
 from heron.messaging.base import Message, MessageType, ChannelManager
 from heron.messaging.memory import InMemoryBroker
-from powergrid.messaging.channels import PowerGridChannelManager
 
 
 # =============================================================================
@@ -93,7 +92,7 @@ class TestProxyAgentInitialization:
         )
 
         # Check env->proxy channel exists
-        env_channel = PowerGridChannelManager.power_flow_result_channel("env_0", "proxy")
+        env_channel = ChannelManager.custom_channel("power_flow", "env_0", "proxy")
         assert env_channel in broker.channels
 
         # Check proxy->agent channels exist
@@ -134,7 +133,7 @@ class TestNetworkStateReception:
         )
 
         # Simulate environment sending network state
-        channel = PowerGridChannelManager.power_flow_result_channel("env_0", "proxy")
+        channel = ChannelManager.custom_channel("power_flow", "env_0", "proxy")
         state_payload = {
             "converged": True,
             "agents": {
@@ -167,7 +166,7 @@ class TestNetworkStateReception:
             env_id="env_0"
         )
 
-        channel = PowerGridChannelManager.power_flow_result_channel("env_0", "proxy")
+        channel = ChannelManager.custom_channel("power_flow", "env_0", "proxy")
 
         # Send multiple states
         for i in range(3):
@@ -213,7 +212,7 @@ class TestNetworkStateReception:
             env_id="env_0"
         )
 
-        channel = PowerGridChannelManager.power_flow_result_channel("env_0", "proxy")
+        channel = ChannelManager.custom_channel("power_flow", "env_0", "proxy")
         state_payload = {"converged": True, "agents": {}}
 
         msg = Message(
@@ -560,7 +559,7 @@ class TestMultiEnvironmentIsolation:
         )
 
         # Send state to both proxies
-        channel1 = PowerGridChannelManager.power_flow_result_channel("env_0", "proxy")
+        channel1 = ChannelManager.custom_channel("power_flow", "env_0", "proxy")
         msg1 = Message(
             env_id="env_0",
             sender_id="environment",
@@ -571,7 +570,7 @@ class TestMultiEnvironmentIsolation:
         )
         broker.publish(channel1, msg1)
 
-        channel2 = PowerGridChannelManager.power_flow_result_channel("env_1", "proxy")
+        channel2 = ChannelManager.custom_channel("power_flow", "env_1", "proxy")
         msg2 = Message(
             env_id="env_1",
             sender_id="environment",

@@ -6,10 +6,10 @@ import numpy as np
 from powergrid.agents.device_agent import DeviceAgent
 from heron.core.policies import Policy
 from heron.protocols.base import NoProtocol, Protocol
-from powergrid.features.electrical import ElectricalBasePh
-from powergrid.features.power_limits import PowerLimits
-from powergrid.features.status import StatusBlock
-from powergrid.features.storage import StorageBlock
+from powergrid.core.features.electrical import ElectricalBasePh
+from powergrid.core.features.power_limits import PowerLimits
+from powergrid.core.features.status import StatusBlock
+from powergrid.core.features.storage import StorageBlock
 from heron.messaging.base import ChannelManager, Message, MessageType
 from heron.utils.typing import float_if_not_none
 from powergrid.utils.phase import PhaseModel, PhaseSpec, check_phase_model_consistency

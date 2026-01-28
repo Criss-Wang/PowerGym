@@ -13,7 +13,7 @@ Code Organization
    │   ├── base.py      # Base Agent class
    │   ├── grid_agent.py
    │   ├── device_agent.py
-   │   └── proxy_agent.py  # Info distribution in distributed mode
+   │   └── proxy_agent.py  # Extends heron.agents.ProxyAgent
    ├── core/            # Core data structures
    │   ├── action.py
    │   ├── observation.py

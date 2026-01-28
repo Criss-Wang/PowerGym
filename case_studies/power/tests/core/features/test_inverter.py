@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from powergrid.utils.phase import PhaseModel, PhaseSpec
-from powergrid.features.inverter import InverterBasedSource
+from powergrid.core.features.inverter import InverterBasedSource
 
 
 def _val(names, vec, key):

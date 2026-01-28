@@ -4,6 +4,11 @@ ProxyAgent
 The ProxyAgent is a specialized agent that manages information distribution in distributed execution mode. It acts as an intermediary between the environment and GridAgents, enforcing information hiding and filtering network state based on visibility rules.
 
 .. note::
+   The base ``ProxyAgent`` is defined in ``heron.agents.proxy_agent`` and is domain-agnostic.
+   The power grid version (``powergrid.agents.proxy_agent.ProxyAgent``) extends it with
+   the ``power_flow`` channel type for PandaPower integration.
+
+.. note::
    ProxyAgent is only used in **distributed mode** (``centralized=False``). In centralized mode, agents directly access the PandaPower network object.
 
 Role and Responsibilities
@@ -210,16 +215,28 @@ For advanced use cases, you can customize ProxyAgent behavior:
 
 .. code-block:: python
 
+   # Power grid ProxyAgent (uses "power_flow" channel type)
    from powergrid.agents.proxy_agent import ProxyAgent
-   from powergrid.messaging import MessageBroker
+   from heron.messaging.memory import InMemoryBroker
 
    # Create custom ProxyAgent
-   message_broker = MessageBroker()
+   message_broker = InMemoryBroker()
    proxy_agent = ProxyAgent(
        agent_id='custom_proxy',
        message_broker=message_broker,
        env_id='env_001',
        subordinate_agents=['MG1', 'MG2', 'MG3']
+   )
+
+   # Or use the generic heron ProxyAgent with custom channel type
+   from heron.agents.proxy_agent import ProxyAgent as BaseProxyAgent
+
+   generic_proxy = BaseProxyAgent(
+       agent_id='custom_proxy',
+       message_broker=message_broker,
+       env_id='env_001',
+       subordinate_agents=['MG1', 'MG2', 'MG3'],
+       result_channel_type='my_custom_channel'  # Configurable!
    )
 
    # Override filtering behavior

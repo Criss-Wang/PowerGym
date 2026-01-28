@@ -8,7 +8,7 @@ from gymnasium.spaces import Box, Discrete, MultiDiscrete
 from powergrid.agents.device_agent import DeviceAgent
 from heron.agents.base import Observation
 from heron.core.action import Action
-from heron.core.state import DeviceState
+from powergrid.core.state.state import DeviceState
 from heron.core.policies import Policy
 from heron.protocols.base import NoProtocol
 

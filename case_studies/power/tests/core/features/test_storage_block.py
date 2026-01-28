@@ -4,7 +4,7 @@ import json
 import numpy as np
 import pytest
 
-from powergrid.features.storage import StorageBlock
+from powergrid.core.features.storage import StorageBlock
 
 
 def _assert_vec_names_consistent(b: StorageBlock):

@@ -1,41 +1,37 @@
-"""Proxy Agent for managing network state distribution.
+"""Power Grid Proxy Agent.
 
-The ProxyAgent acts as an intermediary between the environment and other agents,
-managing network state updates and controlling information visibility.
-
-Key responsibilities:
-1. Receive network state updates from the environment
-2. Cache the latest network state
-3. Distribute network state to other agents based on visibility rules
-4. Control what information each agent can access
+This module provides a power-grid specific ProxyAgent that uses the
+"power_flow" channel type for environment-to-proxy communication.
 """
 
-from typing import Any, Dict, List, Optional
-import numpy as np
-import pandapower as pp
+from typing import Dict, List, Optional
 
-from heron.agents.base import Agent, AgentID
-from heron.messaging.base import ChannelManager, Message, MessageBroker, MessageType
-from heron.core.observation import Observation
-from powergrid.messaging.channels import PowerGridChannelManager
+from heron.agents.base import AgentID
+from heron.agents.proxy_agent import ProxyAgent as BaseProxyAgent, PROXY_LEVEL
+from heron.messaging.base import MessageBroker
 
 
-PROXY_LEVEL = 3  # Level identifier for proxy-level agents (higher than grid)
+# Re-export PROXY_LEVEL for backwards compatibility
+__all__ = ["ProxyAgent", "PROXY_LEVEL", "POWER_FLOW_CHANNEL_TYPE"]
+
+# Power grid uses "power_flow" as the channel type for power flow results
+POWER_FLOW_CHANNEL_TYPE = "power_flow"
 
 
-class ProxyAgent(Agent):
-    """Proxy agent that manages network state distribution.
+class ProxyAgent(BaseProxyAgent):
+    """Power grid proxy agent for managing network state distribution.
 
-    The ProxyAgent sits between the environment and other agents, acting as the
-    single source of truth for network state information. All agents must retrieve
-    network state through the ProxyAgent rather than directly accessing the network.
+    This is a thin wrapper around the generic ProxyAgent that sets the
+    channel type to "power_flow" for power grid specific communication.
 
-    Attributes:
-        message_broker: MessageBroker instance for communication
-        env_id: Environment ID for multi-environment isolation
-        network_state_cache: Latest network state received from environment
-        visibility_rules: Dict mapping agent IDs to allowed state keys
-        subordinate_agents: List of agent IDs that can request state from this proxy
+    Example:
+        broker = InMemoryBroker()
+        proxy = ProxyAgent(
+            agent_id="proxy",
+            message_broker=broker,
+            env_id="env_0",
+            subordinate_agents=["grid_1", "grid_2"],
+        )
     """
 
     def __init__(
@@ -46,7 +42,7 @@ class ProxyAgent(Agent):
         subordinate_agents: Optional[List[AgentID]] = None,
         visibility_rules: Optional[Dict[AgentID, List[str]]] = None,
     ):
-        """Initialize proxy agent.
+        """Initialize power grid proxy agent.
 
         Args:
             agent_id: Unique identifier for this proxy agent
@@ -56,195 +52,34 @@ class ProxyAgent(Agent):
             visibility_rules: Dict mapping agent IDs to allowed state keys.
                             If None, all agents see all state by default.
         """
-        if message_broker is None:
-            raise ValueError("ProxyAgent requires a message broker for communication")
-
         super().__init__(
             agent_id=agent_id,
-            level=PROXY_LEVEL,
             message_broker=message_broker,
-            upstream_id=None,  # Proxy has no upstream
             env_id=env_id,
-            subordinates={},  # Proxy doesn't manage subordinates hierarchically
+            subordinate_agents=subordinate_agents,
+            visibility_rules=visibility_rules,
+            result_channel_type=POWER_FLOW_CHANNEL_TYPE,
         )
 
-        self.subordinate_agents = subordinate_agents or []
-        self.visibility_rules = visibility_rules or {}
-        self.network_state_cache: Dict[str, Any] = {}
+    # Backwards-compatible aliases for power grid specific naming
+    @property
+    def network_state_cache(self) -> Dict:
+        """Alias for state_cache (backwards compatibility)."""
+        return self.state_cache
 
-        # Setup channels for communication
-        self._setup_proxy_channels()
+    @network_state_cache.setter
+    def network_state_cache(self, value: Dict) -> None:
+        """Alias setter for state_cache (backwards compatibility)."""
+        self.state_cache = value
 
-    def _setup_proxy_channels(self) -> None:
-        """Setup message channels for proxy agent communication.
+    def receive_network_state_from_environment(self):
+        """Alias for receive_state_from_environment (backwards compatibility)."""
+        return self.receive_state_from_environment()
 
-        Creates channels for:
-        1. Receiving network state from environment
-        2. Sending network state to subordinate agents
-        """
-        if not self.message_broker:
-            return
+    def distribute_network_state_to_agents(self):
+        """Alias for distribute_state_to_agents (backwards compatibility)."""
+        return self.distribute_state_to_agents()
 
-        # Channel for receiving network state from environment
-        env_to_proxy_channel = PowerGridChannelManager.power_flow_result_channel(
-            self.env_id,
-            self.agent_id
-        )
-        self.message_broker.create_channel(env_to_proxy_channel)
-
-        # Channels for sending network state to each subordinate agent
-        for agent_id in self.subordinate_agents:
-            proxy_to_agent_channel = ChannelManager.info_channel(
-                self.agent_id,
-                agent_id,
-                self.env_id
-            )
-            self.message_broker.create_channel(proxy_to_agent_channel)
-
-    def receive_network_state_from_environment(self) -> Optional[Dict[str, Any]]:
-        """Receive and cache network state from environment.
-
-        Returns:
-            Network state payload or None if no message available
-        """
-        if not self.message_broker or not self.env_id:
-            return None
-
-        channel = PowerGridChannelManager.power_flow_result_channel(self.env_id, self.agent_id)
-        messages = self.message_broker.consume(
-            channel,
-            recipient_id=self.agent_id,
-            env_id=self.env_id,
-            clear=True
-        )
-
-        if messages:
-            # Cache the most recent network state
-            self.network_state_cache = messages[-1].payload
-            return self.network_state_cache
-
-        return None
-
-    def distribute_network_state_to_agents(self) -> None:
-        """Distribute cached network state to all subordinate agents.
-
-        Sends the appropriate network state information to each agent based on
-        visibility rules. This should be called after receiving updated state
-        from the environment.
-
-        The environment sends an aggregated state with structure:
-        {
-            'converged': bool,
-            'agents': {
-                'agent_id_1': {...agent1_specific_state...},
-                'agent_id_2': {...agent2_specific_state...},
-                ...
-            }
-        }
-
-        The ProxyAgent extracts each agent's specific state and sends it individually.
-        """
-        if not self.message_broker or not self.network_state_cache:
-            return
-
-        # Extract agent-specific states from aggregated state
-        agents_state = self.network_state_cache.get('agents', {})
-
-        for agent_id in self.subordinate_agents:
-            # Get agent-specific state from aggregated state
-            agent_state = agents_state.get(agent_id, {})
-
-            # Apply visibility filtering
-            filtered_state = self._filter_state_for_agent(agent_id, agent_state)
-
-            # Send network state to agent
-            channel = ChannelManager.info_channel(
-                self.agent_id,
-                agent_id,
-                self.env_id
-            )
-            message = Message(
-                env_id=self.env_id,
-                sender_id=self.agent_id,
-                recipient_id=agent_id,
-                timestamp=self._timestep,
-                message_type=MessageType.INFO,
-                payload=filtered_state
-            )
-            self.message_broker.publish(channel, message)
-
-    def _filter_state_for_agent(self, agent_id: AgentID, agent_state: Dict[str, Any]) -> Dict[str, Any]:
-        """Filter network state based on visibility rules for a specific agent.
-
-        Args:
-            agent_id: Agent requesting the state
-            agent_state: Agent-specific state extracted from aggregated state
-
-        Returns:
-            Filtered network state dict
-        """
-        if agent_id not in self.visibility_rules:
-            # No specific rules, return full agent state
-            return agent_state.copy()
-
-        allowed_keys = self.visibility_rules[agent_id]
-        filtered_state = {}
-
-        for key in allowed_keys:
-            if key in agent_state:
-                filtered_state[key] = agent_state[key]
-
-        return filtered_state
-
-    def get_latest_network_state_for_agent(self, agent_id: AgentID) -> Dict[str, Any]:
-        """Get the latest cached network state for a specific agent.
-
-        This method can be called by agents to retrieve network state on-demand.
-
-        Args:
-            agent_id: Agent requesting the state
-
-        Returns:
-            Filtered network state dict
-        """
-        agents_state = self.network_state_cache.get('agents', {})
-        agent_state = agents_state.get(agent_id, {})
-        return self._filter_state_for_agent(agent_id, agent_state)
-
-    # ============================================
-    # Required Abstract Methods (Not used by ProxyAgent)
-    # ============================================
-
-    def observe(self, global_state: Optional[Dict[str, Any]] = None, *args, **kwargs) -> Observation:
-        """ProxyAgent doesn't need to observe in the traditional sense.
-
-        Returns:
-            Empty observation
-        """
-        return Observation(
-            timestamp=self._timestep,
-            local={},
-            global_info={},
-            messages=[]
-        )
-
-    def act(self, observation: Observation, *args, **kwargs) -> Any:
-        """ProxyAgent doesn't take actions in the traditional sense.
-
-        Instead, it manages network state distribution.
-        """
-        pass
-
-    def reset(self, *, seed: Optional[int] = None, **kwargs) -> None:
-        """Reset proxy agent state.
-
-        Args:
-            seed: Random seed
-            **kwargs: Additional reset parameters
-        """
-        super().reset(seed=seed)
-        self.network_state_cache = {}
-
-    def __repr__(self) -> str:
-        num_subordinates = len(self.subordinate_agents)
-        return f"ProxyAgent(id={self.agent_id}, subordinates={num_subordinates})"
+    def get_latest_network_state_for_agent(self, agent_id: AgentID):
+        """Alias for get_latest_state_for_agent (backwards compatibility)."""
+        return self.get_latest_state_for_agent(agent_id)

@@ -2,6 +2,10 @@
 
 GridAgent manages a set of device agents, implementing coordination
 protocols like price signals, setpoints, or consensus algorithms.
+
+GridAgent extends CoordinatorAgent from the HERON framework, inheriting
+standard coordinator-level capabilities while adding power-grid specific
+functionality.
 """
 
 from typing import Any, Dict as DictType, Iterable, List, Optional
@@ -11,28 +15,32 @@ import numpy as np
 import pandapower as pp
 from gymnasium.spaces import Box, Dict, Discrete, MultiDiscrete
 
-from heron.agents.base import Agent, AgentID, Observation
+from heron.agents.coordinator_agent import CoordinatorAgent, COORDINATOR_LEVEL
+from heron.agents.base import Agent, AgentID
+from heron.core.observation import Observation
 from powergrid.agents.device_agent import DeviceAgent
 from heron.core.policies import Policy
 from heron.protocols.base import NoProtocol, Protocol
-from heron.core.state import GridState
+from powergrid.core.state.state import GridState
 from powergrid.agents.generator import Generator
 from powergrid.agents.storage import ESS
-from powergrid.features.network import BusVoltages, LineFlows, NetworkMetrics
+from powergrid.core.features.network import BusVoltages, LineFlows, NetworkMetrics
 from heron.messaging.base import ChannelManager, MessageBroker
 
 
-GRID_LEVEL = 2  # Level identifier for grid-level agents
+GRID_LEVEL = COORDINATOR_LEVEL  # Level identifier for grid-level agents (same as coordinator)
 
 
-class GridAgent(Agent):
+class GridAgent(CoordinatorAgent):
     """Grid-level coordinator for managing device agents.
 
-    GridAgent coordinates multiple device agents using specified protocols
-    and optionally a centralized policy for joint decision-making.
+    GridAgent extends CoordinatorAgent from the HERON framework, coordinating
+    multiple device agents using specified protocols and optionally a centralized
+    policy for joint decision-making.
 
     Attributes:
         devices: Dictionary mapping device agent IDs to DeviceAgent instances
+                 (alias for subordinate_agents)
         protocol: Coordination protocol for managing subordinate devices
         policy: Optional centralized policy for joint action computation
         centralized: If True, uses centralized policy; if False, devices act independently
@@ -50,7 +58,7 @@ class GridAgent(Agent):
         env_id: Optional[str] = None,
 
         # GridAgent specific params
-        devices: Optional[List[Agent]] = None,
+        devices: Optional[List[DeviceAgent]] = None,
         centralized: bool = True,
         grid_config: DictType[str, Any] = {},
     ):
@@ -67,107 +75,160 @@ class GridAgent(Agent):
             centralized: If True, uses centralized policy; if False, devices act independently
             grid_config: Grid configuration dictionary
         """
-        self.protocol = protocol
-        self.policy = policy
         self.centralized = centralized
-        self.state = GridState(agent_id, GRID_LEVEL)
+        self._grid_config = grid_config
 
-        # Build device agents either from list or config
+        # Build config for CoordinatorAgent
+        # Convert device list to agent_configs if provided
         if devices is not None:
-            # Direct device list provided
-            self.devices = {device.agent_id: device for device in devices}
-            # Set upstream relationship for devices
-            for device in devices:
-                device.upstream_id = agent_id
+            # Store devices to be processed after super().__init__
+            self._init_devices = devices
+            config = {'agents': []}
         else:
-            # Build from config
-            device_configs = grid_config.get('devices', [])
-            self.devices = self._build_device_agents(
-                device_configs,
-                message_broker=message_broker,
-                env_id=env_id,
-                upstream_id=agent_id  # Devices' upstream is this GridAgent
-            )
+            self._init_devices = None
+            config = {'agents': grid_config.get('devices', [])}
 
         super().__init__(
             agent_id=agent_id,
-            level=GRID_LEVEL,
+            policy=policy,
+            protocol=protocol,
             message_broker=message_broker,
             upstream_id=upstream_id,
             env_id=env_id,
-            subordinates=self.devices,
+            config=config,
+        )
+
+        # Use GridState instead of CoordinatorAgentState for power-grid domain
+        self.state = GridState(
+            owner_id=self.agent_id,
+            owner_level=GRID_LEVEL
+        )
+
+        # If devices were provided directly, set them up now
+        if self._init_devices is not None:
+            self.subordinate_agents = {
+                device.agent_id: device for device in self._init_devices
+            }
+            # Set upstream relationship for devices
+            for device in self._init_devices:
+                device.upstream_id = self.agent_id
+
+    # ============================================
+    # Backward Compatibility: devices <-> subordinate_agents
+    # ============================================
+
+    @property
+    def devices(self) -> DictType[AgentID, DeviceAgent]:
+        """Alias for subordinate_agents for backward compatibility."""
+        return self.subordinate_agents
+
+    @devices.setter
+    def devices(self, value: DictType[AgentID, DeviceAgent]) -> None:
+        """Setter for devices alias."""
+        self.subordinate_agents = value
+
+    def _build_subordinate_agents(
+        self,
+        agent_configs: List[DictType[str, Any]],
+        message_broker: Optional[MessageBroker] = None,
+        env_id: Optional[str] = None,
+        upstream_id: Optional[AgentID] = None,
+    ) -> DictType[AgentID, DeviceAgent]:
+        """Build device agents from configuration.
+
+        Overrides CoordinatorAgent method to create DeviceAgent instances.
+
+        Args:
+            agent_configs: List of device configuration dictionaries
+            message_broker: Optional message broker for communication
+            env_id: Environment ID for multi-environment isolation
+            upstream_id: Upstream agent ID (this grid agent)
+
+        Returns:
+            Dictionary mapping device IDs to DeviceAgent instances
+        """
+        return self._build_device_agents(
+            agent_configs,
+            message_broker=message_broker,
+            env_id=env_id,
+            upstream_id=upstream_id
         )
 
     def _build_device_agents(
         self,
         device_configs: List[DictType[str, Any]],
         message_broker: Optional[MessageBroker] = None,
+        env_id: Optional[str] = None,
+        upstream_id: Optional[AgentID] = None,
     ) -> DictType[AgentID, DeviceAgent]:
         """Build device agents from configuration.
+
+        Override in subclasses to create specific device types.
 
         Args:
             device_configs: List of device configuration dictionaries
             message_broker: Optional message broker for communication
+            env_id: Environment ID for multi-environment isolation
+            upstream_id: Upstream agent ID (this grid agent)
 
         Returns:
             Dictionary mapping device IDs to DeviceAgent instances
         """
-        pass
+        # Default implementation - override in subclasses
+        return {}
 
     # ============================================
-    # Core Agent Lifecycle Methods
+    # Cost/Safety Properties (Override to allow setting)
     # ============================================
 
-    def reset(self, *, seed: Optional[int] = None, **kwargs) -> None:
-        """Reset coordinator and all devices.
+    @property
+    def cost(self) -> float:
+        """Get total cost from all device agents.
 
-        Args:
-            seed: Random seed
-            **kwargs: Additional reset parameters
+        If _cost is set explicitly, return that value.
+        Otherwise, aggregate from subordinate devices.
         """
-        super().reset(seed=seed)
+        if hasattr(self, '_cost') and self._cost is not None:
+            return self._cost
+        return sum(agent.cost for agent in self.subordinate_agents.values())
 
-        # Reset devices
-        for _, agent in self.devices.items():
-            agent.reset(seed=seed, **kwargs)
+    @cost.setter
+    def cost(self, value: float) -> None:
+        """Set cost value explicitly."""
+        self._cost = value
 
-        # Reset policy
-        if self.policy is not None:
-            self.policy.reset()
+    @property
+    def safety(self) -> float:
+        """Get total safety penalty from all device agents.
 
-    def observe(self, global_state: Optional[DictType[str, Any]] = None, *args, **kwargs) -> Observation:
-        """Collect observations from device agents. [Only for synchronous direct execution]
-
-        Args:
-            global_state: Environment state
-
-        Returns:
-            Aggregated observation from all devices
+        If _safety is set explicitly, return that value.
+        Otherwise, aggregate from subordinate devices.
         """
-        # Collect device observations
-        device_obs = {}
-        for agent_id, agent in self.devices.items():
-            device_obs[agent_id] = agent.observe(global_state)
-        local_observation = self._build_local_observation(device_obs, *args, **kwargs)
+        if hasattr(self, '_safety') and self._safety is not None:
+            return self._safety
+        return sum(agent.safety for agent in self.subordinate_agents.values())
 
-        # TODO: update global info aggregation if needed
-        global_info = global_state
+    @safety.setter
+    def safety(self, value: float) -> None:
+        """Set safety value explicitly."""
+        self._safety = value
 
-        # TODO: update message aggregation if needed
-        messages = []
+    # ============================================
+    # Observation Methods (Override for device terminology)
+    # ============================================
 
-        return Observation(
-            timestamp=self._timestep,
-            local=local_observation,
-            global_info=global_info,
-            messages=messages,
-        )
+    def _build_local_observation(
+        self,
+        subordinate_obs: DictType[AgentID, Observation],
+        *args,
+        **kwargs
+    ) -> Any:
+        """Build local observation from device observations.
 
-    def _build_local_observation(self, device_obs: DictType[AgentID, Observation], *args, **kwargs) -> Any:
-        """Build local observation from device observations. 
+        Overrides CoordinatorAgent to use device-specific terminology.
 
         Args:
-            device_obs: Dictionary mapping device IDs to their observations
+            subordinate_obs: Dictionary mapping device IDs to their observations
             *args: Additional positional arguments
             **kwargs: Additional keyword arguments
 
@@ -175,12 +236,20 @@ class GridAgent(Agent):
             Aggregated local observation dictionary
         """
         return {
-            "device_obs": device_obs,
-            "grid_state": self.state.vector()
+            "device_obs": subordinate_obs,  # Use device_obs for backward compat
+            "subordinate_obs": subordinate_obs,  # Also include standard name
+            "grid_state": self.state.vector(),
+            "coordinator_state": self.state.vector(),
         }
 
+    # ============================================
+    # Action Methods (Override for centralized flag)
+    # ============================================
+
     def act(self, observation: Observation, upstream_action: Any = None) -> Any:
-        """Compute coordination action and distribute to devices. [Only for synchronous direct execution]
+        """Compute coordination action and distribute to devices.
+
+        Extends CoordinatorAgent.act() with centralized mode check.
 
         Args:
             observation: Aggregated observation
@@ -209,102 +278,44 @@ class GridAgent(Agent):
         else:
             raise RuntimeError("No action or policy provided for GridAgent.")
 
-        # Coordinate devices using new unified method
+        # Coordinate devices using unified method
         self.coordinate_devices(observation, action)
 
         return action
-    
+
     # ============================================
-    # Abstract Methods for Hierarchical Execution
+    # Coordination Methods (Aliases for backward compatibility)
     # ============================================
 
-    def _derive_local_action(self, upstream_action: Optional[Any]) -> Optional[Any]:
-        """Derive local action from upstream action.
-
-        Currently, GridAgent is a pure coordinator with no local physical action.
-
-        Args:
-            upstream_action: Action received from upstream agent
-
-        Returns:
-            None - GridAgent has no local action to execute
-        """
-        return None
-
-    async def _derive_downstream_actions(
+    def coordinate_devices(
         self,
-        upstream_action: Optional[Any]
-    ) -> DictType[AgentID, Any]:
-        """Derive actions for subordinates from upstream action.
+        observation: Observation,
+        action: Any,
+    ) -> None:
+        """Unified coordination method using protocol.
 
-        Decomposes the flat action vector from upstream (or from policy)
-        into per-device actions by splitting based on device action dimensions.
-
-        Args:
-            upstream_action: Action received from upstream agent (flat numpy array or dict)
-
-        Returns:
-            Dict mapping subordinate IDs to their actions
-        """
-        downstream_actions = {}
-        if not self.devices or upstream_action is None:
-            return downstream_actions
-
-        # Handle Dict action space (continuous + discrete)
-        continuous_action = None
-        discrete_action = None
-
-        if isinstance(upstream_action, dict):
-            # For Dict spaces with 'continuous' and 'discrete' keys
-            if 'continuous' in upstream_action:
-                continuous_action = np.asarray(upstream_action['continuous'])
-            if 'discrete' in upstream_action:
-                discrete_action = np.asarray(upstream_action['discrete'])
-
-            # If neither key is present, assume it's already a per-device dict
-            if continuous_action is None and discrete_action is None:
-                return upstream_action
-        else:
-            continuous_action = np.asarray(upstream_action)
-
-        # Decompose flat action vectors into per-device actions
-        cont_offset = 0
-        disc_offset = 0
-
-        for agent_id, device in self.devices.items():
-            # Build per-device action by combining continuous and discrete parts
-            device_action_parts = []
-
-            # Add continuous part
-            if device.action.dim_c > 0 and continuous_action is not None:
-                cont_part = continuous_action[cont_offset:cont_offset + device.action.dim_c]
-                device_action_parts.append(cont_part)
-                cont_offset += device.action.dim_c
-
-            # Add discrete part
-            if device.action.dim_d > 0 and discrete_action is not None:
-                disc_part = discrete_action[disc_offset:disc_offset + device.action.dim_d]
-                device_action_parts.append(disc_part)
-                disc_offset += device.action.dim_d
-
-            # Concatenate parts into single action array
-            if device_action_parts:
-                device_action = np.concatenate(device_action_parts)
-                downstream_actions[agent_id] = device_action
-
-        return downstream_actions
-
-    def _execute_local_action(self, action: Optional[Any]) -> None:
-        """Execute own action and update internal state.
-
-        Subclasses should override this to implement their action execution.
-        State updates should be published via _publish_state_updates().
+        Alias for coordinate_subordinates() for backward compatibility.
 
         Args:
-            action: Action to execute
+            observation: Current observation
+            action: Computed action from coordinator
         """
-        # Currently, grid agent doesn't perform any local action
-        pass
+        self.coordinate_subordinates(observation, action)
+
+    def coordinate_device(
+        self,
+        observation: Observation,
+        action: Any,
+    ) -> None:
+        """Coordinate a single device or all devices with given action.
+
+        Alias for coordinate_devices for backward compatibility.
+
+        Args:
+            observation: Current observation
+            action: Computed action from coordinator
+        """
+        self.coordinate_devices(observation, action)
 
     # ============================================
     # State Update Hooks
@@ -326,122 +337,15 @@ class GridAgent(Agent):
         # Update internal state features based on received network info
         self._update_from_network_state(upstream_info)
 
-    def _update_state_with_subordinates_info(self) -> None:
-        """Update internal state based on info received from subordinates."""
-        # Default: no update
-        pass
+    def _update_from_network_state(self, network_state: DictType[str, Any]) -> None:
+        """Update internal features from received network state.
 
-    def _update_state_post_step(self) -> None:
-        """Update internal state after executing local action.
-
-        This method can be overridden by subclasses to update internal
-        state variables after executing the local action.
-        """
-        # Default: no update
-        pass
-
-    def _publish_state_updates(self) -> None:
-        """Publish state updates to environment via message broker.
-
-        Subclasses should override this to publish device state changes
-        to the environment for power flow computation.
-        """
-        # Default: no state updates
-        pass
-
-
-    # ============================================
-    # Coordination Methods
-    # ============================================
-
-    def coordinate_devices(
-        self,
-        observation: Observation,
-        action: Any,
-    ) -> None:
-        """Unified coordination method using protocol.
-
-        Coordinates device actions using the protocol's communication and
-        action components. Delegates to centralized or decentralized paths
-        based on the protocol's ActionProtocol type.
+        Override in subclasses to handle power-grid specific state updates.
 
         Args:
-            observation: Current observation
-            action: Computed action from coordinator
+            network_state: Network state dict from ProxyAgent
         """
-
-        # Prepare subordinate states from device observations
-        device_obs = observation.local.get("device_obs", {})
-        subordinate_states = {
-            dev_id: obs.local for dev_id, obs in device_obs.items()
-        }
-
-        # Prepare context for protocol
-        context = {
-            "subordinates": self.devices,
-            "coordinator_id": self.agent_id,
-            "coordinator_action": action,
-            "timestamp": observation.timestamp,
-        }
-
-        # Execute protocol coordination (communication + action)
-        messages, actions = self.protocol.coordinate(
-            coordinator_state=observation.local,
-            subordinate_states=subordinate_states,
-            coordinator_action=action,
-            context=context
-        )
-
-        # Route to appropriate execution path
-        self._apply_centralized_coordination(messages, actions, device_obs)
-
-    # ============================================
-    # Centralized Coordination (Direct control)
-    # ============================================
-
-    def _apply_centralized_coordination(
-        self,
-        messages: DictType[AgentID, DictType[str, Any]],
-        actions: DictType[AgentID, Any],
-        device_obs: DictType[AgentID, Observation],
-    ) -> None:
-        """Apply centralized coordination: send messages + apply actions to devices.
-
-        In centralized mode, the coordinator directly controls device actions.
-        Messages are informational (e.g., setpoint assignments).
-
-        Args:
-            messages: Coordination messages to send
-            actions: Actions to apply to devices
-            device_obs: Device observations for context
-        """
-        # Send messages to devices (informational)
-        for device_id, message in messages.items():
-            if device_id in self.devices:
-                # Store message in device's mailbox or handle synchronously
-                pass  # TODO: Implement message delivery
-
-        # Apply actions directly to devices
-        for device_id, action in actions.items():
-            if device_id in self.devices and action is not None:
-                obs = device_obs.get(device_id)
-                if obs:
-                    self.devices[device_id].act(obs, upstream_action=action)
-
-    def coordinate_device(
-        self,
-        observation: Observation,
-        action: Any,
-    ) -> None:
-        """Coordinate a single device or all devices with given action.
-
-        Alias for coordinate_devices for backward compatibility.
-
-        Args:
-            observation: Current observation
-            action: Computed action from coordinator
-        """
-        self.coordinate_devices(observation, action)
+        pass
 
     # ============================================
     # Utility Methods
@@ -1019,7 +923,7 @@ class PowerGridAgent(GridAgent):
         # Update GridState features
         # Note: We don't have bus/line names in the message, so we use indices
         if len(bus_vm) > 0:
-            from powergrid.features.network import BusVoltages
+            from powergrid.core.features.network import BusVoltages
             self.state.features.append(
                 BusVoltages(
                     vm_pu=bus_vm,
@@ -1029,7 +933,7 @@ class PowerGridAgent(GridAgent):
             )
 
         if len(line_loading_percent) > 0:
-            from powergrid.features.network import LineFlows
+            from powergrid.core.features.network import LineFlows
             self.state.features.append(
                 LineFlows(
                     p_from_mw=np.zeros_like(line_loading_percent),  # Not transmitted

@@ -2,7 +2,7 @@ import math
 import numpy as np
 import pytest
 
-from powergrid.features.power_limits import PowerLimits
+from powergrid.core.features.power_limits import PowerLimits
 
 
 def assert_f32(v: np.ndarray):

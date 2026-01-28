@@ -12,6 +12,7 @@ This case study demonstrates HERON applied to power systems with multi-agent mic
 - [Example Networks](#example-networks)
 - [Running Examples](#running-examples)
 - [MAPPO Training](#mappo-training-with-rllib)
+- [Environment Setups](#environment-setups)
 - [Custom Environments](#creating-a-custom-power-grid-environment)
 
 ---
@@ -27,17 +28,21 @@ case_studies/power/
 │   │   ├── generator.py        # Dispatchable generator device
 │   │   ├── storage.py          # Energy storage system (ESS)
 │   │   ├── transformer.py      # Transformer with tap changer
-│   │   └── proxy_agent.py      # System agent for distributed mode
+│   │   └── proxy_agent.py      # Extends heron.agents.proxy_agent for power flow
 │   │
-│   ├── features/               # Power-specific features
-│   │   ├── electrical.py       # P, Q, voltage features
-│   │   ├── network.py          # Bus voltages, line flows
-│   │   ├── storage.py          # SOC, energy capacity
-│   │   ├── power_limits.py     # Power limit features
-│   │   ├── thermal.py          # Thermal constraint features
-│   │   └── ...                 # inverter, tap_changer, var, etc.
+│   ├── core/                   # Extensions to heron.core
+│   │   ├── features/           # Power-specific features extending heron.core.feature
+│   │   │   ├── electrical.py   # P, Q, voltage features
+│   │   │   ├── network.py      # Bus voltages, line flows
+│   │   │   ├── storage.py      # SOC, energy capacity
+│   │   │   ├── power_limits.py # Power limit features
+│   │   │   ├── thermal.py      # Thermal constraint features
+│   │   │   └── ...             # inverter, tap_changer, var, etc.
+│   │   │
+│   │   └── state/              # Power-specific state extending heron.core.state
+│   │       └── state.py        # Device and grid state classes
 │   │
-│   ├── networks/               # IEEE/CIGRE test networks
+│   ├── networks/               # IEEE/CIGRE test networks (Power-specific)
 │   │   ├── ieee13.py           # IEEE 13-bus feeder
 │   │   ├── ieee34.py           # IEEE 34-bus feeder
 │   │   ├── ieee123.py          # IEEE 123-bus feeder
@@ -45,26 +50,26 @@ case_studies/power/
 │   │   └── ...                 # Additional network utilities
 │   │
 │   ├── envs/                   # Power environments
-│   │   ├── multi_agent/
-│   │   │   ├── networked_grid_env.py
-│   │   │   └── multi_agent_microgrids.py
-│   │   └── single_agent/
-│   │       ├── ieee13_mg.py
-│   │       ├── ieee34_mg.py
-│   │       └── cigre_mv.py
+│   │   ├── networked_grid_env.py      # Base networked grid environment
+│   │   └── multi_agent_microgrids.py  # Multi-microgrid environment
 │   │
-│   ├── optimization/           # Power system optimization
+│   ├── setups/                 # Environment setups - config + data (optional*)
+│   │   ├── loader.py           # Setup loading utilities
+│   │   └── ieee34_ieee13/      # Example setup
+│   │       ├── config.yml      # Environment configuration
+│   │       └── data.pkl        # Time series data (load, price, etc.)
+│   │
+│   ├── optimization/           # Power system optimization (Power-specific)
 │   │   └── misocp.py           # Mixed-integer SOCP solver
 │   │
 │   └── utils/                  # Power-specific utilities
 │       ├── cost.py             # Cost functions
 │       ├── safety.py           # Safety penalties
-│       └── phase.py            # Phase utilities
+│       ├── phase.py            # Phase utilities
+│       └── typing.py           # Type definitions
 │
-├── data/                       # Power grid data files
 ├── examples/                   # Example scripts
-├── tests/                      # Power grid tests
-└── README.md                   # This file
+└── tests/                      # Power grid tests
 ```
 
 ## Overview
@@ -75,6 +80,7 @@ case_studies/power/
 | **Devices** | Generator, ESS (Energy Storage), Transformer |
 | **Agents** | `PowerGridAgent` (coordinator), device agents (field level) |
 | **Features** | Electrical (P, Q, V), Storage (SOC), Network metrics |
+| **Setups** | Pre-configured environments with config and time series data |
 
 ---
 
@@ -95,14 +101,16 @@ pip install -e ".[all]"
 ### Multi-Agent Microgrids
 
 ```python
-from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogrids
+from powergrid.envs.multi_agent_microgrids import MultiAgentMicrogrids
+from powergrid.setups.loader import load_setup
 
-# Create multi-agent environment
-env_config = {
+# Load environment configuration from a setup
+env_config = load_setup("ieee34_ieee13")
+env_config.update({
     "centralized": True,
     "max_episode_steps": 24,
     "train": True,
-}
+})
 env = MultiAgentMicrogrids(env_config)
 obs_dict, info = env.reset()
 
@@ -112,8 +120,6 @@ for _ in range(24):
                for agent_id in env.agents}
     obs_dict, rewards, terminateds, truncateds, infos = env.step(actions)
 ```
-
-> ⚠️ **Note**: Single-agent environments (`ieee13_mg.py`, `ieee34_mg.py`) are currently deprecated and need migration to the new base classes.
 
 ---
 
@@ -175,10 +181,44 @@ python examples/05_mappo_training.py --test
 
 ---
 
+## Environment Setups
+
+> **Note**: This setup pattern is specific to the power grid case study. Other HERON projects may organize configuration and data differently based on their domain needs.
+
+In this case study, a **setup** is a complete environment definition containing configuration and data. Each setup is a subdirectory under `powergrid/setups/` with:
+- `config.yml`: Environment configuration (agent hierarchy, network topology, device parameters)
+- `data.pkl`: Time series data (load profiles, prices, renewable generation)
+
+### Loading a Setup
+
+```python
+from powergrid.setups.loader import load_setup, get_available_setups
+
+# List available setups
+print(get_available_setups())  # ['ieee34_ieee13']
+
+# Load a setup (returns config dict with resolved dataset_path)
+config = load_setup("ieee34_ieee13")
+```
+
+### Creating a New Setup
+
+1. Create a new directory under `powergrid/setups/`:
+   ```
+   powergrid/setups/my_setup/
+   ├── config.yml
+   └── data.pkl
+   ```
+
+2. Define `config.yml` with your environment configuration
+3. Prepare `data.pkl` with time series data
+
+---
+
 ## Creating a Custom Power Grid Environment
 
 ```python
-from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
+from powergrid.envs.networked_grid_env import NetworkedGridEnv
 from powergrid.agents.power_grid_agent import PowerGridAgent
 from powergrid.networks.ieee13 import IEEE13Bus
 from heron.protocols.vertical import SetpointProtocol

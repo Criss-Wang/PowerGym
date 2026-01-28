@@ -2,7 +2,7 @@ import json
 import numpy as np
 import pytest
 
-from powergrid.features.thermal import ThermalLoading
+from powergrid.core.features.thermal import ThermalLoading
 from powergrid.utils.phase import PhaseModel, PhaseSpec
 
 

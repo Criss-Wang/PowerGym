@@ -70,6 +70,8 @@ graph TB
 
 **ProxyAgent Role**: The ProxyAgent acts as an intermediary that receives aggregated network state from the environment and distributes filtered, agent-specific information to individual GridAgents. This enforces information hiding and allows for visibility control.
 
+> **Note**: The base `ProxyAgent` is defined in `heron.agents.proxy_agent` and is domain-agnostic. The power grid version (`powergrid.agents.proxy_agent.ProxyAgent`) extends it with the `power_flow` channel type.
+
 ---
 
 ## 2. Distributed Step Flow

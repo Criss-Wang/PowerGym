@@ -7,9 +7,9 @@ However, the environment requires implementing mixed action space support (conti
 import pytest
 import numpy as np
 
-from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogrids
-from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
-from powergrid.envs.configs.config_loader import load_config
+from powergrid.envs.multi_agent_microgrids import MultiAgentMicrogrids
+from powergrid.envs.networked_grid_env import NetworkedGridEnv
+from powergrid.setups.loader import load_setup
 
 
 # Tests now enabled - mixed action space support has been implemented
@@ -21,7 +21,7 @@ class TestMultiAgentMicrogrids:
     @pytest.fixture
     def env_config(self):
         """Load the actual environment configuration using config_loader."""
-        config = load_config('ieee34_ieee13')
+        config = load_setup('ieee34_ieee13')
         config['max_episode_steps'] = 24
         return config
 
