@@ -21,8 +21,8 @@ try:
 except ImportError:
     RLLIB_AVAILABLE = False
 
-from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogrids
-from powergrid.envs.configs.config_loader import load_config
+from powergrid.envs.multi_agent_microgrids import MultiAgentMicrogrids
+from powergrid.setups.loader import load_setup
 from heron.protocols.base import (
     Protocol,
     NoProtocol,
@@ -58,7 +58,7 @@ class TestProtocolBehavioralCorrectness:
 
     def train_and_evaluate(self, protocol, protocol_name, iterations=10):
         """Train with protocol and return reward history."""
-        config = load_config('ieee34_ieee13')
+        config = load_setup('ieee34_ieee13')
         config['train'] = True
         config['penalty'] = 10.0
         config['share_reward'] = True
@@ -183,7 +183,7 @@ class TestProtocolBehavioralCorrectness:
         print("="*70)
 
         # Create environment with consensus
-        config = load_config('ieee34_ieee13')
+        config = load_setup('ieee34_ieee13')
         config['train'] = False  # Evaluation mode
         config['max_episode_steps'] = 24
 
@@ -229,7 +229,7 @@ class TestProtocolBehavioralCorrectness:
         print("BEHAVIORAL TEST: Rewards Should Be Reasonable Magnitudes")
         print("="*70)
 
-        config = load_config('ieee34_ieee13')
+        config = load_setup('ieee34_ieee13')
         config['train'] = False
         config['max_episode_steps'] = 24
 

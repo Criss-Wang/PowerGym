@@ -22,20 +22,12 @@ A **domain-agnostic Multi-Agent Reinforcement Learning (MARL) framework** with a
 - **Hierarchical Agent System**: Multi-level hierarchy with configurable depth (e.g., Field → Coordinator → System)
 - **Feature-based State**: Composable `FeatureProvider` system with extensible visibility tags (defaults: `owner`, `coordinator`, `system`, `global`)
 - **Coordination Protocols**: Vertical (Setpoint, Price Signal) and Horizontal (P2P Trading, Consensus)
-- **Message Broker System**: InMemoryBroker with extensible interface for Kafka/RabbitMQ
-- **Flexible Action System**: `Action` class with scale/unscale for normalized [-1, 1] control
-- **Mixed Action Spaces**: Continuous (`Box`) and discrete (`Discrete`/`MultiDiscrete`)
+- **Message Broker System**: `InMemoryBroker` with extensible interface for Kafka/RabbitMQ
+- **Dual-mode Execution**: Support centralized and de-centralized execution modes with easy configurations
 
 ### RL Integration
-- Works with **RLlib** (MAPPO/IPPO), **Stable-Baselines3**, and custom agents
-- **PettingZoo ParallelEnv** for multi-agent environments
-- Centralized and distributed execution modes
-
-### Included Case Study: Power Grid
-- PandaPower integration for network modeling
-- Device models: Generator, ESS, Transformer
-- IEEE 13, 34, 123-bus test networks
-- Safety and cost utilities
+- Works with canonical RL algorithm libraries like **RLlib** and **Stable-Baselines3**
+- Support plugin-and-play for canonical MARL environments like **PettingZoo**, **MAgent** and **SMAC**
 
 ---
 
@@ -49,12 +41,14 @@ heron/                          # Domain-agnostic MARL framework
 │   ├── base.py                 # Agent base class with level property
 │   ├── field_agent.py          # Leaf-level agents (local sensing/actuation)
 │   ├── coordinator_agent.py    # Mid-level agents (manages child agents)
-│   └── system_agent.py         # Top-level agents (global coordination)
+│   ├── system_agent.py         # Top-level agents (global coordination)
+│   └── proxy_agent.py          # Proxy agent for distributed execution
 │
 ├── core/                       # Core abstractions
 │   ├── action.py               # Action with continuous/discrete support
 │   ├── observation.py          # Observation with local/global/messages
 │   ├── state.py                # State with FeatureProvider composition
+│   ├── feature.py              # FeatureProvider with extensible visibility tags
 │   └── policies.py             # Policy abstractions (random, rule-based)
 │
 ├── protocols/                  # Coordination protocols
@@ -66,14 +60,12 @@ heron/                          # Domain-agnostic MARL framework
 │   ├── base.py                 # MessageBroker interface, ChannelManager
 │   └── memory.py               # InMemoryBroker implementation
 │
-├── features/                   # Feature system
-│   └── base.py                 # FeatureProvider with extensible visibility tags
-│
 ├── envs/                       # Base environment interfaces
 │   └── base.py                 # Abstract environment classes
 │
 └── utils/                      # Common utilities
     ├── typing.py               # Type definitions
+    ├── array_utils.py          # Array manipulation utilities
     └── registry.py             # Feature registry
 ```
 
@@ -159,7 +151,7 @@ HERON provides a hierarchical agent framework with configurable levels:
 from heron.agents.base import Agent
 from heron.core.observation import Observation
 from heron.core.action import Action
-from heron.features.base import FeatureProvider
+from heron.core.feature import FeatureProvider
 
 # 1. Define Features with visibility levels
 class TemperatureFeature(FeatureProvider):
@@ -267,7 +259,7 @@ This section guides you through creating a new project that uses HERON as a depe
 
 ### Project Structure
 
-Your new project will have this structure:
+Your new project will have this minimal structure:
 
 ```
 my_project/
@@ -277,16 +269,11 @@ my_project/
 │   ├── agents/                 # Your custom agents
 │   │   ├── __init__.py
 │   │   └── my_agent.py
-│   ├── features/               # Your custom features
-│   │   ├── __init__.py
-│   │   └── my_features.py
 │   ├── envs/                   # Your custom environments
 │   │   ├── __init__.py
 │   │   └── my_env.py
 │   └── utils/                  # Your utilities
 │       └── __init__.py
-├── data/                       # Your data files
-│   └── my_data.pkl
 ├── examples/                   # Your example scripts
 │   └── train_my_agent.py
 ├── tests/                      # Your tests
@@ -294,6 +281,10 @@ my_project/
 ├── pyproject.toml              # Project configuration
 └── README.md
 ```
+
+**Optional directories** (add as needed for your domain):
+- `my_domain/core/` - Only needed when extending `heron.core` classes (e.g., custom features, state management)
+- `my_domain/setups/` or `data/` - For environment configuration and data files (structure is flexible)
 
 ### Quick Setup (Recommended)
 
@@ -370,13 +361,12 @@ include = ["my_domain*"]
 #### 4. Create Directory Structure
 
 ```bash
-mkdir -p my_domain/{agents,features,envs,utils}
-mkdir -p data examples tests
+mkdir -p my_domain/{agents,envs,utils}
+mkdir -p examples tests
 
 # Create __init__.py files
 touch my_domain/__init__.py
 touch my_domain/agents/__init__.py
-touch my_domain/features/__init__.py
 touch my_domain/envs/__init__.py
 touch my_domain/utils/__init__.py
 ```
@@ -398,11 +388,12 @@ Create `my_domain/agents/my_agent.py`:
 ```python
 """Example custom agent using HERON framework."""
 
+import numpy as np
 from heron.agents.base import Agent
 from heron.core.action import Action
 from heron.core.observation import Observation
 from heron.core.state import FieldAgentState
-from heron.features.base import FeatureProvider
+from heron.core.feature import FeatureProvider
 
 
 class MyCustomFeature(FeatureProvider):
@@ -412,11 +403,10 @@ class MyCustomFeature(FeatureProvider):
         super().__init__(visibility=["owner"])
         self.value = value
 
-    def vector(self):
-        import numpy as np
+    def vector(self) -> np.ndarray:
         return np.array([self.value], dtype=np.float32)
 
-    def dim(self):
+    def dim(self) -> int:
         return 1
 
 
@@ -433,7 +423,6 @@ class MyAgent(Agent):
 
         # Initialize action space
         self.action = Action()
-        import numpy as np
         lb = np.array([-1.0], dtype=np.float32)
         ub = np.array([1.0], dtype=np.float32)
         self.action.set_specs(dim_c=1, range=(lb, ub))
@@ -618,7 +607,7 @@ The repository includes a complete **Power Grid** case study demonstrating HERON
 📖 **See [case_studies/power/README.md](case_studies/power/README.md) for full documentation**, including:
 - IEEE 13, 34, 123-bus test networks
 - Device models (Generator, ESS, Transformer)
-- Single and multi-agent environments
+- Multi-agent environments with pre-configured setups
 - MAPPO training examples with RLlib
 
 Quick install:

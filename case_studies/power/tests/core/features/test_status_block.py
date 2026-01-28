@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from powergrid.features.status import StatusBlock
+from powergrid.core.features.status import StatusBlock
 
 
 def _assert_vec_names_consistent(x: StatusBlock):

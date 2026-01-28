@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 
 import numpy as np
 
-from heron.features.base import FeatureProvider
+from heron.core.feature import FeatureProvider
 from heron.utils.array_utils import cat_f32
 
 
@@ -206,6 +206,3 @@ class CoordinatorAgentState(State):
                 self.update_feature(feature.feature_name, **values)
 
 
-# Aliases for backward compatibility with power domain
-DeviceState = FieldAgentState
-GridState = CoordinatorAgentState

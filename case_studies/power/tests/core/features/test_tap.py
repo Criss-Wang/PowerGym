@@ -2,7 +2,7 @@ import json
 import numpy as np
 import pytest
 
-from powergrid.features.tap_changer import TapChangerPh
+from powergrid.core.features.tap_changer import TapChangerPh
 from powergrid.utils.phase import PhaseModel, PhaseSpec
 
 

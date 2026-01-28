@@ -4,7 +4,7 @@ from typing import Any, Optional, Dict
 from powergrid.agents.device_agent import DeviceAgent
 from heron.protocols.base import NoProtocol, Protocol
 from heron.core.policies import Policy
-from powergrid.features.tap_changer import TapChangerPh
+from powergrid.core.features.tap_changer import TapChangerPh
 from heron.messaging.base import MessageBroker
 from powergrid.utils.cost import tap_change_cost
 from powergrid.utils.safety import loading_over_pct

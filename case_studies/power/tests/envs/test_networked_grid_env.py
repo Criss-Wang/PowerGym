@@ -6,7 +6,7 @@ import pandapower as pp
 from unittest.mock import Mock, MagicMock, patch
 import gymnasium as gym
 
-from powergrid.envs.multi_agent.networked_grid_env import NetworkedGridEnv
+from powergrid.envs.networked_grid_env import NetworkedGridEnv
 from powergrid.agents.power_grid_agent import PowerGridAgent
 from heron.protocols.base import NoProtocol, Protocol
 from heron.agents.base import Observation

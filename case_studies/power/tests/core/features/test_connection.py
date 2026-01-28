@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from powergrid.utils.phase import PhaseModel, PhaseSpec
-from powergrid.features.connection import PhaseConnection
+from powergrid.core.features.connection import PhaseConnection
 
 
 def _assert_vec_names_consistent(x: PhaseConnection):

@@ -20,15 +20,12 @@ help:
 new-project:
 	@echo "Creating new HERON project: $(NAME) with domain: $(DOMAIN)"
 	@mkdir -p $(NAME)/$(DOMAIN)/agents
-	@mkdir -p $(NAME)/$(DOMAIN)/features
 	@mkdir -p $(NAME)/$(DOMAIN)/envs
 	@mkdir -p $(NAME)/$(DOMAIN)/utils
-	@mkdir -p $(NAME)/data
 	@mkdir -p $(NAME)/examples
 	@mkdir -p $(NAME)/tests
 	@touch $(NAME)/$(DOMAIN)/__init__.py
 	@touch $(NAME)/$(DOMAIN)/agents/__init__.py
-	@touch $(NAME)/$(DOMAIN)/features/__init__.py
 	@touch $(NAME)/$(DOMAIN)/envs/__init__.py
 	@touch $(NAME)/$(DOMAIN)/utils/__init__.py
 	@printf '%s\n' \

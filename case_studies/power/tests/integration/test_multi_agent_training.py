@@ -14,8 +14,8 @@ Includes tests for:
 import pytest
 import numpy as np
 import pandapower as pp
-from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogrids
-from powergrid.envs.configs.config_loader import load_config
+from powergrid.envs.multi_agent_microgrids import MultiAgentMicrogrids
+from powergrid.setups.loader import load_setup
 
 
 class TestMultiAgentTrainingIntegration:
@@ -24,7 +24,7 @@ class TestMultiAgentTrainingIntegration:
     @pytest.fixture
     def env_config(self):
         """Load environment configuration."""
-        config = load_config('ieee34_ieee13')
+        config = load_setup('ieee34_ieee13')
         config['max_episode_steps'] = 24  # Short episodes for testing
         return config
 

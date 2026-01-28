@@ -6,6 +6,7 @@ import gymnasium as gym
 from gymnasium.spaces import Box
 
 from heron.agents.base import Agent, Observation, Message
+from heron.core.policies import RandomPolicy
 
 
 class TestObservation:
@@ -287,6 +288,31 @@ class TestAgent:
         assert "ConcreteAgent" in repr_str
         assert "test_agent" in repr_str
         assert "level=2" in repr_str
+
+
+class TestRandomPolicy:
+    """Tests for RandomPolicy."""
+
+    def test_random_policy_sampling(self):
+        """Test random policy action sampling."""
+        action_space = Box(low=-1, high=1, shape=(3,), dtype=np.float32)
+        policy = RandomPolicy(action_space, seed=42)
+
+        obs = Observation()
+        action1 = policy.forward(obs)
+        action2 = policy.forward(obs)
+
+        assert action1.shape == (3,)
+        assert action2.shape == (3,)
+        # Actions should be different (with high probability)
+        assert not np.allclose(action1, action2)
+
+    def test_random_policy_reset(self):
+        """Test random policy reset."""
+        action_space = Box(low=-1, high=1, shape=(2,), dtype=np.float32)
+        policy = RandomPolicy(action_space)
+
+        policy.reset()  # Should not raise
 
 
 if __name__ == "__main__":

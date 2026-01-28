@@ -3,8 +3,9 @@
 import numpy as np
 import pytest
 
-from heron.core.state import GridState, CoordinatorAgentState
-from powergrid.features.network import BusVoltages, LineFlows, NetworkMetrics
+from heron.core.state import CoordinatorAgentState
+from powergrid.core.state.state import GridState
+from powergrid.core.features.network import BusVoltages, LineFlows, NetworkMetrics
 
 
 def test_grid_state_alias():

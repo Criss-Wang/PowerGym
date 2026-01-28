@@ -14,10 +14,9 @@ Tests the complete workflow of distributed execution including:
 import pytest
 import numpy as np
 import pandapower as pp
-from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogrids
-from powergrid.envs.configs.config_loader import load_config
+from powergrid.envs.multi_agent_microgrids import MultiAgentMicrogrids
+from powergrid.setups.loader import load_setup
 from heron.messaging.base import ChannelManager
-from powergrid.messaging.channels import PowerGridChannelManager
 from powergrid.agents.proxy_agent import ProxyAgent
 
 
@@ -27,7 +26,7 @@ class TestDistributedModeWithProxy:
     @pytest.fixture
     def distributed_config(self):
         """Load distributed environment configuration."""
-        config = load_config('ieee34_ieee13')
+        config = load_setup('ieee34_ieee13')
         config['max_episode_steps'] = 24
         config['centralized'] = False  # Enable distributed mode
         config['message_broker'] = 'in_memory'
@@ -36,7 +35,7 @@ class TestDistributedModeWithProxy:
     @pytest.fixture
     def centralized_config(self):
         """Load centralized environment configuration for comparison."""
-        config = load_config('ieee34_ieee13')
+        config = load_setup('ieee34_ieee13')
         config['max_episode_steps'] = 24
         config['centralized'] = True  # Centralized mode
         return config
@@ -80,7 +79,8 @@ class TestDistributedModeWithProxy:
         broker = distributed_env.message_broker
 
         # Check environment-to-proxy channel exists
-        env_to_proxy_channel = PowerGridChannelManager.power_flow_result_channel(
+        env_to_proxy_channel = ChannelManager.custom_channel(
+            "power_flow",
             distributed_env._env_id,
             "proxy_agent"
         )

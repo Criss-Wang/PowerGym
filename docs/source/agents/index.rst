@@ -15,7 +15,7 @@ Agent Types
 
 - :doc:`grid_agent` - Microgrid controller that coordinates devices
 - :doc:`device_agent` - Controls individual distributed energy resources
-- :doc:`proxy_agent` - Manages information distribution in distributed mode
+- :doc:`proxy_agent` - Extends ``heron.agents.ProxyAgent`` for power flow distribution
 
 Agent Hierarchy
 ---------------

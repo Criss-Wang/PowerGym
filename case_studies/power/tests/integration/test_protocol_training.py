@@ -21,8 +21,8 @@ try:
 except ImportError:
     RLLIB_AVAILABLE = False
 
-from powergrid.envs.multi_agent.multi_agent_microgrids import MultiAgentMicrogrids
-from powergrid.envs.configs.config_loader import load_config
+from powergrid.envs.multi_agent_microgrids import MultiAgentMicrogrids
+from powergrid.setups.loader import load_setup
 from heron.protocols.base import (
     Protocol,
     NoProtocol,
@@ -58,7 +58,7 @@ class TestMAPPOTrainingWithProtocols:
 
     def create_env(self, protocol):
         """Create environment with specified protocol."""
-        config = load_config('ieee34_ieee13')
+        config = load_setup('ieee34_ieee13')
         config['train'] = True
         config['penalty'] = 10.0
         config['share_reward'] = True
@@ -267,7 +267,7 @@ class TestProtocolConvergence:
     def train_with_protocol(self, protocol, protocol_name, iterations=5):
         """Train MAPPO with given protocol and return final reward."""
         # Create environment
-        config = load_config('ieee34_ieee13')
+        config = load_setup('ieee34_ieee13')
         config['train'] = True
         config['penalty'] = 10.0
         config['share_reward'] = True
@@ -380,7 +380,7 @@ class TestProtocolGradientFlow:
         protocol = PeerToPeerTradingProtocol()
 
         # Create environment
-        config = load_config('ieee34_ieee13')
+        config = load_setup('ieee34_ieee13')
         config['train'] = True
         config['max_episode_steps'] = 24
 
