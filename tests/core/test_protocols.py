@@ -2,20 +2,24 @@
 
 import pytest
 import numpy as np
-from powergrid.core.protocols import (
+from heron.protocols.base import (
     Protocol,
     CommunicationProtocol,
     ActionProtocol,
-    VerticalProtocol,
     NoProtocol,
     NoCommunication,
     NoActionCoordination,
+)
+from heron.protocols.vertical import (
+    VerticalProtocol,
     PriceSignalProtocol,
     PriceCommunicationProtocol,
     DecentralizedActionProtocol,
     SetpointProtocol,
     SetpointCommunicationProtocol,
     CentralizedActionProtocol,
+)
+from heron.protocols.horizontal import (
     HorizontalProtocol,
     NoHorizontalProtocol,
     PeerToPeerTradingProtocol,
@@ -25,8 +29,8 @@ from powergrid.core.protocols import (
     ConsensusCommunicationProtocol,
     ConsensusActionProtocol,
 )
-from powergrid.agents.base import Agent, Observation
-from powergrid.core.action import Action
+from heron.agents.base import Agent, Observation
+from heron.core.action import Action
 
 
 class MockAgent(Agent):
@@ -88,14 +92,17 @@ class TestProtocol:
             "timestamp": 0.0
         }
 
-        # Should not raise
-        protocol.coordinate(
+        # Should return tuple of (messages, actions)
+        messages, actions = protocol.coordinate(
             coordinator_state=coordinator_state,
             subordinate_states=subordinate_states,
             coordinator_action=None,
-            mode="centralized",
             context=context
         )
+
+        # NoProtocol returns empty messages and None actions
+        assert messages == {"device1": {}, "device2": {}}
+        assert actions == {"device1": None, "device2": None}
 
 
 class TestCommunicationProtocol:
@@ -113,31 +120,26 @@ class TestCommunicationProtocol:
 
         assert messages == {"device1": {}, "device2": {}}
 
-    def test_message_delivery(self):
-        """Test message delivery to receivers."""
+    def test_message_computation_returns_dict_per_receiver(self):
+        """Test that message computation returns a dict per receiver."""
         comm_protocol = NoCommunication()
 
-        device1 = MockAgent("device1")
-        device2 = MockAgent("device2")
-        devices = {"device1": device1, "device2": device2}
-
-        messages = {
-            "device1": {"type": "test", "value": 1},
-            "device2": {"type": "test", "value": 2}
+        receiver_states = {
+            "device1": {"value": 1.0},
+            "device2": {"value": 2.0}
         }
 
-        comm_protocol.deliver_messages(
-            messages=messages,
-            receivers=devices,
-            sender_id="coordinator",
-            timestamp=1.0,
-            mode="centralized"
+        messages = comm_protocol.compute_coordination_messages(
+            sender_state={},
+            receiver_states=receiver_states,
+            context={}
         )
 
-        assert len(device1.mailbox) == 1
-        assert device1.mailbox[0].payload["value"] == 1
-        assert len(device2.mailbox) == 1
-        assert device2.mailbox[0].payload["value"] == 2
+        # NoCommunication returns empty dict for each receiver
+        assert "device1" in messages
+        assert "device2" in messages
+        assert messages["device1"] == {}
+        assert messages["device2"] == {}
 
 
 class TestActionProtocol:
@@ -155,25 +157,26 @@ class TestActionProtocol:
 
         assert actions == {"device1": None, "device2": None}
 
-    def test_action_application_centralized(self):
-        """Test action application in centralized mode."""
+    def test_action_coordination_returns_dict_per_subordinate(self):
+        """Test that action coordination returns a dict per subordinate."""
         action_protocol = NoActionCoordination()
 
-        device1 = MockAgent("device1")
-        device2 = MockAgent("device2")
-        devices = {"device1": device1, "device2": device2}
+        subordinate_states = {
+            "device1": {"value": 1.0},
+            "device2": {"value": 2.0}
+        }
 
-        actions = {"device1": np.array([1.0]), "device2": np.array([2.0])}
-
-        action_protocol.apply_actions(
-            actions=actions,
-            subordinates=devices,
-            mode="centralized"
+        actions = action_protocol.compute_action_coordination(
+            coordinator_action=np.array([1.0, 2.0]),
+            subordinate_states=subordinate_states,
+            coordination_messages={}
         )
 
-        # In centralized mode, actions are applied directly
-        assert device1.last_action is not None
-        assert device2.last_action is not None
+        # NoActionCoordination returns None for each subordinate
+        assert "device1" in actions
+        assert "device2" in actions
+        assert actions["device1"] is None
+        assert actions["device2"] is None
 
 
 class TestVerticalProtocol:
@@ -181,7 +184,12 @@ class TestVerticalProtocol:
 
     def test_vertical_protocol_inherits_from_protocol(self):
         """Test VerticalProtocol is a Protocol."""
-        protocol = NoProtocol()
+        # VerticalProtocol classes are SetpointProtocol and PriceSignalProtocol
+        protocol = SetpointProtocol()
+        assert isinstance(protocol, VerticalProtocol)
+        assert isinstance(protocol, Protocol)
+
+        protocol = PriceSignalProtocol()
         assert isinstance(protocol, VerticalProtocol)
         assert isinstance(protocol, Protocol)
 
@@ -195,7 +203,7 @@ class TestNoProtocol:
         assert protocol.no_op()
 
     def test_no_protocol_coordinate(self):
-        """Test NoProtocol coordinate does nothing."""
+        """Test NoProtocol coordinate returns empty messages and None actions."""
         protocol = NoProtocol()
 
         device1 = MockAgent("device1")
@@ -210,20 +218,17 @@ class TestNoProtocol:
             "timestamp": 0.0
         }
 
-        protocol.coordinate(
+        messages, actions = protocol.coordinate(
             coordinator_state=coordinator_state,
             subordinate_states=subordinate_states,
             coordinator_action=None,
-            mode="centralized",
             context=context
         )
 
-        # No messages should be sent
-        assert len(device1.mailbox) == 0
-        assert len(device2.mailbox) == 0
-        # No actions should be applied
-        assert device1.last_action is None
-        assert device2.last_action is None
+        # Empty messages returned
+        assert messages == {"device1": {}, "device2": {}}
+        # No actions (None) returned
+        assert actions == {"device1": None, "device2": None}
 
 
 class TestPriceSignalProtocol:
@@ -278,21 +283,22 @@ class TestPriceSignalProtocol:
             "timestamp": 0.0
         }
 
-        protocol.coordinate(
+        messages, actions = protocol.coordinate(
             coordinator_state=coordinator_state,
             subordinate_states=subordinate_states,
             coordinator_action=None,
-            mode="centralized",
             context=context
         )
 
-        # Check messages were delivered
-        assert len(device1.mailbox) == 1
-        assert device1.mailbox[0].payload["price"] == 55.0
-        assert device1.mailbox[0].payload["type"] == "price_signal"
+        # Check messages contain price signal
+        assert messages["device1"]["price"] == 55.0
+        assert messages["device1"]["type"] == "price_signal"
+        assert messages["device2"]["price"] == 55.0
+        assert messages["device2"]["type"] == "price_signal"
 
-        assert len(device2.mailbox) == 1
-        assert device2.mailbox[0].payload["price"] == 55.0
+        # Decentralized action - returns None for all subordinates
+        assert actions["device1"] is None
+        assert actions["device2"] is None
 
     def test_price_protocol_update_from_action(self):
         """Test price update from coordinator action (scalar)."""
@@ -306,15 +312,13 @@ class TestPriceSignalProtocol:
         context = {
             "subordinates": devices,
             "coordinator_id": "grid",
-            "coordinator_action": 75.0,
             "timestamp": 0.0
         }
 
-        protocol.coordinate(
+        messages, actions = protocol.coordinate(
             coordinator_state=coordinator_state,
             subordinate_states=subordinate_states,
             coordinator_action=75.0,
-            mode="centralized",
             context=context
         )
 
@@ -322,7 +326,7 @@ class TestPriceSignalProtocol:
         assert protocol.price == 75.0
 
         # Message should contain new price
-        assert device1.mailbox[0].payload["price"] == 75.0
+        assert messages["device1"]["price"] == 75.0
 
     def test_price_protocol_update_from_dict_action(self):
         """Test price update from dict action."""
@@ -339,16 +343,15 @@ class TestPriceSignalProtocol:
             "timestamp": 0.0
         }
 
-        protocol.coordinate(
+        messages, actions = protocol.coordinate(
             coordinator_state=coordinator_state,
             subordinate_states=subordinate_states,
             coordinator_action={"price": 80.0},
-            mode="centralized",
             context=context
         )
 
         assert protocol.price == 80.0
-        assert device1.mailbox[0].payload["price"] == 80.0
+        assert messages["device1"]["price"] == 80.0
 
     def test_decentralized_action_protocol(self):
         """Test DecentralizedActionProtocol returns no actions."""
@@ -440,21 +443,22 @@ class TestSetpointProtocol:
             "timestamp": 0.0
         }
 
-        protocol.coordinate(
+        messages, actions = protocol.coordinate(
             coordinator_state=coordinator_state,
             subordinate_states=subordinate_states,
             coordinator_action=action_dict,
-            mode="centralized",
             context=context
         )
 
-        # Check messages were sent
-        assert len(device1.mailbox) == 1
-        assert len(device2.mailbox) == 1
+        # Check messages contain setpoint commands
+        assert "setpoint" in messages["device1"]
+        assert "setpoint" in messages["device2"]
+        np.testing.assert_array_equal(messages["device1"]["setpoint"], np.array([1.5, 2.5]))
+        np.testing.assert_array_equal(messages["device2"]["setpoint"], np.array([3.5]))
 
-        # Check actions were applied
-        np.testing.assert_array_equal(device1.last_action, np.array([1.5, 2.5]))
-        np.testing.assert_array_equal(device2.last_action, np.array([3.5]))
+        # Check actions contain the setpoints (CentralizedActionProtocol)
+        np.testing.assert_array_equal(actions["device1"], np.array([1.5, 2.5]))
+        np.testing.assert_array_equal(actions["device2"], np.array([3.5]))
 
     def test_setpoint_protocol_coordinate_with_array(self):
         """Test SetpointProtocol coordinate with numpy array."""
@@ -474,21 +478,22 @@ class TestSetpointProtocol:
             "timestamp": 0.0
         }
 
-        protocol.coordinate(
+        messages, actions = protocol.coordinate(
             coordinator_state=coordinator_state,
             subordinate_states=subordinate_states,
             coordinator_action=action_array,
-            mode="centralized",
             context=context
         )
 
         # Check messages contain decomposed setpoints
-        assert len(device1.mailbox) == 1
-        assert len(device2.mailbox) == 1
+        assert "setpoint" in messages["device1"]
+        assert "setpoint" in messages["device2"]
+        np.testing.assert_array_equal(messages["device1"]["setpoint"], np.array([10.0, 20.0]))
+        np.testing.assert_array_equal(messages["device2"]["setpoint"], np.array([30.0]))
 
-        # Check actions were applied
-        np.testing.assert_array_equal(device1.last_action, np.array([10.0, 20.0]))
-        np.testing.assert_array_equal(device2.last_action, np.array([30.0]))
+        # Check actions contain the setpoints
+        np.testing.assert_array_equal(actions["device1"], np.array([10.0, 20.0]))
+        np.testing.assert_array_equal(actions["device2"], np.array([30.0]))
 
 
 class TestHorizontalProtocol:

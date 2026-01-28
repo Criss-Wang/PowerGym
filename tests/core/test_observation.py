@@ -11,7 +11,7 @@ Tests cover:
 import pytest
 import numpy as np
 
-from powergrid.core.observation import Observation, Message
+from heron.core.observation import Observation, Message
 
 
 # =============================================================================

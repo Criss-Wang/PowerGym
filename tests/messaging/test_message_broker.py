@@ -15,13 +15,13 @@ import threading
 import time
 from typing import List
 
-from powergrid.messaging.base import (
+from heron.messaging.base import (
     Message,
     MessageType,
     MessageBroker,
     ChannelManager
 )
-from powergrid.messaging.memory import InMemoryBroker
+from heron.messaging.memory import InMemoryBroker
 
 
 # =============================================================================
@@ -56,7 +56,8 @@ class TestMessage:
             MessageType.INFO,
             MessageType.BROADCAST,
             MessageType.STATE_UPDATE,
-            MessageType.POWER_FLOW_RESULT
+            MessageType.RESULT,
+            MessageType.CUSTOM
         ]
 
         for msg_type in types:
@@ -122,10 +123,14 @@ class TestChannelManager:
         channel = ChannelManager.state_update_channel("env_0")
         assert channel == "env_env_0__state_updates"
 
-    def test_power_flow_result_channel(self):
-        """Test power flow result channel naming."""
-        channel = ChannelManager.power_flow_result_channel("env_0", "agent_1")
-        assert channel == "env_env_0__power_flow_results__agent_1"
+    def test_custom_channel(self):
+        """Test custom channel naming for domain-specific extensions."""
+        channel = ChannelManager.custom_channel("power_flow", "env_0", "agent_1")
+        assert channel == "env_env_0__power_flow__agent_1"
+
+        # Test with different custom type
+        channel2 = ChannelManager.custom_channel("voltage_update", "env_1", "sensor_1")
+        assert channel2 == "env_env_1__voltage_update__sensor_1"
 
     def test_agent_channels_no_upstream(self):
         """Test agent channels with no parent."""

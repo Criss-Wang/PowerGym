@@ -5,7 +5,7 @@ import pytest
 import gymnasium as gym
 from gymnasium.spaces import Box
 
-from powergrid.agents.base import Agent, Observation, Message
+from heron.agents.base import Agent, Observation, Message
 
 
 class TestObservation:
