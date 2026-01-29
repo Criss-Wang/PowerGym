@@ -7,7 +7,6 @@
    :hidden:
    :maxdepth: 1
 
-   Getting Started <getting_started>
    Case Studies <case_studies/index>
    Examples <examples/index>
    API Reference <api/index>
@@ -22,12 +21,6 @@ A domain-agnostic multi-agent reinforcement learning (MARL) framework for hierar
 .. grid:: 1 2 2 3
    :gutter: 3
    :class-container: sd-text-center
-
-   .. grid-item-card:: Get Started
-      :link: getting_started
-      :link-type: doc
-
-      Set up HERON and run your first simulation
 
    .. grid-item-card:: Installation
       :link: user_guide/installation

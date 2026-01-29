@@ -123,7 +123,6 @@ HERON Framework (Domain-Agnostic)
 
 ## Documentation
 
-- [Getting Started](getting_started) - Installation and tutorials
 - [API Reference](api/index) - HERON core API
 - [Case Studies](use_cases/index) - PowerGrid and other implementations
 - [Protocols Guide](api/heron/protocols) - Coordination protocols
