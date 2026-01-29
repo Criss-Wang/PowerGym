@@ -10,18 +10,12 @@ Each feature encapsulates a cohesive set of observable/controllable attributes w
 - **Serialization**: Support for communication and logging
 - **Update Methods**: Flexible state updates via keyword arguments
 
-Base Feature Provider
-----------------------
-
-.. automodule:: powergrid.features.base
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 Connection Features
 -------------------
 
-.. automodule:: powergrid.features.connection
+Bus connectivity features.
+
+.. automodule:: powergrid.core.features.connection
    :members:
    :undoc-members:
    :show-inheritance:
@@ -29,7 +23,9 @@ Connection Features
 Electrical Features
 -------------------
 
-.. automodule:: powergrid.features.electrical
+Active power (P), reactive power (Q), and voltage features.
+
+.. automodule:: powergrid.core.features.electrical
    :members:
    :undoc-members:
    :show-inheritance:
@@ -37,7 +33,9 @@ Electrical Features
 Power Limits
 ------------
 
-.. automodule:: powergrid.features.power_limits
+Generation and absorption power limit features.
+
+.. automodule:: powergrid.core.features.power_limits
    :members:
    :undoc-members:
    :show-inheritance:
@@ -45,7 +43,9 @@ Power Limits
 Status Features
 ---------------
 
-.. automodule:: powergrid.features.status
+Device status and operational state features.
+
+.. automodule:: powergrid.core.features.status
    :members:
    :undoc-members:
    :show-inheritance:
@@ -53,7 +53,9 @@ Status Features
 Storage Features
 ----------------
 
-.. automodule:: powergrid.features.storage
+State of charge (SOC) and energy capacity features for energy storage.
+
+.. automodule:: powergrid.core.features.storage
    :members:
    :undoc-members:
    :show-inheritance:
@@ -61,7 +63,9 @@ Storage Features
 Tap Changer Features
 --------------------
 
-.. automodule:: powergrid.features.tap_changer
+Transformer tap position features.
+
+.. automodule:: powergrid.core.features.tap_changer
    :members:
    :undoc-members:
    :show-inheritance:
@@ -69,7 +73,9 @@ Tap Changer Features
 Thermal Features
 ----------------
 
-.. automodule:: powergrid.features.thermal
+Line thermal loading constraint features.
+
+.. automodule:: powergrid.core.features.thermal
    :members:
    :undoc-members:
    :show-inheritance:
@@ -77,7 +83,9 @@ Thermal Features
 VAR Features
 ------------
 
-.. automodule:: powergrid.features.var
+Reactive power (VAR) control features.
+
+.. automodule:: powergrid.core.features.var
    :members:
    :undoc-members:
    :show-inheritance:
@@ -85,7 +93,9 @@ VAR Features
 Step State Features
 -------------------
 
-.. automodule:: powergrid.features.step_state
+Timestep and episode state features.
+
+.. automodule:: powergrid.core.features.step_state
    :members:
    :undoc-members:
    :show-inheritance:
@@ -93,7 +103,9 @@ Step State Features
 Inverter Features
 -----------------
 
-.. automodule:: powergrid.features.inverter
+Renewable inverter constraint features.
+
+.. automodule:: powergrid.core.features.inverter
    :members:
    :undoc-members:
    :show-inheritance:
@@ -101,9 +113,9 @@ Inverter Features
 Network Features
 ----------------
 
-Network-level features for GridAgent state representation.
+Network-level features for GridAgent state representation (bus voltages, line flows).
 
-.. automodule:: powergrid.features.network
+.. automodule:: powergrid.core.features.network
    :members:
    :undoc-members:
    :show-inheritance:

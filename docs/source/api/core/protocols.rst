@@ -586,7 +586,26 @@ Best Practices
 API Reference
 -------------
 
-.. automodule:: powergrid.core.protocols
+Base Protocols (HERON)
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: heron.protocols.base
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Vertical Protocols (HERON)
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: heron.protocols.vertical
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Horizontal Protocols (HERON)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: heron.protocols.horizontal
    :members:
    :undoc-members:
    :show-inheritance:

@@ -1,12 +1,10 @@
 Messaging
 =========
 
-.. note::
+Message broker system for inter-agent communication.
 
-   The messaging system is part of the core HERON framework. See :doc:`heron/messaging` for the full API reference.
-
-Message Broker
---------------
+Base Message Broker
+-------------------
 
 .. automodule:: heron.messaging.base
    :members:
@@ -15,6 +13,8 @@ Message Broker
 
 In-Memory Broker
 ----------------
+
+Reference implementation using in-process message queues.
 
 .. automodule:: heron.messaging.memory
    :members:

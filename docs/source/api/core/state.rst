@@ -1,9 +1,24 @@
 State
 =====
 
-The state module defines the global state representation for the power grid simulation.
+Power grid state representation for devices and networks.
 
-.. automodule:: powergrid.core.state
+Base State (HERON)
+------------------
+
+The base state abstraction is part of the HERON framework.
+
+.. automodule:: heron.core.state
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+PowerGrid State
+---------------
+
+Power grid specific device and network state classes.
+
+.. automodule:: powergrid.core.state.state
    :members:
    :undoc-members:
    :show-inheritance:

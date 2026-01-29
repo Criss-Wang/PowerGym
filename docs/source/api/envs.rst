@@ -1,18 +1,24 @@
 Environments
 ============
 
-Multi-Agent Environments
-------------------------
+Power grid simulation environments with PettingZoo interface.
 
-.. automodule:: powergrid.envs.multi_agent.networked_grid_env
+NetworkedGridEnv
+----------------
+
+Base environment for networked power grid simulation.
+
+.. automodule:: powergrid.envs.networked_grid_env
    :members:
    :undoc-members:
    :show-inheritance:
 
-Multi-Agent Microgrids
-----------------------
+MultiAgentMicrogrids
+--------------------
 
-.. automodule:: powergrid.envs.multi_agent.multi_agent_microgrids
+Multi-agent microgrids environment with centralized/distributed execution modes.
+
+.. automodule:: powergrid.envs.multi_agent_microgrids
    :members:
    :undoc-members:
    :show-inheritance:
