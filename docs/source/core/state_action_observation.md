@@ -510,6 +510,6 @@ vector = state.vector()  # Concatenates all features
 
 ## Next Steps
 
-- **Feature Reference**: See [Features Documentation](../api/features.md) for all built-in features
-- **Agent Development**: Learn how to create custom agents in [Agent Guide](../developer/custom_agents.md)
-- **Examples**: Check out [Examples](../examples/04_custom_device.md) for complete implementations
+- **Feature Reference**: See [Features Documentation](../use_cases/power/api/features) for all built-in features
+- **Agent Development**: Learn how to create custom agents in [Developer Guide](../developer/index)
+- **Examples**: Check out [Examples](../examples/index) for complete implementations

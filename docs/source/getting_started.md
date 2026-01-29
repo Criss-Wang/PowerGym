@@ -4,17 +4,9 @@ Welcome to the PowerGrid multi-agent control framework! This guide will help you
 
 ---
 
-## Table of Contents
-
-1. [Introduction](#introduction)
-2. [Architecture Overview](#architecture-overview)
-3. [Quick Start](#quick-start)
-4. [GridAgent vs DeviceAgent](#gridagent-vs-deviceagent)
-5. [Vertical vs Horizontal Protocols](#vertical-vs-horizontal-protocols)
-6. [Tutorial 1: Simple 2-Microgrid Setup](#tutorial-1-simple-2-microgrid-setup)
-7. [Tutorial 2: Training with RLlib MAPPO](#tutorial-2-training-with-rllib-mappo)
-8. [Tutorial 3: P2P Trading Example](#tutorial-3-p2p-trading-example)
-9. [FAQ and Troubleshooting](#faq-and-troubleshooting)
+**Contents:**
+Introduction | Architecture Overview | Quick Start | GridAgent vs DeviceAgent |
+Vertical vs Horizontal Protocols | Tutorials | FAQ
 
 ---
 
@@ -564,7 +556,7 @@ class MyProtocol(VerticalProtocol):
         return signals
 ```
 
-See the [Protocol Guide](api/core/protocols) for detailed instructions.
+See the [Protocol Guide](api/heron/protocols) for detailed instructions.
 
 ### Q: Power flow doesn't converge. What should I do?
 
@@ -602,7 +594,7 @@ tensorboard --logdir ~/ray_results
 
 ## Next Steps
 
-- **Advanced Protocols**: Read the [Protocol Guide](api/core/protocols)
+- **Advanced Protocols**: Read the [Protocol Guide](api/heron/protocols)
 - **API Reference**: See docstrings in `powergrid.envs.multi_agent`
 - **Examples**: Explore `examples/multi_agent/`
 - **Research**: Implement your own coordination algorithms!

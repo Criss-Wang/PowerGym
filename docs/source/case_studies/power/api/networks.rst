@@ -53,16 +53,6 @@ Three-phase 34-bus test case.
    :undoc-members:
    :show-inheritance:
 
-Low Voltage Microgrid
----------------------
-
-Low voltage microgrid test case.
-
-.. automodule:: powergrid.networks.case_lvmg
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 Line Parameters
 ---------------
 

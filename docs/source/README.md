@@ -1,38 +1,34 @@
-# PowerGrid 2.0
+# HERON
 
-A production-ready **multi-agent reinforcement learning environment** for distributed power grid control, built on [PandaPower](https://www.pandapower.org/).
+**Hierarchical Environments for Realistic Observability in Networks**
 
-PowerGrid 2.0 enables realistic simulation of distributed control systems with message-based coordination, bridging the gap between algorithm research and real-world deployment.
+A domain-agnostic multi-agent reinforcement learning (MARL) framework for building hierarchical control systems with realistic distributed execution.
 
 ---
 
-## ✨ Key Features
+## Key Features
+
+### Domain-Agnostic Framework
+
+HERON provides building blocks for any hierarchical multi-agent system:
+
+- **Hierarchical Agents**: System → Coordinator → Field agent hierarchy
+- **Feature-Based State**: Composable state representations with visibility control
+- **Coordination Protocols**: Vertical (top-down) and horizontal (peer-to-peer)
+- **Dual Execution Modes**: Centralized training, distributed deployment
 
 ### Dual Execution Modes
 
-- **Centralized Mode**: Traditional MARL with full observability - ideal for algorithm development
-- **Distributed Mode**: Message-based coordination with realistic constraints - ready for deployment
+- **Centralized Mode**: Full observability for fast algorithm development
+- **Distributed Mode**: Message-based coordination for realistic deployment
 
-**Switch modes with a single config line:** `centralized: true/false`
-
-### Hierarchical Agent System
-
-- **GridAgent**: Microgrid controllers (RL-trainable)
-- **DeviceAgent**: DERs (generators, storage, renewables)
-- Clean separation between control logic and physics
+Switch modes with a single config line: `mode: centralized/distributed`
 
 ### Message Broker Architecture
 
 - Abstract `MessageBroker` interface
 - `InMemoryBroker` for local simulation
-- Ready for Kafka/RabbitMQ deployment
-- Realistic distributed communication
-
-### Coordination Protocols
-
-- **Vertical**: Price signals, setpoints (parent → child)
-- **Horizontal**: P2P trading, consensus (peer ↔ peer)
-- Extensible protocol system
+- Extensible to Kafka/Redis for production
 
 ### RL Integration
 
@@ -42,173 +38,130 @@ PowerGrid 2.0 enables realistic simulation of distributed control systems with m
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
 ```bash
-git clone https://github.com/your-lab/powergrid.git
-cd powergrid
+git clone https://github.com/yourusername/heron.git
+cd heron
 pip install -e .
 ```
 
-### Run Your First Multi-Agent Training
+### HERON Core Example
 
 ```python
-from powergrid.envs.multi_agent import MultiAgentMicrogrids
+from heron.agents import CoordinatorAgent, FieldAgent
+from heron.protocols.vertical import SetpointProtocol
+from heron.messaging.memory import InMemoryBroker
 
-# Create environment (defaults to distributed mode)
-env = MultiAgentMicrogrids({
-    'train': True,
-    'centralized': False,  # Distributed mode
-    'episode_length': 96
+# Create message broker
+broker = InMemoryBroker()
+
+# Create hierarchical agents
+field_agent = FieldAgent(agent_id='device_1', level=1, broker=broker)
+coordinator = CoordinatorAgent(
+    agent_id='coordinator_1',
+    level=2,
+    subordinates=[field_agent],
+    protocol=SetpointProtocol(),
+    broker=broker
+)
+
+# Execution loop
+obs = coordinator.observe(global_state)
+action = coordinator.act(obs)
+```
+
+---
+
+## Case Studies
+
+### PowerGrid Control
+
+A production-ready implementation for distributed power grid control.
+
+```python
+from powergrid.envs import MultiAgentMicrogrids
+
+env = MultiAgentMicrogrids(config={
+    'network': 'ieee13',
+    'num_microgrids': 2,
+    'mode': 'centralized'
 })
 
-# PettingZoo interface
 obs, info = env.reset()
-for agent_id in env.agents:
-    action = env.action_space(agent_id).sample()
-
-obs, rewards, dones, truncated, infos = env.step(actions)
+for step in range(96):
+    actions = {agent: policy(o) for agent, o in obs.items()}
+    obs, rewards, dones, truncs, info = env.step(actions)
 ```
 
-### Train with RLlib MAPPO
+See [Case Studies](use_cases/index) for full documentation.
 
-```bash
-# Centralized mode (fast prototyping)
-python examples/05_mappo_training.py --test --centralized
+---
 
-# Distributed mode (realistic validation)
-python examples/05_mappo_training.py --test
+## Architecture
+
+```
+HERON Framework (Domain-Agnostic)
+├── heron/
+│   ├── agents/          # Hierarchical agent abstractions
+│   ├── core/            # State, Action, Observation, Feature
+│   ├── protocols/       # Vertical & Horizontal coordination
+│   ├── messaging/       # Message broker interface
+│   └── envs/            # Base environment interface
+
+└── Case Studies
+    └── power/           # PowerGrid case study
+        ├── agents/      # GridAgent, DeviceAgent
+        ├── features/    # Electrical, Storage features
+        ├── networks/    # IEEE test systems
+        └── envs/        # MultiAgentMicrogrids
 ```
 
 ---
 
-## 🏗️ Architecture
+## Documentation
 
-### Distributed Mode
-
-```
-┌─────────────────────────────────────────────────────┐
-│              RLlib / Ray (MAPPO)                    │
-└────────────────────┬────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────┐
-│         NetworkedGridEnv (PettingZoo)               │
-│              - Runs power flow                       │
-│              - Publishes network state              │
-└────────────────────┬────────────────────────────────┘
-                     │
-              ┌──────▼──────┐
-              │ MessageBroker│
-              └──────┬──────┘
-         ┌───────────┼───────────┐
-         ▼           ▼           ▼
-    ┌────────┐  ┌────────┐  ┌────────┐
-    │GridAgent│  │GridAgent│  │GridAgent│
-    │  MG1   │  │  MG2   │  │  MG3   │
-    └────┬───┘  └────┬───┘  └────┬───┘
-         │           │           │
-    ┌────▼───┐  ┌────▼───┐  ┌────▼───┐
-    │Devices │  │Devices │  │Devices │
-    │ESS, DG │  │ESS, DG │  │ESS, DG │
-    └────────┘  └────────┘  └────────┘
-```
-
-**Key Point**: In distributed mode, all communication flows through the message broker - no direct network access.
+- [Getting Started](getting_started) - Installation and tutorials
+- [API Reference](api/index) - HERON core API
+- [Case Studies](use_cases/index) - PowerGrid and other implementations
+- [Protocols Guide](api/heron/protocols) - Coordination protocols
 
 ---
 
-## 📊 Performance
+## Contributing
 
-**Experiment**: 3 networked microgrids, MAPPO training
-
-| Metric | Centralized | Distributed | Difference |
-|--------|-------------|-------------|------------|
-| Final Reward | -859.20 | -859.20 | 0% |
-| Convergence | 3000 steps | 3000 steps | Same |
-| Training Time | 8.0s/iter | 8.5s/iter | +6% |
-
-**Result**: Distributed mode achieves same performance with minimal overhead.
-
----
-
-## 🆕 What's New in PowerGrid 2.0
-
-### vs CityLearn / PowerGridWorld
-
-| Feature | Others | PowerGrid 2.0 |
-|---------|--------|---------------|
-| AC Power Flow | ❌ | ✅ PandaPower |
-| Distributed Mode | ❌ | ✅ Message-based |
-| Message Broker | ❌ | ✅ Extensible |
-| Hierarchical Agents | Limited | ✅ Full support |
-| Production-Ready | ⚠️ | ✅ Tested |
-
-**Unique Advantage**: Only environment enabling realistic distributed control simulation.
-
----
-
-## 📚 Documentation
-
-- **[Getting Started](getting_started.md)**: Tutorials and examples
-- **[Protocol Guide](api/core/protocols)**: Coordination protocols in depth
-- **API Reference**: See docstrings in `powergrid/`
-
----
-
-## 🧪 Example Networks
-
-This repository includes standard IEEE test systems:
-
-- **IEEE 13-bus**: Distribution feeder
-- **IEEE 34-bus**: Larger distribution system
-- **Custom networks**: Via PandaPower
-
----
-
-## 🎯 Use Cases
-
-- **Research**: Multi-agent RL algorithms, coordination protocols
-- **Education**: Power systems control, distributed systems
-- **Industry**: Validate control algorithms before hardware deployment
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! Areas of interest:
+We welcome contributions:
 
 - New coordination protocols
-- Additional device types
-- Kafka broker implementation
-- Hardware-in-the-loop integration
+- Additional case studies
+- Kafka/Redis broker implementations
+- Documentation improvements
 
 ---
 
-## 📄 License
+## License
 
-[Add your license here]
-
----
-
-## 📧 Contact
-
-**Author**: Zhenlin Wang
-**Email**: zwang@moveworks.ai
-**Repository**: [GitHub](https://github.com/your-lab/powergrid)
+MIT License
 
 ---
 
-## 🔬 Citation
+## Contact
 
-If you use PowerGrid 2.0 in your research, please cite:
+**Authors**: Hepeng Li, Zhenlin Wang
+
+---
+
+## Citation
+
+If you use HERON in your research, please cite:
 
 ```bibtex
-@software{powergrid2,
-  author = {Wang, Zhenlin},
-  title = {PowerGrid 2.0: A Multi-Agent RL Environment for Distributed Power Grid Control},
+@software{heron,
+  author = {Li, Hepeng and Wang, Zhenlin},
+  title = {HERON: Hierarchical Environments for Realistic Observability in Networks},
   year = {2025},
-  url = {https://github.com/your-lab/powergrid}
+  url = {https://github.com/yourusername/heron}
 }
 ```

@@ -666,6 +666,6 @@ class CachingAgent(DeviceAgent):
 
 ## Next Steps
 
-- **Full Examples**: See [examples/](../examples/) for complete implementations
-- **API Reference**: Detailed API docs in [api/](../api/)
-- **Architecture**: Deep dive in [architecture/overview.md](../architecture/overview.md)
+- **Full Examples**: See [Examples](../examples/index) for complete implementations
+- **API Reference**: Detailed API docs in [API Reference](../api/index)
+- **Architecture**: Deep dive in [Architecture](../architecture/index)

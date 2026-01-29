@@ -40,7 +40,7 @@ source_suffix = {
     '.md': 'markdown',
 }
 
-templates_path = ['_templates']
+# templates_path = ['_templates']
 exclude_patterns = []
 
 
@@ -58,9 +58,10 @@ html_theme_options = {
     "navbar_align": "left",
     "primary_sidebar_end": [],
     "secondary_sidebar_items": ["page-toc"],
-    "show_toc_level": 2,
-    "navigation_depth": 4,
-    "collapse_navigation": False,
+    # "show_toc_level": 2,
+    "navigation_depth": 2,
+    "collapse_navigation": True,  # False enables expand/collapse functionality
+    "show_nav_level": 0,  # Show only top level initially, expand on click
     "header_links_before_dropdown": 10,  # Show all items, no dropdown
     "icon_links": [
         {
@@ -72,9 +73,9 @@ html_theme_options = {
     ],
 }
 
-# Force global toctree in sidebar on all pages (like Ray)
+# Use custom global toctree sidebar
 html_sidebars = {
-    "**": ["main-sidebar"]
+    "**": ["sidebar-nav-bs", "sidebar-ethical-ads"]
 }
 
 html_static_path = ['_static']

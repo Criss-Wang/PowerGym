@@ -7,11 +7,7 @@ Base State (HERON)
 ------------------
 
 The base state abstraction is part of the HERON framework.
-
-.. automodule:: heron.core.state
-   :members:
-   :undoc-members:
-   :show-inheritance:
+See :doc:`/api/heron/core` for the full HERON core API reference.
 
 PowerGrid State
 ---------------

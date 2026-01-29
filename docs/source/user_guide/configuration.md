@@ -420,7 +420,7 @@ except ValueError as e:
 
 - **Try examples**: See [Getting Started](../getting_started.md) for runnable examples
 - **Understand modes**: Read [Centralized vs Distributed](centralized_vs_distributed.md)
-- **Advanced protocols**: Explore [Protocol Guide](../api/core/protocols)
+- **Advanced protocols**: Explore [Protocol Guide](../api/heron/protocols)
 
 ---
 

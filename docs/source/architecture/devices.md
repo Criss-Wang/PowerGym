@@ -461,6 +461,6 @@ DEVICE_TYPES = {
 
 ## Next Steps
 
-- **API Reference**: Full device API in [API: Devices](../api/devices.rst)
+- **API Reference**: Full device API in [API: Agents](../use_cases/power/api/agents)
 - **Configuration**: Device parameters in [Configuration Guide](../user_guide/configuration.md)
 - **Agents**: How agents control devices in [Agents](agents.md)

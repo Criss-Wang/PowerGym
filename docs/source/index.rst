@@ -1,99 +1,113 @@
 :html_theme.sidebar_secondary.remove:
+:html_theme.sidebar_primary.remove:
 
-.. title:: Welcome to PowerGrid!
+.. title:: Welcome to HERON!
 
 .. toctree::
    :hidden:
    :maxdepth: 1
 
    Getting Started <getting_started>
-   Use Cases <use_cases/index>
+   Case Studies <case_studies/index>
    Examples <examples/index>
-   Documentation <docs/index>
    API Reference <api/index>
 
-PowerGrid 2.0
-=========
+HERON
+=====
 
-An open-source framework for multi-agent reinforcement learning in smart grid control.
+**Hierarchical Environments for Realistic Observability in Networks**
+
+A domain-agnostic multi-agent reinforcement learning (MARL) framework for hierarchical control systems.
 
 .. grid:: 1 2 2 3
    :gutter: 3
    :class-container: sd-text-center
 
-   .. grid-item-card:: 🚀 Get Started
+   .. grid-item-card:: Get Started
       :link: getting_started
       :link-type: doc
 
-      Set up PowerGrid and run your first simulation
+      Set up HERON and run your first simulation
 
-   .. grid-item-card:: 📦 Installation
+   .. grid-item-card:: Installation
       :link: user_guide/installation
       :link-type: doc
 
       Install with pip or from source
 
-   .. grid-item-card:: 📚 Examples
+   .. grid-item-card:: Examples
       :link: examples/index
       :link-type: doc
 
-      Browse example networks and training scripts
+      Browse examples and training scripts
 
 Quick Examples
 --------------
 
 .. tab-set::
 
-   .. tab-item:: Multi-Agent Control
+   .. tab-item:: HERON Core
 
       .. code-block:: python
 
-         from powergrid.envs import NetworkedGridEnv
+         from heron.agents import CoordinatorAgent, FieldAgent
+         from heron.protocols.vertical import SetpointProtocol
+         from heron.messaging.memory import InMemoryBroker
 
-         env = NetworkedGridEnv({
-             'env_name': 'ieee13_mg',
-             'mode': 'distributed',
-             'num_microgrids': 2
-         })
-
-         observations, infos = env.reset()
-         for step in range(96):
-             actions = {agent: policy(obs) for agent, obs in observations.items()}
-             observations, rewards, dones, truncs, infos = env.step(actions)
-
-   .. tab-item:: Hierarchical Coordination
-
-      .. code-block:: python
-
-         from powergrid.agents import GridAgent
-         from powergrid.core.protocols import PriceSignalProtocol
-
-         grid_agent = GridAgent(
-             agent_id='MG1',
-             subordinates=[battery, generator, solar],
-             vertical_protocol=PriceSignalProtocol(initial_price=50.0)
+         # Create hierarchical agents
+         broker = InMemoryBroker()
+         field_agent = FieldAgent(agent_id='device_1', level=1, broker=broker)
+         coordinator = CoordinatorAgent(
+             agent_id='coordinator_1',
+             level=2,
+             subordinates=[field_agent],
+             protocol=SetpointProtocol(),
+             broker=broker
          )
 
-   .. tab-item:: P2P Trading
+         obs = coordinator.observe(global_state)
+         action = coordinator.act(obs)
+
+   .. tab-item:: PowerGrid Case Study
 
       .. code-block:: python
 
-         from powergrid.core.protocols import PeerToPeerTradingProtocol
+         from powergrid.envs import MultiAgentMicrogrids
 
-         env = NetworkedGridEnv({
-             'env_name': 'ieee13_mg',
-             'horizontal_protocol': PeerToPeerTradingProtocol(trading_fee=0.01)
+         env = MultiAgentMicrogrids(config={
+             'network': 'ieee13',
+             'num_microgrids': 2,
+             'mode': 'centralized'
          })
+
+         obs, info = env.reset()
+         for step in range(96):
+             actions = {agent: policy(o) for agent, o in obs.items()}
+             obs, rewards, dones, truncs, info = env.step(actions)
+
+   .. tab-item:: Coordination Protocols
+
+      .. code-block:: python
+
+         from heron.protocols.vertical import PriceSignalProtocol
+         from heron.protocols.horizontal import ConsensusProtocol
+
+         # Vertical: parent -> subordinate coordination
+         vertical = PriceSignalProtocol(initial_price=50.0)
+
+         # Horizontal: peer-to-peer coordination
+         horizontal = ConsensusProtocol(max_iterations=10)
 
    .. tab-item:: RLlib Training
 
       .. code-block:: python
 
          from ray.rllib.algorithms.ppo import PPOConfig
+         from powergrid.envs import MultiAgentMicrogrids
 
          config = (
              PPOConfig()
-             .environment(NetworkedGridEnv, env_config={'env_name': 'ieee13_mg'})
+             .environment(MultiAgentMicrogrids)
              .training(lr=3e-4, train_batch_size=4000)
          )
          algo = config.build()
@@ -105,38 +119,58 @@ Key Features
 .. grid:: 1 2 2 3
    :gutter: 3
 
-   .. grid-item-card:: ⚡ PowerGrid Core
-      :link: core/index
+   .. grid-item-card:: Hierarchical Agents
+      :link: api/heron/agents
       :link-type: doc
 
-      Hierarchical agents, feature-based state, flexible actions, and AC power flow
+      3-level agent hierarchy: System, Coordinator, Field agents
 
-   .. grid-item-card:: 🧩 State & Action System
-      :link: core/state_action_observation
+   .. grid-item-card:: Feature-Based State
+      :link: api/heron/core
       :link-type: doc
 
-      Modular FeatureProviders, continuous/discrete actions, visibility control
+      Composable FeatureProviders with visibility control
 
-   .. grid-item-card:: 🌐 Environments
-      :link: environments/index
+   .. grid-item-card:: Coordination Protocols
+      :link: api/heron/protocols
       :link-type: doc
 
-      IEEE test feeders and CIGRE networks with DERs
+      Vertical (setpoint, price) and horizontal (P2P, consensus)
 
-   .. grid-item-card:: 🤖 Multi-Agent RL
-      :link: user_guide/training
+   .. grid-item-card:: Message Broker
+      :link: api/heron/messaging
       :link-type: doc
 
-      RLlib integration with MAPPO and custom protocols
+      Extensible pub/sub for distributed execution
 
-   .. grid-item-card:: 🚀 Quick Reference
-      :link: developer/quick_reference
+   .. grid-item-card:: Dual Execution Modes
+      :link: user_guide/centralized_vs_distributed
       :link-type: doc
 
-      Common patterns, code examples, and debugging tips
+      Centralized training, distributed deployment
 
-   .. grid-item-card:: 🏗️ Architecture
-      :link: architecture/index
+   .. grid-item-card:: Case Studies
+      :link: use_cases/index
       :link-type: doc
 
-      System design, message broker, and distributed execution
+      Ready-to-use implementations (PowerGrid, and more)
+
+Architecture
+------------
+
+.. code-block:: text
+
+   HERON Framework (Domain-Agnostic)
+   +-- heron/
+   |   +-- agents/          # Hierarchical agent abstractions
+   |   +-- core/            # State, Action, Observation, Feature
+   |   +-- protocols/       # Vertical & Horizontal coordination
+   |   +-- messaging/       # Message broker interface
+   |   +-- envs/            # Base environment interface
+   |
+   +-- Case Studies
+       +-- power/           # PowerGrid case study
+           +-- agents/      # GridAgent, DeviceAgent
+           +-- features/    # Electrical, Storage features
+           +-- networks/    # IEEE test systems
+           +-- envs/        # MultiAgentMicrogrids

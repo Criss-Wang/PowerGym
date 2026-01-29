@@ -402,7 +402,7 @@ def compute_safety(self, converged: bool) -> float:
 
 ## Coordination Protocols
 
-See [Protocol Guide](../api/core/protocols) for details on:
+See [Protocol Guide](../api/heron/protocols) for details on:
 - Price Signal Protocol
 - Setpoint Protocol
 - Custom protocols
@@ -466,5 +466,5 @@ for agent in agents.values():
 ## Next Steps
 
 - **Devices**: Device implementations in [Devices](devices.md)
-- **Protocols**: Coordination protocols in [Protocol Guide](../api/core/protocols)
-- **API Reference**: Full API docs in [API: Agents](../api/agents.rst)
+- **Protocols**: Coordination protocols in [Protocol Guide](../api/heron/protocols)
+- **API Reference**: Full API docs in [API: Agents](../use_cases/power/api/agents)
