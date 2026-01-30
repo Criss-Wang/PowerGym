@@ -2,25 +2,28 @@
 
 This is a modernized version of the legacy NetworkedGridEnv that replaces GridEnv
 with PowerGridAgent while maintaining identical environment logic and API.
+
+Inherits from HERON's PettingZooParallelEnv adapter for proper integration with
+the HERON framework while maintaining PettingZoo compatibility.
 """
 
 from abc import abstractmethod
 from typing import Any, Dict, List, Optional
-import uuid
 
 import numpy as np
 import pandapower as pp
 from gymnasium.spaces import Box, Dict as SpaceDict, Discrete, MultiDiscrete
-from pettingzoo import ParallelEnv
 
 from powergrid.agents.power_grid_agent import PowerGridAgent
 from powergrid.agents.proxy_agent import ProxyAgent
+from heron.envs.adapters import PettingZooParallelEnv
 from heron.protocols.base import NoProtocol, Protocol
 from heron.messaging.base import ChannelManager, Message, MessageBroker, MessageType
 from heron.messaging.memory import InMemoryBroker
 from heron.utils.typing import AgentID
 
-class NetworkedGridEnv(ParallelEnv):
+
+class NetworkedGridEnv(PettingZooParallelEnv):
     """Base environment for networked power grids with multi-agent control.
 
     This environment supports both centralized and distributed execution modes:
@@ -37,6 +40,10 @@ class NetworkedGridEnv(ParallelEnv):
     - Agents publish state updates (P, Q, status) to environment via messages
     - Mimics realistic distributed control systems with limited communication
 
+    Inherits from HERON's PettingZooParallelEnv adapter, which provides:
+    - HeronEnvCore functionality (agent management, message broker integration)
+    - PettingZoo ParallelEnv interface compatibility
+
     Attributes:
         env_config: Configuration dictionary with keys:
             - centralized: bool, execution mode (default: False)
@@ -51,8 +58,19 @@ class NetworkedGridEnv(ParallelEnv):
     """
 
     def __init__(self, env_config):
-        super().__init__()
-        self._env_id = str(uuid.uuid4())
+        # Extract distributed mode from config (centralized=True means distributed=False)
+        centralized = env_config.get('centralized', False)
+
+        # Build message broker first (needed for parent init)
+        broker = self._create_message_broker(env_config, centralized)
+
+        # Initialize HERON's PettingZooParallelEnv adapter
+        super().__init__(
+            env_id=env_config.get('env_id'),
+            message_broker=broker,
+            distributed=not centralized,
+        )
+
         self._name = "NetworkedGridEnv"
         self.data_size: int = 0
         self._t: int = 0  # current timestep
@@ -60,14 +78,41 @@ class NetworkedGridEnv(ParallelEnv):
 
         self.env_config = env_config
         self.max_episode_steps = env_config.get('max_episode_steps', 24)
-        self.centralized = env_config.get('centralized', False)
+        self.centralized = centralized
         self.train = env_config.get('train', True)
 
-        self.message_broker = self._build_message_broker()
+        # Build environment components
         self.agent_dict = self._build_agents()
         self.net = self._build_net()
         self.proxy_agent = self._build_proxy_agent()
+
+        # Initialize spaces and PettingZoo attributes
         self._init_space()
+        self._set_agent_ids(list(self.agent_dict.keys()))
+
+    @staticmethod
+    def _create_message_broker(env_config: Dict, centralized: bool) -> Optional[MessageBroker]:
+        """Create message broker based on config.
+
+        Static method to allow calling before super().__init__().
+
+        Args:
+            env_config: Environment configuration
+            centralized: Whether running in centralized mode
+
+        Returns:
+            MessageBroker instance or None if centralized
+        """
+        if centralized:
+            return None
+
+        broker_type = env_config.get('message_broker', 'in_memory')
+        if broker_type == 'in_memory':
+            return InMemoryBroker()
+        elif broker_type is None:
+            return None
+        else:
+            raise ValueError(f"Unsupported message broker type: {broker_type}")
 
     @property
     def actionable_agents(self):
@@ -79,29 +124,30 @@ class NetworkedGridEnv(ParallelEnv):
 
     @abstractmethod
     def _build_net(self):
+        """Build the PandaPower network.
+
+        Returns:
+            pandapower.Network: The constructed power network
+        """
         pass
 
     @abstractmethod
     def _reward_and_safety(self):
+        """Compute rewards and safety metrics.
+
+        Returns:
+            Tuple of (rewards_dict, safety_dict)
+        """
         pass
 
     @abstractmethod
     def _build_agents(self) -> Dict[AgentID, PowerGridAgent]:
+        """Build and return the agent dictionary.
+
+        Returns:
+            Dictionary mapping agent IDs to PowerGridAgent instances
+        """
         pass
-
-    def _build_message_broker(self) -> Optional[MessageBroker]:
-        # If centralized mode, no broker needed
-        if self.centralized:
-            return None
-
-        # For distributed mode, default to in-memory broker
-        broker_type = self.env_config.get('message_broker', 'in_memory')
-        if broker_type == 'in_memory':
-            return InMemoryBroker()
-        elif broker_type is None:
-            return None
-        else:
-            raise ValueError(f"Unsupported message broker type: {broker_type}")
 
     def _build_proxy_agent(self) -> Optional[ProxyAgent]:
         """Build ProxyAgent for managing network state distribution.
@@ -120,24 +166,29 @@ class NetworkedGridEnv(ParallelEnv):
         proxy = ProxyAgent(
             agent_id="proxy_agent",
             message_broker=self.message_broker,
-            env_id=self._env_id,
+            env_id=self.env_id,
             subordinate_agents=subordinate_agent_ids,
             visibility_rules=None,  # Default: all agents see all state
         )
 
         return proxy
-        
 
     def _send_actions_to_agent(self, agent_id: AgentID, action: Any):
+        """Send action to agent via message broker.
+
+        Args:
+            agent_id: Target agent ID
+            action: Action to send
+        """
         if self.message_broker is None:
             raise RuntimeError("Message broker is not initialized.")
         channel = ChannelManager.action_channel(
             self._name,
             agent_id,
-            self._env_id
+            self.env_id
         )
         message = Message(
-            env_id=self._env_id,
+            env_id=self.env_id,
             sender_id=self._name,
             recipient_id=agent_id,
             timestamp=self._t,
@@ -155,11 +206,11 @@ class NetworkedGridEnv(ParallelEnv):
         if not self.message_broker:
             raise RuntimeError("Message broker required for distributed mode")
 
-        channel = ChannelManager.state_update_channel(self._env_id)
+        channel = ChannelManager.state_update_channel(self.env_id)
         messages = self.message_broker.consume(
             channel,
             recipient_id="environment",
-            env_id=self._env_id,
+            env_id=self.env_id,
             clear=True
         )
         return [msg.payload for msg in messages]
@@ -205,6 +256,7 @@ class NetworkedGridEnv(ParallelEnv):
             self.net[device_type].loc[element_idx, 'in_service'] = update.get('in_service', True)
 
     def _update_net(self):
+        """Update network state based on agent actions."""
         if self.centralized:
             for agent in self.agent_dict.values():
                 agent.update_state(self.net, self._t)
@@ -284,9 +336,9 @@ class NetworkedGridEnv(ParallelEnv):
             aggregated_network_state['agents'][agent.agent_id] = agent_network_state
 
         # Send aggregated network state to ProxyAgent
-        channel = ChannelManager.custom_channel("power_flow", self._env_id, "proxy_agent")
+        channel = ChannelManager.custom_channel("power_flow", self.env_id, "proxy_agent")
         message = Message(
-            env_id=self._env_id,
+            env_id=self.env_id,
             sender_id="environment",
             recipient_id="proxy_agent",
             timestamp=self._t,
@@ -323,7 +375,8 @@ class NetworkedGridEnv(ParallelEnv):
                 continue
 
     def step(self, action_n: Dict[str, Any]):
-        """
+        """Execute one environment step.
+
         For centralized case: Collective agent state update
         - Actions are computed and set on devices by each agent.
         - Agent state updates are done after actions are set and during _update_net.
@@ -332,6 +385,12 @@ class NetworkedGridEnv(ParallelEnv):
         - Actions are sent to agents via message broker.
         - Each agent steps its local devices and updates its local state.
         - Agent state updates are done before _update_net.
+
+        Args:
+            action_n: Dictionary mapping agent IDs to actions
+
+        Returns:
+            Tuple of (observations, rewards, terminateds, truncateds, infos)
         """
         # Set action for each agent
         if self.centralized:
@@ -345,6 +404,7 @@ class NetworkedGridEnv(ParallelEnv):
         else:
             # Distributed mode: run agent steps concurrently
             import asyncio
+
             async def run_distributed_steps():
                 tasks = []
                 for agent_id, action in action_n.items():
@@ -361,7 +421,7 @@ class NetworkedGridEnv(ParallelEnv):
         # Run power flow for the whole network
         try:
             pp.runpp(self.net)
-        except:
+        except Exception:
             self.net['converged'] = False
 
         # ==== Sync states to all agents ====
@@ -409,16 +469,14 @@ class NetworkedGridEnv(ParallelEnv):
         return self._get_obs(), rewards, terminateds, truncateds, infos
 
     def reset(self, seed=None, options=None):
-        """
-        Reset environment and all agents.
+        """Reset environment and all agents.
 
         Args:
             seed: Random seed
             options: Reset options (unused)
 
         Returns:
-            observations: Dict mapping agent_id → observation
-            info: Empty info dict
+            Tuple of (observations_dict, info_dict)
         """
         # Initialize RNG
         if seed is not None:
@@ -449,7 +507,7 @@ class NetworkedGridEnv(ParallelEnv):
         # Initial power flow
         try:
             pp.runpp(self.net)
-        except:
+        except Exception:
             self.net['converged'] = False
 
         # In distributed mode, publish initial network state to agents via ProxyAgent
@@ -461,15 +519,14 @@ class NetworkedGridEnv(ParallelEnv):
         return self._get_obs(), info
 
     def _get_obs(self):
-        """
-        Get observations for all agents.
+        """Get observations for all agents.
 
         In centralized mode, agents observe with direct network access.
         In distributed mode, agents observe without network access (they use
         ProxyAgent state received via messages).
 
         Returns:
-            Dict mapping agent_id → observation array
+            Dict mapping agent_id to observation array
         """
         obs_dict = {}
         for agent_id, agent in self.agent_dict.items():
@@ -500,13 +557,5 @@ class NetworkedGridEnv(ParallelEnv):
             net_for_obs = self.net if self.centralized else None
             ob_spaces[name] = agent.get_grid_observation_space(net_for_obs)
 
-        self.action_spaces = ac_spaces
-        self.observation_spaces = ob_spaces
-
-    def observation_space(self, agent):
-        """Return observation space for the given agent (PettingZoo API)."""
-        return self.observation_spaces[agent]
-
-    def action_space(self, agent):
-        """Return action space for the given agent (PettingZoo API)."""
-        return self.action_spaces[agent]
+        # Use adapter's _init_spaces method to set up spaces
+        self._init_spaces(ac_spaces, ob_spaces)

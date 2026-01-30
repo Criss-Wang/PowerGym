@@ -47,6 +47,10 @@ class Agent(ABC):
         upstream_id: Optional upstream agent ID for hierarchical execution
         subordinates: Dict of subordinate agents for hierarchical execution
         env_id: Environment ID for multi-environment isolation
+        tick_interval: Time between agent steps (for event-driven scheduling)
+        obs_delay: Observation delay - agent sees state from t - obs_delay
+        act_delay: Action delay - action takes effect at t + act_delay
+        msg_delay: Message delay - messages arrive after msg_delay
     """
 
     def __init__(
@@ -63,6 +67,12 @@ class Agent(ABC):
 
         # hierarchical params
         subordinates: Optional[Dict[AgentID, "Agent"]] = None,
+
+        # timing/latency params (for event-driven scheduling)
+        tick_interval: float = 1.0,
+        obs_delay: float = 0.0,
+        act_delay: float = 0.0,
+        msg_delay: float = 0.0,
     ):
         """Initialize agent.
 
@@ -75,6 +85,10 @@ class Agent(ABC):
             upstream_id: Optional upstream agent ID for hierarchical execution
             subordinates: Optional dict of subordinate agents
             env_id: Optional environment ID for multi-environment isolation
+            tick_interval: Time between agent steps (for event-driven scheduling)
+            obs_delay: Observation delay - agent sees state from t - obs_delay
+            act_delay: Action delay - action takes effect at t + act_delay
+            msg_delay: Message delay - messages arrive after msg_delay
         """
         self.agent_id = agent_id
         self.level = level
@@ -84,6 +98,12 @@ class Agent(ABC):
         # Direct execution attributes
         self._timestep: float = 0.0
         self.mailbox: List[Message] = []  # Incoming messages from other agents
+
+        # Timing/latency attributes (for event-driven scheduling)
+        self.tick_interval = tick_interval
+        self.obs_delay = obs_delay
+        self.act_delay = act_delay
+        self.msg_delay = msg_delay
 
         # Hierarchical execution attributes (optional)
         self.message_broker = message_broker
@@ -466,6 +486,47 @@ class Agent(ABC):
     def _update_timestep(self) -> None:
         """Update internal timestep counter."""
         self._timestep += 1
+
+    # ============================================
+    # Proxy-Mediated State Access (Recommended Pattern)
+    # ============================================
+
+    def request_state_from_proxy(
+        self,
+        proxy: "Agent",
+        owner_id: Optional[AgentID] = None,
+    ) -> Dict[str, Any]:
+        """Request filtered state from ProxyAgent.
+
+        This is the recommended pattern for agents to access state in
+        information-constrained environments. The ProxyAgent applies
+        visibility rules before returning state.
+
+        Args:
+            proxy: ProxyAgent instance to request state from
+            owner_id: ID of agent whose state to request (defaults to self)
+
+        Returns:
+            Filtered state dict based on visibility rules
+
+        Example:
+            # In agent's observe() or act() method:
+            state = self.request_state_from_proxy(self.proxy_agent)
+        """
+        # Import here to avoid circular dependency
+        from heron.agents.proxy_agent import ProxyAgent
+
+        if not isinstance(proxy, ProxyAgent):
+            raise TypeError(f"Expected ProxyAgent, got {type(proxy).__name__}")
+
+        if owner_id is None:
+            owner_id = self.agent_id
+
+        return proxy.get_state_for_agent(
+            agent_id=self.agent_id,
+            requestor_level=self.level,
+            owner_id=owner_id,
+        )
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(id={self.agent_id}, level={self.level})"

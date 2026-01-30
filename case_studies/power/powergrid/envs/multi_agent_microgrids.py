@@ -80,7 +80,7 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
         self.dso = PowerGridAgent(
             message_broker=self.message_broker,
             upstream_id=self._name,
-            env_id=self._env_id,
+            env_id=self.env_id,
             grid_config=dso_config,
             net=net,
         )
@@ -104,7 +104,7 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
             policy=policy,
             message_broker=self.message_broker,
             upstream_id=self._name,
-            env_id=self._env_id,
+            env_id=self.env_id,
             grid_config=microgrid_config,
             net=microgrid_net,
         )
@@ -136,8 +136,8 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
         # Set network and agents
         self.net = net
         self.agent_dict.update({a.agent_id: a for a in microgrid_agents})
-        self.possible_agents = list(self.agent_dict.keys())
-        self.agents = self.possible_agents
+        # Update PettingZoo agent IDs via adapter method
+        self._set_agent_ids(list(self.agent_dict.keys()))
 
         return net
 

@@ -8,13 +8,36 @@ Key responsibilities:
 2. Cache the latest state
 3. Distribute state to other agents based on visibility rules
 4. Control what information each agent can access
+
+Usage Pattern:
+    # Setup
+    proxy = ProxyAgent(
+        message_broker=broker,
+        env_id="env_1",
+        subordinate_agents=["battery_1", "solar_1"],
+        visibility_rules={
+            "battery_1": ["SoC", "Power"],  # Only see these features
+            "solar_1": ["Irradiance"],
+        }
+    )
+
+    # In simulation loop
+    proxy.receive_state_from_environment()  # Get state from env
+    proxy.distribute_state_to_agents()       # Send filtered state to agents
+
+    # Agents request state through proxy (recommended pattern)
+    state = proxy.get_state_for_agent("battery_1", requestor_level=1)
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 
 from heron.agents.base import Agent, AgentID
 from heron.messaging.base import ChannelManager, Message, MessageBroker, MessageType
 from heron.core.observation import Observation
+
+if TYPE_CHECKING:
+    from heron.core.feature import FeatureProvider
+    from heron.core.state import State
 
 
 PROXY_LEVEL = 3  # Level identifier for proxy-level agents (higher than coordinator)
@@ -220,6 +243,111 @@ class ProxyAgent(Agent):
         agents_state = self.state_cache.get('agents', {})
         agent_state = agents_state.get(agent_id, {})
         return self._filter_state_for_agent(agent_id, agent_state)
+
+    def get_state_for_agent(
+        self,
+        agent_id: AgentID,
+        requestor_level: int,
+        owner_id: Optional[AgentID] = None,
+        owner_level: Optional[int] = None,
+        state: Optional["State"] = None,
+    ) -> Dict[str, Any]:
+        """Get filtered state respecting FeatureProvider visibility rules.
+
+        This is the recommended method for agents to access state. It integrates
+        with FeatureProvider.is_observable_by() for fine-grained visibility control.
+
+        Args:
+            agent_id: ID of the agent requesting state
+            requestor_level: Hierarchy level of requesting agent (1=field, 2=coord, 3=system)
+            owner_id: ID of the agent whose state is being requested (defaults to agent_id)
+            owner_level: Hierarchy level of owner (defaults to requestor_level)
+            state: Optional State object with FeatureProviders for visibility checking
+
+        Returns:
+            Filtered state dict based on visibility rules
+        """
+        if owner_id is None:
+            owner_id = agent_id
+        if owner_level is None:
+            owner_level = requestor_level
+
+        # Get base state from cache
+        agents_state = self.state_cache.get('agents', {})
+        agent_state = agents_state.get(owner_id, {})
+
+        # Apply key-based visibility rules first
+        filtered = self._filter_state_for_agent(agent_id, agent_state)
+
+        # If State object provided, apply FeatureProvider visibility rules
+        if state is not None:
+            feature_filtered = {}
+            for feature in state.features:
+                if feature.is_observable_by(
+                    agent_id, requestor_level, owner_id, owner_level
+                ):
+                    feature_name = feature.feature_name
+                    if feature_name in filtered:
+                        feature_filtered[feature_name] = filtered[feature_name]
+            return feature_filtered
+
+        return filtered
+
+    def get_observable_features(
+        self,
+        requestor_id: AgentID,
+        requestor_level: int,
+        owner_id: AgentID,
+        owner_level: int,
+        state: "State",
+    ) -> List[str]:
+        """Get list of feature names observable by the requesting agent.
+
+        Args:
+            requestor_id: ID of agent requesting observation
+            requestor_level: Hierarchy level of requestor
+            owner_id: ID of agent that owns the state
+            owner_level: Hierarchy level of owner
+            state: State object containing FeatureProviders
+
+        Returns:
+            List of feature names the requestor can observe
+        """
+        observable = []
+        for feature in state.features:
+            if feature.is_observable_by(
+                requestor_id, requestor_level, owner_id, owner_level
+            ):
+                observable.append(feature.feature_name)
+        return observable
+
+    def register_subordinate(self, agent_id: AgentID) -> None:
+        """Register a new subordinate agent.
+
+        Args:
+            agent_id: Agent ID to register
+        """
+        if agent_id not in self.subordinate_agents:
+            self.subordinate_agents.append(agent_id)
+            # Create channel for this agent
+            if self.message_broker:
+                channel = ChannelManager.info_channel(
+                    self.agent_id, agent_id, self.env_id
+                )
+                self.message_broker.create_channel(channel)
+
+    def set_visibility_rules(
+        self,
+        agent_id: AgentID,
+        allowed_keys: List[str],
+    ) -> None:
+        """Set visibility rules for an agent.
+
+        Args:
+            agent_id: Agent to set rules for
+            allowed_keys: List of state keys the agent can access
+        """
+        self.visibility_rules[agent_id] = allowed_keys
 
     # ============================================
     # Required Abstract Methods (Not used by ProxyAgent)
