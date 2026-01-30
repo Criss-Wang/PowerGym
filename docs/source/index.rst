@@ -7,8 +7,11 @@
    :hidden:
    :maxdepth: 1
 
+   Getting Started <getting_started>
+   Key Concepts <key_concepts>
+   User Guide <user_guide/index>
    Case Studies <case_studies/index>
-   Examples <examples/index>
+   Developer Guide <developer_guide/index>
    API Reference <api/index>
 
 HERON
@@ -22,17 +25,17 @@ A domain-agnostic multi-agent reinforcement learning (MARL) framework for hierar
    :gutter: 3
    :class-container: sd-text-center
 
-   .. grid-item-card:: Installation
-      :link: user_guide/installation
+   .. grid-item-card:: Getting Started
+      :link: getting_started
       :link-type: doc
 
-      Install with pip or from source
+      Quick start guide with examples
 
-   .. grid-item-card:: Examples
-      :link: examples/index
+   .. grid-item-card:: Key Concepts
+      :link: key_concepts
       :link-type: doc
 
-      Browse examples and training scripts
+      Core abstractions and design principles
 
 Quick Examples
 --------------
@@ -113,25 +116,25 @@ Key Features
    :gutter: 3
 
    .. grid-item-card:: Hierarchical Agents
-      :link: api/heron/agents
+      :link: api/agents/index
       :link-type: doc
 
       3-level agent hierarchy: System, Coordinator, Field agents
 
    .. grid-item-card:: Feature-Based State
-      :link: api/heron/core
+      :link: api/core/index
       :link-type: doc
 
       Composable FeatureProviders with visibility control
 
    .. grid-item-card:: Coordination Protocols
-      :link: api/heron/protocols
+      :link: api/protocols/index
       :link-type: doc
 
       Vertical (setpoint, price) and horizontal (P2P, consensus)
 
    .. grid-item-card:: Message Broker
-      :link: api/heron/messaging
+      :link: api/messaging/index
       :link-type: doc
 
       Extensible pub/sub for distributed execution
@@ -143,7 +146,7 @@ Key Features
       Centralized training, distributed deployment
 
    .. grid-item-card:: Case Studies
-      :link: use_cases/index
+      :link: case_studies/index
       :link-type: doc
 
       Ready-to-use implementations (PowerGrid, and more)
