@@ -1,368 +1,179 @@
-# Centralized vs Distributed Mode
+# Centralized vs Distributed Execution
 
-PowerGrid 2.0's unique **dual-mode architecture** lets you develop algorithms in centralized mode and validate them in distributed mode—bridging research and deployment.
+HERON supports two execution modes that enable different trade-offs between training efficiency and deployment realism.
 
----
-
-## Quick Comparison
+## Overview
 
 | Aspect | Centralized Mode | Distributed Mode |
-|--------|-----------------|------------------|
-| **Communication** | Direct method calls | Message passing via broker |
-| **Network Access** | Agents read/write directly | Only environment has access |
-| **Observability** | Full (all voltages, flows) | Limited (via messages) |
-| **Deployment** | Single process | Multi-process/machine ready |
-| **Use Case** | Algorithm development | Realistic validation |
-| **Performance** | Faster (~8s/iter) | Slight overhead (~8.5s/iter) |
-| **Final Results** | Baseline performance | Same performance |
-
----
+|--------|------------------|------------------|
+| **Observability** | Full global state | Local + messages |
+| **Communication** | Direct function calls | Message broker |
+| **Training Speed** | Fast | Slower |
+| **Deployment** | Simulation only | Production-ready |
 
 ## Centralized Mode
 
-### What It Is
+In centralized mode, all agents have access to global state. This is ideal for:
 
-Traditional multi-agent RL setup where agents have full observability and can directly access the environment state.
+- Fast algorithm development
+- Hyperparameter tuning
+- Baseline comparisons
+
+```python
+from powergrid.envs import MultiAgentMicrogrids
+
+env = MultiAgentMicrogrids({
+    "centralized": True,  # Enable centralized mode
+    "max_episode_steps": 24,
+})
+
+obs, info = env.reset()
+# obs contains full observability for each agent
+```
 
 ### How It Works
 
+1. Environment maintains global state
+2. Each agent's `observe()` returns full state vector
+3. Actions are applied directly without message passing
+
 ```
-┌─────────────┐
-│   RLlib     │
-└──────┬──────┘
-       │
-┌──────▼──────────────────┐
-│  NetworkedGridEnv       │
-│  - GridAgents have      │
-│    direct access to     │
-│    network state        │
-└──────┬──────────────────┘
-       │
-┌──────▼──────┐
-│ PandaPower  │
-└─────────────┘
+┌─────────────────────────────────────┐
+│         Global Environment          │
+│  ┌─────┐  ┌─────┐  ┌─────┐         │
+│  │ A1  │  │ A2  │  │ A3  │         │
+│  └──┬──┘  └──┬──┘  └──┬──┘         │
+│     │        │        │             │
+│     └────────┴────────┘             │
+│              │                      │
+│     Full State Access               │
+└─────────────────────────────────────┘
 ```
-
-**Key Point**: Agents can directly read voltages, line loading, etc. from the network.
-
-### Configuration
-
-```yaml
-# config.yml
-centralized: true
-episode_length: 96
-train: true
-```
-
-Or in Python:
-
-```python
-from powergrid.envs.multi_agent import MultiAgentMicrogrids
-
-env = MultiAgentMicrogrids({
-    'centralized': True,
-    'episode_length': 96,
-    'train': True
-})
-```
-
-### When to Use
-
-✅ **Algorithm development**: Fast prototyping and iteration
-✅ **Baseline comparison**: Compare with decentralized approaches
-✅ **Debugging**: Easier to debug with full observability
-✅ **Research**: Focus on RL algorithms, not communication
-
-### Example
-
-```python
-from powergrid.envs.multi_agent import MultiAgentMicrogrids
-
-# Centralized mode - traditional MARL
-env = MultiAgentMicrogrids({'centralized': True, 'train': True})
-
-obs, info = env.reset()
-for t in range(96):
-    # Agents have full observability
-    actions = {aid: policy(obs[aid]) for aid in env.agents}
-    obs, rewards, dones, truncated, infos = env.step(actions)
-```
-
----
 
 ## Distributed Mode
 
-### What It Is
+In distributed mode, agents observe only local information plus messages from other agents. This is ideal for:
 
-Realistic distributed control where agents communicate **only via messages**—mimicking real-world power grid control systems.
-
-### How It Works
-
-```
-┌─────────────┐
-│   RLlib     │
-└──────┬──────┘
-       │
-┌──────▼──────────────────┐
-│  NetworkedGridEnv       │
-│  - Publishes network    │
-│    state via messages   │
-│  - Consumes device      │
-│    updates via messages │
-└──────┬──────────────────┘
-       │
-┌──────▼──────────┐
-│ MessageBroker   │
-│ (InMemory/Kafka)│
-└──────┬──────────┘
-       │
-   ┌───┴───┬───────┐
-   ▼       ▼       ▼
-[GridAgent GridAgent GridAgent]
-   │       │       │
-   ▼       ▼       ▼
-[Devices Devices Devices]
-```
-
-**Key Point**: Agents never access the network directly. All communication is message-based.
-
-### Configuration
-
-```yaml
-# config.yml
-centralized: false
-message_broker: 'in_memory'  # or 'kafka' for production
-episode_length: 96
-train: true
-```
-
-Or in Python:
+- Realistic deployment scenarios
+- Testing communication protocols
+- Distributed system simulation
 
 ```python
-from powergrid.envs.multi_agent import MultiAgentMicrogrids
+from powergrid.envs import MultiAgentMicrogrids
+from heron.messaging.memory import InMemoryBroker
+
+broker = InMemoryBroker()
 
 env = MultiAgentMicrogrids({
-    'centralized': False,
-    'message_broker': 'in_memory',
-    'episode_length': 96,
-    'train': True
-})
-```
-
-### When to Use
-
-✅ **Realistic validation**: Test algorithms in deployment-like conditions
-✅ **Production deployment**: Ready for real hardware
-✅ **Research**: Study partial observability, communication delays
-✅ **Scalability**: Prepare for large-scale distributed systems
-
-### Example
-
-```python
-from powergrid.envs.multi_agent import MultiAgentMicrogrids
-
-# Distributed mode - realistic control
-env = MultiAgentMicrogrids({
-    'centralized': False,
-    'message_broker': 'in_memory',
-    'train': True
+    "centralized": False,  # Distributed mode
+    "message_broker": broker,
+    "max_episode_steps": 24,
 })
 
 obs, info = env.reset()
-for t in range(96):
-    # Agents observe only via messages
-    actions = {aid: policy(obs[aid]) for aid in env.agents}
-    obs, rewards, dones, truncated, infos = env.step(actions)
+# obs contains only local observations + received messages
 ```
 
----
+### How It Works
 
-## Message Flow in Distributed Mode
+1. Each agent maintains local state only
+2. Agents communicate via message broker
+3. Coordination happens through protocols
 
-### Step-by-Step Execution
+```
+┌─────────────────────────────────────┐
+│           Message Broker            │
+│  ┌───────────────────────────┐     │
+│  │    pub/sub channels       │     │
+│  └───────────────────────────┘     │
+│         ▲         ▲         ▲      │
+│         │         │         │      │
+│    ┌────┴───┐ ┌───┴────┐ ┌──┴───┐  │
+│    │   A1   │ │   A2   │ │  A3  │  │
+│    │ local  │ │ local  │ │local │  │
+│    └────────┘ └────────┘ └──────┘  │
+└─────────────────────────────────────┘
+```
 
-1. **Environment → Agents**: Publish RL actions
+## Switching Modes
+
+The mode can be switched with a single configuration change:
 
 ```python
-channel = 'env/actions'
-broker.publish(channel, Message(payload={'MG1': action_mg1}))
+# Training (centralized for speed)
+train_config = {"centralized": True, "train": True}
+
+# Evaluation (distributed for realism)
+eval_config = {"centralized": False, "train": False}
 ```
 
-2. **Agents → Devices**: Decompose and send device actions
+## Proxy Agent for Distributed Mode
+
+For distributed execution, use `ProxyAgent` to handle message-based coordination:
 
 ```python
-channel = 'agent/MG1/device_actions'
-broker.publish(channel, Message(payload={'ESS1': 0.5}))
+from heron.agents import ProxyAgent
+from heron.messaging.memory import InMemoryBroker
+
+broker = InMemoryBroker()
+
+# Create proxy that wraps actual agent
+proxy = ProxyAgent(
+    agent_id="mg1_proxy",
+    actual_agent=grid_agent,
+    broker=broker,
+    upstream_id="system_operator"
+)
+
+# Proxy handles message passing automatically
+await proxy.step_distributed()
 ```
 
-3. **Devices → Environment**: Publish state updates (P, Q)
+## Protocol Behavior by Mode
+
+### Vertical Protocols
+
+| Protocol | Centralized | Distributed |
+|----------|-------------|-------------|
+| SetpointProtocol | Direct assignment | Message with setpoint |
+| PriceSignalProtocol | Direct price access | Price broadcast message |
+
+### Horizontal Protocols
+
+| Protocol | Centralized | Distributed |
+|----------|-------------|-------------|
+| P2PTradingProtocol | Instant matching | Bid/ask messages |
+| ConsensusProtocol | Single iteration | Multiple message rounds |
+
+## Best Practices
+
+1. **Train in centralized mode** for faster iteration
+2. **Validate in distributed mode** before deployment
+3. **Use shared rewards** in centralized mode for cooperative tasks
+4. **Test communication overhead** in distributed mode
+
+## Example: Mode Comparison
 
 ```python
-channel = 'env/state_updates'
-broker.publish(channel, Message(payload={
-    'agent_id': 'ESS1',
-    'P_MW': 0.5,
-    'Q_MVAr': 0.1
-}))
+import time
+
+# Centralized training
+env_centralized = MultiAgentMicrogrids({"centralized": True})
+start = time.time()
+for _ in range(1000):
+    obs, _ = env_centralized.reset()
+    for _ in range(24):
+        actions = {a: env_centralized.action_spaces[a].sample() for a in env_centralized.agents}
+        env_centralized.step(actions)
+print(f"Centralized: {time.time() - start:.2f}s")
+
+# Distributed evaluation
+env_distributed = MultiAgentMicrogrids({"centralized": False})
+start = time.time()
+for _ in range(100):  # Fewer iterations due to overhead
+    obs, _ = env_distributed.reset()
+    for _ in range(24):
+        actions = {a: env_distributed.action_spaces[a].sample() for a in env_distributed.agents}
+        env_distributed.step(actions)
+print(f"Distributed: {time.time() - start:.2f}s")
 ```
-
-4. **Environment**: Consume updates, run power flow
-
-```python
-updates = broker.consume('env/state_updates')
-for update in updates:
-    net['sgen'].loc[idx, 'p_mw'] = update['P_MW']
-pp.runpp(net)
-```
-
-5. **Environment → Agents**: Publish network state
-
-```python
-channel = 'env/network_state'
-broker.publish(channel, Message(payload={
-    'voltages': [...],
-    'line_loading': [...]
-}))
-```
-
----
-
-## Performance Comparison
-
-### Experimental Results
-
-**Setup**: 3 microgrids, MAPPO training, 3000 steps
-
-| Metric | Centralized | Distributed | Difference |
-|--------|-------------|-------------|------------|
-| **Final Reward** | -859.20 | -859.20 | 0% ✅ |
-| **Convergence** | 3000 steps | 3000 steps | Same ✅ |
-| **Safety Violations** | 0.16 | 0.16 | Same ✅ |
-| **Training Time** | 8.0s/iter | 8.5s/iter | +6% |
-
-**Conclusion**: Distributed mode achieves **identical performance** with minimal overhead.
-
----
-
-## Switching Between Modes
-
-### Option 1: Configuration File
-
-```yaml
-# centralized_config.yml
-centralized: true
-
-# distributed_config.yml
-centralized: false
-message_broker: 'in_memory'
-```
-
-### Option 2: Python Dict
-
-```python
-# Develop in centralized mode
-centralized_config = {'centralized': True, ...}
-env = MultiAgentMicrogrids(centralized_config)
-# ... train algorithm ...
-
-# Validate in distributed mode
-distributed_config = {'centralized': False, 'message_broker': 'in_memory', ...}
-env = MultiAgentMicrogrids(distributed_config)
-# ... test with same policy ...
-```
-
-### Option 3: Command-Line Argument
-
-```bash
-# Train in centralized mode
-python examples/05_mappo_training.py --centralized
-
-# Test in distributed mode
-python examples/05_mappo_training.py  # defaults to distributed
-```
-
----
-
-## Recommended Workflow
-
-### Development Phase
-
-1. **Start centralized**: Fast iteration, full observability
-2. **Develop algorithm**: Focus on MARL techniques
-3. **Achieve baseline**: Get good performance
-
-### Validation Phase
-
-4. **Switch to distributed**: Same environment, just change config
-5. **Test performance**: Should match centralized results
-6. **Debug if needed**: Check message flow, timing
-
-### Deployment Phase
-
-7. **Deploy with Kafka**: Replace `InMemoryBroker` with `KafkaBroker`
-8. **Distributed hardware**: Run agents on separate machines
-9. **Connect to SCADA**: Replace PandaPower with real sensors
-
----
-
-## Advanced: Hybrid Mode
-
-You can mix centralized and distributed elements:
-
-```python
-config = {
-    'microgrids': [
-        {'name': 'MG1', 'centralized': True},   # Centralized control
-        {'name': 'MG2', 'centralized': False},  # Distributed control
-    ],
-    'message_broker': 'in_memory'
-}
-```
-
-**Use case**: Compare centralized vs distributed agents in same simulation.
-
----
-
-## Common Pitfalls
-
-### ❌ Assuming centralized results transfer directly
-
-**Issue**: Algorithms optimized for full observability may not work with partial observability.
-
-**Solution**: Test in distributed mode early, adjust algorithm if needed.
-
-### ❌ Ignoring communication overhead
-
-**Issue**: Real systems have latency, message loss.
-
-**Solution**: Add delays, simulate packet loss in distributed mode.
-
-### ❌ Not validating scalability
-
-**Issue**: Algorithms that work with 3 agents may not scale to 100.
-
-**Solution**: Test with increasing agent counts in distributed mode.
-
----
-
-## Next Steps
-
-- **Configuration Guide**: Learn all config options in [Configuration](configuration.md)
-- **Getting Started**: Try both modes in [Getting Started Tutorial](../getting_started.md)
-- **Message Broker**: Deep dive into message flow in [Architecture: Message Broker](../architecture/message_broker.md)
-
----
-
-## FAQ
-
-**Q: Can I train in distributed mode?**
-A: Yes! Training works in both modes. Centralized is faster but distributed is more realistic.
-
-**Q: Do I need to change my RL algorithm?**
-A: No. The PettingZoo interface is identical in both modes.
-
-**Q: How do I deploy to real hardware?**
-A: Train in either mode, then deploy in distributed mode with Kafka + real SCADA data.
-
-**Q: What if performance differs between modes?**
-A: It shouldn't (see our results). If it does, check for bugs in message handling or timing.

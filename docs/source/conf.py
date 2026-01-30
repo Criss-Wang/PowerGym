@@ -6,16 +6,19 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = 'PowerGrid'
-copyright = '2025, Zhenlin Wang'
-author = 'Zhenlin Wang'
-release = 'v2.0.3'
+project = 'HERON'
+copyright = '2025, Hepeng Li, Zhenlin Wang'
+author = 'Hepeng Li, Zhenlin Wang'
+release = 'v0.1.0'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 import os
 import sys
-sys.path.insert(0, os.path.abspath('../..'))
+
+# Add paths for autodoc to find modules
+sys.path.insert(0, os.path.abspath('../..'))  # heron package
+sys.path.insert(0, os.path.abspath('../../case_studies/power'))  # powergrid package
 
 
 extensions = [
@@ -37,7 +40,7 @@ source_suffix = {
     '.md': 'markdown',
 }
 
-templates_path = ['_templates']
+# templates_path = ['_templates']
 exclude_patterns = []
 
 
@@ -47,7 +50,7 @@ exclude_patterns = []
 html_theme = 'pydata_sphinx_theme'
 html_theme_options = {
     "logo": {
-        "text": "PowerGrid 2.0",
+        "text": "HERON",
     },
     "navbar_start": ["navbar-logo"],
     "navbar_center": ["navbar-nav"],  # Show navbar items
@@ -55,9 +58,10 @@ html_theme_options = {
     "navbar_align": "left",
     "primary_sidebar_end": [],
     "secondary_sidebar_items": ["page-toc"],
-    "show_toc_level": 2,
-    "navigation_depth": 4,
-    "collapse_navigation": False,
+    # "show_toc_level": 2,
+    "navigation_depth": 2,
+    "collapse_navigation": True,  # False enables expand/collapse functionality
+    "show_nav_level": 0,  # Show only top level initially, expand on click
     "header_links_before_dropdown": 10,  # Show all items, no dropdown
     "icon_links": [
         {
@@ -69,9 +73,9 @@ html_theme_options = {
     ],
 }
 
-# Force global toctree in sidebar on all pages (like Ray)
+# Use custom global toctree sidebar
 html_sidebars = {
-    "**": ["main-sidebar"]
+    "**": ["sidebar-nav-bs", "sidebar-ethical-ads"]
 }
 
 html_static_path = ['_static']
