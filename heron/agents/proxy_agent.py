@@ -12,10 +12,10 @@ Usage Pattern (Option A - Synchronous):
     # Setup
     proxy = ProxyAgent(
         env_id="env_1",
-        subordinate_agents=["battery_1", "solar_1"],
+        subordinate_agents=["sensor_1", "controller_1"],
         visibility_rules={
-            "battery_1": ["SoC", "Power"],
-            "solar_1": ["Irradiance"],
+            "sensor_1": ["reading", "status"],
+            "controller_1": ["measurement"],
         }
     )
 
@@ -23,7 +23,7 @@ Usage Pattern (Option A - Synchronous):
     proxy.update_state(env_state)  # Cache latest state
 
     # Agents request state through proxy
-    state = proxy.get_state_for_agent("battery_1", requestor_level=1)
+    state = proxy.get_state_for_agent("sensor_1", requestor_level=1)
 
 Usage Pattern (Option B - Event-Driven):
     # Agents call get_state_for_agent() in their tick() method

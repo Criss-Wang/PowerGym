@@ -225,11 +225,20 @@ class Action:
         """Set action from various formats.
 
         Supported formats:
+            - Action object (copies c and d values)
             - dict with optional keys "c", "d"
             - scalar int for pure discrete (dim_c == 0, dim_d > 0)
             - 1D array-like [c..., d...] of length dim_c + dim_d
             - keyword args: c=..., d=...
         """
+        # Case 0: Another Action object - copy its values
+        if isinstance(action, Action):
+            if self.dim_c and action.dim_c:
+                self.c[...] = action.c[:self.dim_c]
+            if self.dim_d and action.dim_d:
+                self.d[...] = action.d[:self.dim_d]
+            return self.clip()
+
         # Normalize kwargs into action object
         if action is None and (c is not None or d is not None):
             payload: Dict[str, Any] = {}

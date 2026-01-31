@@ -168,14 +168,10 @@ class CoordinatorAgent(Agent):
         # Global info aggregation (override in subclasses if needed)
         global_info = global_state or {}
 
-        # Message aggregation (override in subclasses if needed)
-        messages = []
-
         return Observation(
             timestamp=self._timestep,
             local=local_observation,
             global_info=global_info,
-            messages=messages,
         )
 
     def _build_local_observation(
@@ -381,6 +377,11 @@ class CoordinatorAgent(Agent):
         if isinstance(action, dict):
             # Already per-agent dict
             return action
+
+        # Handle Action objects by converting to vector
+        from heron.core.action import Action
+        if isinstance(action, Action):
+            action = action.vector()
 
         # Assume flat array, split by agent action dimensions
         action_arr = np.asarray(action)

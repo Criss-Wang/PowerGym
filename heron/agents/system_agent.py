@@ -150,7 +150,6 @@ class SystemAgent(Agent):
             timestamp=self._timestep,
             local={"coordinator_obs": coordinator_obs},
             global_info=global_state or {},
-            messages=[],
         )
 
     def act(self, observation: Observation, upstream_action: Any = None) -> None:

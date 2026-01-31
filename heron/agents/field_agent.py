@@ -249,12 +249,12 @@ class FieldAgent(Agent):
         _handle_coordinator_action()/_handle_local_action() instead
         of calling this method.
 
-        Routes to centralized or decentralized action computation based on
+        Routes to coordinator-directed or self-directed action computation based on
         whether upstream_action is provided.
 
         Args:
             observation: Structured observation
-            upstream_action: Optional action from coordinator (centralized mode)
+            upstream_action: Optional action from coordinator (coordinator-directed)
         """
         if upstream_action is not None:
             # Coordinator-directed: use the action provided by upstream coordinator
@@ -274,11 +274,11 @@ class FieldAgent(Agent):
         upstream_action: Any,
         observation: Observation
     ) -> Any:
-        """Handle centralized action from coordinator. [Both Modes]
+        """Handle coordinator-directed action. [Both Modes]
 
         Args:
             upstream_action: Action assigned by coordinator
-            observation: Current observation (unused in pure centralized mode)
+            observation: Current observation (unused in coordinator-directed mode)
 
         Returns:
             Action to execute (passthrough of upstream_action)
@@ -286,7 +286,7 @@ class FieldAgent(Agent):
         return upstream_action
 
     def _handle_local_action(self, observation: Observation) -> Any:
-        """Handle decentralized action computation using local policy. [Both Modes]
+        """Handle self-directed action computation using local policy. [Both Modes]
 
         Args:
             observation: Current observation including messages
@@ -295,7 +295,7 @@ class FieldAgent(Agent):
             Action computed by local policy
 
         Raises:
-            ValueError: If no policy is defined for decentralized mode
+            ValueError: If no policy is defined for self-directed mode
         """
         if self.policy is None:
             raise ValueError(

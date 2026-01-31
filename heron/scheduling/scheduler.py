@@ -24,8 +24,8 @@ class EventScheduler:
         scheduler = EventScheduler()
 
         # Register agents with tick intervals
-        scheduler.register_agent("battery_1", tick_interval=1.0)
-        scheduler.register_agent("solar_1", tick_interval=5.0)
+        scheduler.register_agent("sensor_1", tick_interval=1.0)
+        scheduler.register_agent("controller_1", tick_interval=5.0)
 
         # Register handlers
         scheduler.set_handler(EventType.AGENT_TICK, agent_tick_handler)
