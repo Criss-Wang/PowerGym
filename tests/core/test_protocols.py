@@ -42,7 +42,6 @@ class MockAgent(Agent):
         self.action = Action()
         self.action.dim_c = action_dim_c
         self.action.dim_d = action_dim_d
-        self.mailbox = []
         self.last_action = None
 
     def observe(self, global_state=None, *args, **kwargs):
@@ -51,10 +50,6 @@ class MockAgent(Agent):
     def act(self, observation, upstream_action=None, *args, **kwargs):
         self.last_action = upstream_action
         return np.array([1.0])
-
-    def receive_message(self, message):
-        """Receive a message and add to mailbox."""
-        self.mailbox.append(message)
 
 
 class TestProtocol:

@@ -15,7 +15,7 @@ from typing import Dict, Any
 
 from powergrid.agents.proxy_agent import ProxyAgent, PROXY_LEVEL
 from heron.messaging.base import Message, MessageType, ChannelManager
-from heron.messaging.memory import InMemoryBroker
+from heron.messaging.in_memory_broker import InMemoryBroker
 
 
 # =============================================================================
@@ -672,7 +672,6 @@ class TestProxyAgentLifecycle:
 
         assert obs.local == {}
         assert obs.global_info == {}
-        assert obs.messages == []
 
     def test_act_does_nothing(self):
         """Test act does nothing (proxy doesn't take actions)."""
@@ -683,8 +682,8 @@ class TestProxyAgentLifecycle:
             env_id="env_0"
         )
 
-        from heron.agents.base import Observation
-        obs = Observation(timestamp=0.0, local={}, global_info={}, messages=[])
+        from heron.core.observation import Observation
+        obs = Observation(timestamp=0.0, local={}, global_info={})
 
         result = proxy.act(obs)
         assert result is None

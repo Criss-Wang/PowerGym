@@ -1,93 +1,88 @@
-"""Proxy Agent for managing state distribution in distributed MARL.
+"""Proxy Agent for managing state distribution in MARL.
 
 The ProxyAgent acts as an intermediary between the environment and other agents,
 managing state updates and controlling information visibility.
 
 Key responsibilities:
-1. Receive state updates from the environment
-2. Cache the latest state
-3. Distribute state to other agents based on visibility rules
-4. Control what information each agent can access
+1. Cache state from the environment
+2. Apply visibility rules to filter state for each agent
+3. Provide state on-demand to requesting agents
 
-Usage Pattern:
+Usage Pattern (Option A - Synchronous):
     # Setup
     proxy = ProxyAgent(
-        message_broker=broker,
         env_id="env_1",
         subordinate_agents=["battery_1", "solar_1"],
         visibility_rules={
-            "battery_1": ["SoC", "Power"],  # Only see these features
+            "battery_1": ["SoC", "Power"],
             "solar_1": ["Irradiance"],
         }
     )
 
-    # In simulation loop
-    proxy.receive_state_from_environment()  # Get state from env
-    proxy.distribute_state_to_agents()       # Send filtered state to agents
+    # In env.step():
+    proxy.update_state(env_state)  # Cache latest state
 
-    # Agents request state through proxy (recommended pattern)
+    # Agents request state through proxy
     state = proxy.get_state_for_agent("battery_1", requestor_level=1)
+
+Usage Pattern (Option B - Event-Driven):
+    # Agents call get_state_for_agent() in their tick() method
+    # ProxyAgent applies obs_delay by returning historical state
 """
 
-from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from heron.agents.base import Agent, AgentID
-from heron.messaging.base import ChannelManager, Message, MessageBroker, MessageType
+from heron.agents.base import Agent
 from heron.core.observation import Observation
+from heron.utils.typing import AgentID
 
 if TYPE_CHECKING:
-    from heron.core.feature import FeatureProvider
     from heron.core.state import State
 
 
-PROXY_LEVEL = 3  # Level identifier for proxy-level agents (higher than coordinator)
+PROXY_LEVEL = 3  # Level identifier for proxy-level agents
 
 
 class ProxyAgent(Agent):
     """Proxy agent that manages state distribution.
 
     The ProxyAgent sits between the environment and other agents, acting as the
-    single source of truth for state information. All agents must retrieve
+    single source of truth for state information. All agents should retrieve
     state through the ProxyAgent rather than directly accessing the environment.
 
+    This enables:
+    - Visibility filtering based on agent level and configuration
+    - Historical state access for observation delays (Option B)
+    - Centralized state management
+
     Attributes:
-        message_broker: MessageBroker instance for communication
-        env_id: Environment ID for multi-environment isolation
         state_cache: Latest state received from environment
+        state_history: Historical states for delayed observations (Option B)
         visibility_rules: Dict mapping agent IDs to allowed state keys
         subordinate_agents: List of agent IDs that can request state from this proxy
-        result_channel_type: Channel type for receiving results from environment
     """
 
     def __init__(
         self,
         agent_id: AgentID = "proxy_agent",
-        message_broker: Optional[MessageBroker] = None,
         env_id: Optional[str] = None,
         subordinate_agents: Optional[List[AgentID]] = None,
         visibility_rules: Optional[Dict[AgentID, List[str]]] = None,
-        result_channel_type: str = "result",
+        history_length: int = 100,  # Number of timesteps to keep in history
     ):
         """Initialize proxy agent.
 
         Args:
             agent_id: Unique identifier for this proxy agent
-            message_broker: Message broker for communication
             env_id: Environment ID for multi-environment isolation
             subordinate_agents: List of agent IDs that can request state
             visibility_rules: Dict mapping agent IDs to allowed state keys.
                             If None, all agents see all state by default.
-            result_channel_type: Channel type for environment->proxy communication.
-                               Defaults to "result". Domains can customize this
-                               for domain-specific communication patterns.
+            history_length: Number of timesteps of history to maintain
         """
-        if message_broker is None:
-            raise ValueError("ProxyAgent requires a message broker for communication")
-
         super().__init__(
             agent_id=agent_id,
             level=PROXY_LEVEL,
-            message_broker=message_broker,
             upstream_id=None,  # Proxy has no upstream
             env_id=env_id,
             subordinates={},  # Proxy doesn't manage subordinates hierarchically
@@ -96,118 +91,67 @@ class ProxyAgent(Agent):
         self.subordinate_agents = subordinate_agents or []
         self.visibility_rules = visibility_rules or {}
         self.state_cache: Dict[str, Any] = {}
-        self.result_channel_type = result_channel_type
+        self.state_history: List[Dict[str, Any]] = []
+        self.history_length = history_length
 
-        # Setup channels for communication
-        self._setup_proxy_channels()
+    # ============================================
+    # State Management (Both Modes)
+    # ============================================
 
-    def _setup_proxy_channels(self) -> None:
-        """Setup message channels for proxy agent communication.
+    def update_state(self, state: Dict[str, Any]) -> None:
+        """Update cached state from environment. [Both Modes]
 
-        Creates channels for:
-        1. Receiving state from environment
-        2. Sending state to subordinate agents
+        Should be called by the environment after each step.
+
+        Args:
+            state: Current environment state
         """
-        if not self.message_broker:
-            return
+        self.state_cache = state.copy()
 
-        # Channel for receiving state from environment
-        env_to_proxy_channel = ChannelManager.custom_channel(
-            self.result_channel_type,
-            self.env_id,
-            self.agent_id
-        )
-        self.message_broker.create_channel(env_to_proxy_channel)
+        # Add to history for delayed observations
+        self.state_history.append({
+            'timestamp': self._timestep,
+            'state': state.copy()
+        })
 
-        # Channels for sending state to each subordinate agent
-        for agent_id in self.subordinate_agents:
-            proxy_to_agent_channel = ChannelManager.info_channel(
-                self.agent_id,
-                agent_id,
-                self.env_id
-            )
-            self.message_broker.create_channel(proxy_to_agent_channel)
+        # Trim history if needed
+        if len(self.state_history) > self.history_length:
+            self.state_history = self.state_history[-self.history_length:]
 
-    def receive_state_from_environment(self) -> Optional[Dict[str, Any]]:
-        """Receive and cache state from environment.
+    # ============================================
+    # Event-Driven Execution (Option B - Testing)
+    # ============================================
+
+    def get_state_at_time(self, target_time: float) -> Optional[Dict[str, Any]]:
+        """Get state from a specific time for delayed observations. [Testing Only]
+
+        Used in Option B to simulate observation delays.
+
+        Args:
+            target_time: Timestamp to retrieve state for
 
         Returns:
-            State payload or None if no message available
+            State at or before target_time, or None if not available
         """
-        if not self.message_broker or not self.env_id:
-            return None
-
-        channel = ChannelManager.custom_channel(
-            self.result_channel_type,
-            self.env_id,
-            self.agent_id
-        )
-        messages = self.message_broker.consume(
-            channel,
-            recipient_id=self.agent_id,
-            env_id=self.env_id,
-            clear=True
-        )
-
-        if messages:
-            # Cache the most recent state
-            self.state_cache = messages[-1].payload
+        if not self.state_history:
             return self.state_cache
 
-        return None
+        # Find the most recent state at or before target_time
+        for entry in reversed(self.state_history):
+            if entry['timestamp'] <= target_time:
+                return entry['state']
 
-    def distribute_state_to_agents(self) -> None:
-        """Distribute cached state to all subordinate agents.
+        # If target_time is before all history, return oldest
+        return self.state_history[0]['state'] if self.state_history else self.state_cache
 
-        Sends the appropriate state information to each agent based on
-        visibility rules. This should be called after receiving updated state
-        from the environment.
-
-        The environment sends an aggregated state with structure:
-        {
-            'converged': bool,  # or other status fields
-            'agents': {
-                'agent_id_1': {...agent1_specific_state...},
-                'agent_id_2': {...agent2_specific_state...},
-                ...
-            }
-        }
-
-        The ProxyAgent extracts each agent's specific state and sends it individually.
-        """
-        if not self.message_broker or not self.state_cache:
-            return
-
-        # Extract agent-specific states from aggregated state
-        agents_state = self.state_cache.get('agents', {})
-
-        for agent_id in self.subordinate_agents:
-            # Get agent-specific state from aggregated state
-            agent_state = agents_state.get(agent_id, {})
-
-            # Apply visibility filtering
-            filtered_state = self._filter_state_for_agent(agent_id, agent_state)
-
-            # Send state to agent
-            channel = ChannelManager.info_channel(
-                self.agent_id,
-                agent_id,
-                self.env_id
-            )
-            message = Message(
-                env_id=self.env_id,
-                sender_id=self.agent_id,
-                recipient_id=agent_id,
-                timestamp=self._timestep,
-                message_type=MessageType.INFO,
-                payload=filtered_state
-            )
-            self.message_broker.publish(channel, message)
+    # ============================================
+    # State Filtering (Both Modes)
+    # ============================================
 
     def _filter_state_for_agent(
         self, agent_id: AgentID, agent_state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Filter state based on visibility rules for a specific agent.
+        """Filter state based on visibility rules for a specific agent. [Both Modes]
 
         Args:
             agent_id: Agent requesting the state
@@ -218,7 +162,7 @@ class ProxyAgent(Agent):
         """
         if agent_id not in self.visibility_rules:
             # No specific rules, return full agent state
-            return agent_state.copy()
+            return agent_state.copy() if agent_state else {}
 
         allowed_keys = self.visibility_rules[agent_id]
         filtered_state = {}
@@ -230,9 +174,7 @@ class ProxyAgent(Agent):
         return filtered_state
 
     def get_latest_state_for_agent(self, agent_id: AgentID) -> Dict[str, Any]:
-        """Get the latest cached state for a specific agent.
-
-        This method can be called by agents to retrieve state on-demand.
+        """Get the latest cached state for a specific agent. [Both Modes]
 
         Args:
             agent_id: Agent requesting the state
@@ -251,8 +193,9 @@ class ProxyAgent(Agent):
         owner_id: Optional[AgentID] = None,
         owner_level: Optional[int] = None,
         state: Optional["State"] = None,
+        at_time: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Get filtered state respecting FeatureProvider visibility rules.
+        """Get filtered state respecting FeatureProvider visibility rules. [Both Modes]
 
         This is the recommended method for agents to access state. It integrates
         with FeatureProvider.is_observable_by() for fine-grained visibility control.
@@ -263,6 +206,7 @@ class ProxyAgent(Agent):
             owner_id: ID of the agent whose state is being requested (defaults to agent_id)
             owner_level: Hierarchy level of owner (defaults to requestor_level)
             state: Optional State object with FeatureProviders for visibility checking
+            at_time: Optional timestamp for delayed observations (Option B - Testing)
 
         Returns:
             Filtered state dict based on visibility rules
@@ -272,8 +216,13 @@ class ProxyAgent(Agent):
         if owner_level is None:
             owner_level = requestor_level
 
-        # Get base state from cache
-        agents_state = self.state_cache.get('agents', {})
+        # Get base state (from history if time specified, otherwise current)
+        if at_time is not None:
+            base_state = self.get_state_at_time(at_time) or {}
+        else:
+            base_state = self.state_cache
+
+        agents_state = base_state.get('agents', {})
         agent_state = agents_state.get(owner_id, {})
 
         # Apply key-based visibility rules first
@@ -321,27 +270,25 @@ class ProxyAgent(Agent):
                 observable.append(feature.feature_name)
         return observable
 
+    # ============================================
+    # Agent Registration (Both Modes)
+    # ============================================
+
     def register_subordinate(self, agent_id: AgentID) -> None:
-        """Register a new subordinate agent.
+        """Register a new subordinate agent. [Both Modes]
 
         Args:
             agent_id: Agent ID to register
         """
         if agent_id not in self.subordinate_agents:
             self.subordinate_agents.append(agent_id)
-            # Create channel for this agent
-            if self.message_broker:
-                channel = ChannelManager.info_channel(
-                    self.agent_id, agent_id, self.env_id
-                )
-                self.message_broker.create_channel(channel)
 
     def set_visibility_rules(
         self,
         agent_id: AgentID,
         allowed_keys: List[str],
     ) -> None:
-        """Set visibility rules for an agent.
+        """Set visibility rules for an agent. [Both Modes]
 
         Args:
             agent_id: Agent to set rules for
@@ -350,28 +297,25 @@ class ProxyAgent(Agent):
         self.visibility_rules[agent_id] = allowed_keys
 
     # ============================================
-    # Required Abstract Methods (Not used by ProxyAgent)
+    # Required Abstract Methods (Both Modes)
     # ============================================
 
     def observe(
         self, global_state: Optional[Dict[str, Any]] = None, *args, **kwargs
     ) -> Observation:
-        """ProxyAgent doesn't need to observe in the traditional sense.
+        """ProxyAgent doesn't observe in the traditional sense. [Both Modes]
+
+        It receives state updates via update_state() instead.
 
         Returns:
             Empty observation
         """
-        return Observation(
-            timestamp=self._timestep,
-            local={},
-            global_info={},
-            messages=[]
-        )
+        return Observation(timestamp=self._timestep)
 
-    def act(self, observation: Observation, *args, **kwargs) -> Any:
-        """ProxyAgent doesn't take actions in the traditional sense.
+    def act(self, observation: Observation, *args, **kwargs) -> None:
+        """ProxyAgent doesn't take actions.
 
-        Instead, it manages state distribution.
+        It manages state distribution instead.
         """
         pass
 
@@ -384,6 +328,7 @@ class ProxyAgent(Agent):
         """
         super().reset(seed=seed)
         self.state_cache = {}
+        self.state_history = []
 
     def __repr__(self) -> str:
         num_subordinates = len(self.subordinate_agents)

@@ -133,7 +133,7 @@ class Action:
         self._validate_and_prepare()
         self._space = None
 
-    def sample(self, seed: int = None) -> None:
+    def sample(self, seed: Optional[int] = None) -> "Action":
         """Sample random action from the action space.
 
         Continuous part is sampled according to `range`.
@@ -141,6 +141,9 @@ class Action:
 
         Args:
             seed: Optional random seed
+
+        Returns:
+            self for chaining
         """
         if seed is not None:
             self.space.seed(seed)
@@ -158,7 +161,7 @@ class Action:
             if self.dim_d:
                 self.d[...] = action
 
-        return action
+        return self
 
     def reset(
         self,
@@ -349,6 +352,18 @@ class Action:
             return cat_f32(parts)
         return self.c.astype(np.float32, copy=True)
 
+    def copy(self) -> "Action":
+        """Create a deep copy of this action."""
+        return Action(
+            c=self.c.copy(),
+            d=self.d.copy(),
+            dim_c=self.dim_c,
+            dim_d=self.dim_d,
+            range=self.range.copy() if self.range is not None else None,
+            ncats=list(self.ncats),
+            _space=self._space,
+        )
+
     @classmethod
     def from_vector(
         cls,
@@ -368,3 +383,73 @@ class Action:
         return cls(
             c=c, d=d, dim_c=dim_c, dim_d=dim_d, ncats=ncats, range=range,
         )
+
+    @classmethod
+    def from_gym_space(cls, space: gym.Space) -> "Action":
+        """Create an Action from a Gymnasium space.
+
+        Derives action specs (dim_c, dim_d, ncats, range) from the space.
+
+        Args:
+            space: Gymnasium action space (Box, Discrete, MultiDiscrete, or Dict)
+
+        Returns:
+            Action instance configured for the given space
+
+        Raises:
+            TypeError: If space type is not supported
+        """
+        action = cls()
+
+        if isinstance(space, Box):
+            action.set_specs(
+                dim_c=int(np.prod(space.shape)),
+                dim_d=0,
+                ncats=[],
+                range=(space.low.ravel().astype(np.float32),
+                       space.high.ravel().astype(np.float32)),
+            )
+        elif isinstance(space, Discrete):
+            action.set_specs(
+                dim_c=0,
+                dim_d=1,
+                ncats=[int(space.n)],
+            )
+        elif isinstance(space, MultiDiscrete):
+            action.set_specs(
+                dim_c=0,
+                dim_d=len(space.nvec),
+                ncats=[int(n) for n in space.nvec],
+            )
+        elif isinstance(space, SpaceDict):
+            # Mixed continuous/discrete
+            dim_c = 0
+            dim_d = 0
+            ncats = []
+            action_range = None
+
+            if "c" in space.spaces and isinstance(space.spaces["c"], Box):
+                c_space = space.spaces["c"]
+                dim_c = int(np.prod(c_space.shape))
+                action_range = (c_space.low.ravel().astype(np.float32),
+                                c_space.high.ravel().astype(np.float32))
+
+            if "d" in space.spaces:
+                d_space = space.spaces["d"]
+                if isinstance(d_space, Discrete):
+                    dim_d = 1
+                    ncats = [int(d_space.n)]
+                elif isinstance(d_space, MultiDiscrete):
+                    dim_d = len(d_space.nvec)
+                    ncats = [int(n) for n in d_space.nvec]
+
+            action.set_specs(
+                dim_c=dim_c,
+                dim_d=dim_d,
+                ncats=ncats,
+                range=action_range,
+            )
+        else:
+            raise TypeError(f"Unsupported action space type: {type(space).__name__}")
+
+        return action

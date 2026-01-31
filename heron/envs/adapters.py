@@ -3,18 +3,31 @@
 This module provides adapters that combine HeronEnvCore with different
 environment interfaces (PettingZoo, RLlib, etc.).
 
+Execution Modes:
+    - Option A (Training): Synchronous step() with CTDE pattern
+      All agents step together, coordinator aggregates observations,
+      centralized policy computes joint action, coordinator distributes.
+
+    - Option B (Testing): Event-driven via EventScheduler
+      Each agent ticks independently at its own interval with configurable
+      observation/action/message delays. Tests policy robustness.
+
 Usage:
     # For PettingZoo ParallelEnv compatibility:
     class MyEnv(PettingZooParallelEnv):
         def __init__(self, config):
-            super().__init__(env_id="my_env", distributed=config.get("distributed", False))
-            # ... setup agents, etc.
+            super().__init__(env_id="my_env")
+            # Build agents and system agent
+            self._build_agents()
+            # For Option A: use step() directly
+            # For Option B: call setup_event_driven() then run_event_driven()
 
     # For RLlib MultiAgentEnv compatibility:
     class MyEnv(RLlibMultiAgentEnv):
         def __init__(self, config):
-            super().__init__(env_id="my_env", distributed=config.get("distributed", False))
-            # ... setup agents, etc.
+            super().__init__(env_id="my_env")
+            # Build agents and system agent
+            self._build_agents()
 """
 
 from abc import abstractmethod
@@ -52,32 +65,51 @@ class PettingZooParallelEnv(ParallelEnv, HeronEnvCore):
     ParallelEnv interface, suitable for multi-agent environments where
     all agents act simultaneously.
 
+    Execution Modes:
+        Option A (Training - Synchronous):
+            1. Call reset() to initialize
+            2. Call step(actions) which internally:
+               - Collects observations via get_observations()
+               - Applies actions via apply_actions()
+               - Runs physics/simulation
+               - Returns (obs, rewards, terminated, truncated, infos)
+
+        Option B (Testing - Event-Driven):
+            1. Call reset() to initialize
+            2. Call setup_event_driven() to create scheduler
+            3. Call setup_default_handlers() with callbacks
+            4. Call run_event_driven(t_end) to run simulation
+
+        With SystemAgent:
+            1. Build SystemAgent with coordinators
+            2. Call set_system_agent(system_agent)
+            3. Use step_with_system_agent() or run_event_driven_with_system_agent()
+
     Subclasses must implement:
         - _build_agents(): Create and return agent dictionary
         - _get_obs(): Get observations for all agents
-        - _reward_and_safety(): Compute rewards and safety metrics
-        - step(): Execute environment step (can call super().step() for common logic)
-        - reset(): Reset environment (can call super().reset() for common logic)
+        - step(): Execute environment step
+        - reset(): Reset environment
 
     Attributes:
         agents: List of active agent IDs (PettingZoo API)
         possible_agents: List of all possible agent IDs (PettingZoo API)
         action_spaces: Dictionary mapping agent IDs to action spaces
         observation_spaces: Dictionary mapping agent IDs to observation spaces
+        system_agent: Optional SystemAgent for hierarchical management
+        proxy_agent: Optional ProxyAgent for state distribution
     """
 
     def __init__(
         self,
         env_id: Optional[str] = None,
         message_broker: Optional[MessageBroker] = None,
-        distributed: bool = False,
     ):
         """Initialize PettingZoo-compatible HERON environment.
 
         Args:
             env_id: Environment identifier (auto-generated if not provided)
-            message_broker: Optional message broker for distributed mode
-            distributed: If True, use distributed execution mode
+            message_broker: Optional MessageBroker (defaults to InMemoryBroker)
         """
         if not PETTINGZOO_AVAILABLE:
             raise ImportError(
@@ -87,7 +119,8 @@ class PettingZooParallelEnv(ParallelEnv, HeronEnvCore):
 
         ParallelEnv.__init__(self)
         self._init_heron_core(
-            env_id=env_id, message_broker=message_broker, distributed=distributed
+            env_id=env_id,
+            message_broker=message_broker,
         )
 
         # PettingZoo required attributes (initialized in _init_spaces)
@@ -97,6 +130,10 @@ class PettingZooParallelEnv(ParallelEnv, HeronEnvCore):
         # These will be set after agents are built
         self._possible_agents: List[AgentID] = []
         self._agents: List[AgentID] = []
+
+        # SystemAgent integration (set via set_system_agent)
+        self._system_agent = None
+        self._proxy_agent = None
 
     @property
     def possible_agents(self) -> List[AgentID]:
@@ -168,10 +205,27 @@ class RLlibMultiAgentEnv(RLlibBaseEnv, HeronEnvCore):
     This adapter combines HeronEnvCore functionality with RLlib's
     MultiAgentEnv interface, suitable for training with Ray RLlib.
 
+    Execution Modes:
+        Option A (Training - Synchronous):
+            Standard RLlib training loop using step() and reset().
+            This is the primary use case for RLlib environments.
+
+        Option B (Testing - Event-Driven):
+            After training, test policies with realistic timing:
+            1. Load trained policy
+            2. Call setup_event_driven() to create scheduler
+            3. Call setup_default_handlers() with policy inference callback
+            4. Call run_event_driven(t_end) to run simulation
+
+        With SystemAgent:
+            1. Build SystemAgent with coordinators
+            2. Call set_system_agent(system_agent)
+            3. Use step_with_system_agent() for training
+            4. Use run_event_driven_with_system_agent() for testing
+
     Subclasses must implement:
         - _build_agents(): Create and return agent dictionary
         - _get_obs(): Get observations for all agents
-        - _reward_and_safety(): Compute rewards and safety metrics
         - step(): Execute environment step
         - reset(): Reset environment
 
@@ -180,20 +234,22 @@ class RLlibMultiAgentEnv(RLlibBaseEnv, HeronEnvCore):
         - step() returns: (obs_dict, reward_dict, terminated_dict, truncated_dict, info_dict)
         - terminated_dict and truncated_dict must include "__all__" key
         - reset() returns: (obs_dict, info_dict)
+
+    Attributes:
+        system_agent: Optional SystemAgent for hierarchical management
+        proxy_agent: Optional ProxyAgent for state distribution
     """
 
     def __init__(
         self,
         env_id: Optional[str] = None,
         message_broker: Optional[MessageBroker] = None,
-        distributed: bool = False,
     ):
         """Initialize RLlib-compatible HERON environment.
 
         Args:
             env_id: Environment identifier (auto-generated if not provided)
-            message_broker: Optional message broker for distributed mode
-            distributed: If True, use distributed execution mode
+            message_broker: Optional MessageBroker (defaults to InMemoryBroker)
         """
         if not RLLIB_AVAILABLE:
             raise ImportError(
@@ -203,13 +259,18 @@ class RLlibMultiAgentEnv(RLlibBaseEnv, HeronEnvCore):
 
         RLlibBaseEnv.__init__(self)
         self._init_heron_core(
-            env_id=env_id, message_broker=message_broker, distributed=distributed
+            env_id=env_id,
+            message_broker=message_broker,
         )
 
         # RLlib spaces (initialized in _init_spaces)
         self._action_spaces: Dict[AgentID, gym.Space] = {}
         self._observation_spaces: Dict[AgentID, gym.Space] = {}
         self._agent_ids: List[AgentID] = []
+
+        # SystemAgent integration (set via set_system_agent)
+        self._system_agent = None
+        self._proxy_agent = None
 
     def observation_space_sample(self, agent_ids: Optional[List[AgentID]] = None) -> Dict[AgentID, Any]:
         """Sample observations for given agents.

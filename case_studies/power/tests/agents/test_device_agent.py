@@ -252,7 +252,6 @@ class TestDeviceAgent:
         agent._P = 10.0
         agent.cost = 100.0
         agent._timestep = 5.0
-        agent.mailbox.append("message")
 
         # Reset
         agent.reset()
@@ -260,7 +259,6 @@ class TestDeviceAgent:
         assert agent._P == 0.0
         assert agent.cost == 0.0
         assert agent._timestep == 0.0
-        assert len(agent.mailbox) == 0
 
     def test_observe(self):
         """Test observe method."""

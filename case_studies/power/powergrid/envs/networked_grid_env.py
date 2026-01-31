@@ -19,7 +19,7 @@ from powergrid.agents.proxy_agent import ProxyAgent
 from heron.envs.adapters import PettingZooParallelEnv
 from heron.protocols.base import NoProtocol, Protocol
 from heron.messaging.base import ChannelManager, Message, MessageBroker, MessageType
-from heron.messaging.memory import InMemoryBroker
+from heron.messaging.in_memory_broker import InMemoryBroker
 from heron.utils.typing import AgentID
 
 

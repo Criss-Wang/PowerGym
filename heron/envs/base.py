@@ -4,7 +4,7 @@ This module defines the base environment classes that domain-specific
 implementations should extend.
 
 Architecture:
-    HeronEnvCore (Mixin) - Core HERON functionality (agent mgmt, messaging)
+    HeronEnvCore (Mixin) - Core HERON functionality (agent mgmt, event scheduling)
     │
     ├── BaseEnv (gym.Env + HeronEnvCore) - Single-agent Gymnasium interface
     │
@@ -13,45 +13,57 @@ Architecture:
     │   └── RLlibMultiAgentEnv - RLlib MultiAgentEnv interface
 
 Execution Modes:
-    1. Synchronous (default): All agents step together via step() method
-    2. Distributed (async): Hierarchical message-based via step_distributed()
-    3. Event-driven: Priority-queue scheduling via run_event_driven()
+    1. Synchronous (Option A - Training): All agents step together via step()
+       - CTDE pattern: centralized training, decentralized execution
+       - Coordinator aggregates observations, computes joint action, distributes
+
+    2. Event-driven (Option B - Testing): Priority-queue scheduling via run_event_driven()
+       - Each agent ticks independently at its own interval
+       - Configurable observation/action/message delays
+       - Tests policy robustness to realistic timing constraints
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 import uuid
-import asyncio
 
 import gymnasium as gym
-import numpy as np
 
 from heron.agents.base import Agent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.core.observation import Observation
-from heron.messaging.base import MessageBroker
+from heron.messaging.base import MessageBroker, ChannelManager, Message, MessageType
 from heron.utils.typing import AgentID
 
 if TYPE_CHECKING:
     from heron.scheduling import EventScheduler, Event
+    from heron.agents.system_agent import SystemAgent
+    from heron.agents.proxy_agent import ProxyAgent
 
 
 class HeronEnvCore:
     """Core mixin providing HERON-specific functionality.
 
-    This mixin provides agent management, message broker integration,
-    and distributed execution support. It does NOT inherit from any
-    environment interface, allowing composition with different backends.
+    This mixin provides agent management, event-driven execution, and message-based
+    communication support. It does NOT inherit from any environment interface,
+    allowing composition with different backends (Gymnasium, PettingZoo, RLlib, etc.).
 
     Note: Internal attributes use underscore prefix (_heron_agents, _heron_coordinators)
     to avoid conflicts with framework-specific properties like PettingZoo's `agents`.
     Access via heron_agents/heron_coordinators properties or get_heron_agent() method.
 
+    Execution Modes:
+        - Option A (Training): Synchronous step() with direct method calls
+        - Option B (Testing): Event-driven via EventScheduler with timing delays
+
+    Messaging:
+        Message broker is always available (defaults to InMemoryBroker).
+        Agents can use send_message/receive_messages for pub/sub communication.
+
     Attributes:
         env_id: Unique environment identifier
-        message_broker: Optional message broker for distributed execution
-        distributed: Whether to use distributed execution mode
         scheduler: Optional EventScheduler for event-driven execution
+        message_broker: MessageBroker for agent communication (always available)
         heron_agents: Dictionary mapping agent IDs to Agent instances
         heron_coordinators: Dictionary mapping coordinator IDs to CoordinatorAgent instances
     """
@@ -59,9 +71,8 @@ class HeronEnvCore:
     def _init_heron_core(
         self,
         env_id: Optional[str] = None,
-        message_broker: Optional[MessageBroker] = None,
-        distributed: bool = False,
         scheduler: Optional["EventScheduler"] = None,
+        message_broker: Optional["MessageBroker"] = None,
     ) -> None:
         """Initialize HERON core functionality.
 
@@ -69,15 +80,19 @@ class HeronEnvCore:
 
         Args:
             env_id: Environment identifier (auto-generated if not provided)
-            message_broker: Optional message broker for distributed mode
-            distributed: If True, use distributed execution mode
             scheduler: Optional EventScheduler for event-driven execution
+            message_broker: Optional MessageBroker (defaults to InMemoryBroker)
         """
         self.env_id = env_id or f"env_{uuid.uuid4().hex[:8]}"
-        self.message_broker = message_broker
-        self.distributed = distributed
         self.scheduler = scheduler
         self._timestep = 0
+
+        # Message broker (always available, defaults to InMemoryBroker)
+        if message_broker is None:
+            from heron.messaging.in_memory_broker import InMemoryBroker
+            self.message_broker = InMemoryBroker()
+        else:
+            self.message_broker = message_broker
 
         # Use underscore prefix to avoid conflicts with framework properties
         # (e.g., PettingZoo's `agents` property)
@@ -124,10 +139,33 @@ class HeronEnvCore:
         for agent in agents:
             self.register_agent(agent)
 
+    def configure_agents_for_distributed(self) -> None:
+        """Configure all registered agents with the message broker. [Distributed Mode]
+
+        Sets the message broker reference on all agents so they can use
+        message-based communication. Call this after registering agents
+        and before starting the simulation.
+
+        Raises:
+            RuntimeError: If message broker is not configured
+        """
+        if self.message_broker is None:
+            raise RuntimeError("Message broker not configured.")
+
+        for agent in self._heron_agents.values():
+            agent.set_message_broker(self.message_broker)
+            # Also set env_id if not already set
+            if agent.env_id is None:
+                agent.env_id = self.env_id
+
+    # ============================================
+    # Synchronous Execution (Option A - Training)
+    # ============================================
+
     def get_observations(
         self, global_state: Optional[Dict[str, Any]] = None
     ) -> Dict[AgentID, Observation]:
-        """Collect observations from all agents.
+        """Collect observations from all agents. [Training Only]
 
         Args:
             global_state: Optional global state to pass to agents
@@ -145,7 +183,7 @@ class HeronEnvCore:
         actions: Dict[AgentID, Any],
         observations: Optional[Dict[AgentID, Observation]] = None,
     ) -> None:
-        """Apply actions to agents.
+        """Apply actions to agents. [Training Only]
 
         Args:
             actions: Dictionary mapping agent IDs to actions
@@ -157,7 +195,7 @@ class HeronEnvCore:
                 self._heron_agents[agent_id].act(obs, upstream_action=action)
 
     def get_agent_action_spaces(self) -> Dict[AgentID, gym.Space]:
-        """Get action spaces for all agents.
+        """Get action spaces for all agents. [Both Modes]
 
         Returns:
             Dictionary mapping agent IDs to their action spaces
@@ -169,7 +207,7 @@ class HeronEnvCore:
         }
 
     def get_agent_observation_spaces(self) -> Dict[AgentID, gym.Space]:
-        """Get observation spaces for all agents.
+        """Get observation spaces for all agents. [Both Modes]
 
         Returns:
             Dictionary mapping agent IDs to their observation spaces
@@ -181,7 +219,7 @@ class HeronEnvCore:
         }
 
     def reset_agents(self, *, seed: Optional[int] = None, **kwargs) -> None:
-        """Reset all registered agents.
+        """Reset all registered agents. [Both Modes]
 
         Args:
             seed: Random seed
@@ -190,52 +228,15 @@ class HeronEnvCore:
         for agent in self._heron_agents.values():
             agent.reset(seed=seed, **kwargs)
 
-    async def step_distributed(self) -> None:
-        """Execute distributed step using message broker.
-
-        This triggers the hierarchical execution flow where agents
-        communicate via the message broker.
-        """
-        if not self.distributed or not self.message_broker:
-            raise RuntimeError(
-                "Distributed step requires distributed=True and message_broker"
-            )
-
-        # Execute all coordinators (they will recursively execute subordinates)
-        await asyncio.gather(
-            *[coord.step_distributed() for coord in self._heron_coordinators.values()]
-        )
-
-    def get_total_reward(self) -> Dict[str, float]:
-        """Get total reward aggregated from all agents.
-
-        Returns:
-            Dictionary with total cost and safety
-        """
-        total_cost = sum(
-            agent.cost if hasattr(agent, "cost") else 0
-            for agent in self._heron_agents.values()
-        )
-        total_safety = sum(
-            agent.safety if hasattr(agent, "safety") else 0
-            for agent in self._heron_agents.values()
-        )
-        return {"cost": total_cost, "safety": total_safety}
-
-    def close_heron(self) -> None:
-        """Clean up HERON-specific resources."""
-        if self.message_broker:
-            self.message_broker.clear_environment(self.env_id)
-
     # ============================================
-    # Event-Driven Execution Support
+    # Event-Driven Execution (Option B - Testing)
     # ============================================
 
     def setup_event_driven(
         self,
         scheduler: Optional["EventScheduler"] = None,
     ) -> "EventScheduler":
-        """Setup event-driven execution with scheduler.
+        """Setup event-driven execution with scheduler. [Testing Only]
 
         Registers all agents with the scheduler using their timing parameters.
         Creates a new scheduler if none provided.
@@ -270,7 +271,7 @@ class HeronEnvCore:
         on_action_effect: Optional[Callable[["Event", "EventScheduler"], None]] = None,
         on_message_delivery: Optional[Callable[["Event", "EventScheduler"], None]] = None,
     ) -> None:
-        """Set event handlers for event-driven execution.
+        """Set event handlers for event-driven execution. [Testing Only]
 
         Args:
             on_agent_tick: Handler for AGENT_TICK events
@@ -289,12 +290,72 @@ class HeronEnvCore:
         if on_message_delivery:
             self.scheduler.set_handler(EventType.MESSAGE_DELIVERY, on_message_delivery)
 
+    def setup_default_handlers(
+        self,
+        global_state_fn: Optional[Callable[[], Dict[str, Any]]] = None,
+        on_action_effect: Optional[Callable[[AgentID, Any], None]] = None,
+    ) -> None:
+        """Setup default event handlers for event-driven execution. [Testing Only]
+
+        This convenience method sets up standard handlers that:
+        - AGENT_TICK: Calls agent.tick() with scheduler and current time
+        - ACTION_EFFECT: Calls the provided callback to apply actions
+        - MESSAGE_DELIVERY: Publishes messages via message broker
+
+        Args:
+            global_state_fn: Optional function returning current global state
+                            for agent.tick(). If None, passes None to tick().
+            on_action_effect: Optional callback(agent_id, action) to apply actions.
+                            Override this to implement domain-specific action application.
+        """
+        if self.scheduler is None:
+            raise RuntimeError("Call setup_event_driven() first")
+
+        from heron.scheduling import EventType
+
+        # Create closures that capture self and callbacks
+        def agent_tick_handler(event: "Event", scheduler: "EventScheduler") -> None:
+            agent = self._heron_agents.get(event.agent_id)
+            if agent is not None:
+                global_state = global_state_fn() if global_state_fn else None
+                # Pass proxy_agent to enable delayed observations (Option B)
+                proxy = getattr(self, '_proxy_agent', None)
+                agent.tick(scheduler, event.timestamp, global_state, proxy)
+
+        def action_effect_handler(event: "Event", scheduler: "EventScheduler") -> None:
+            agent_id = event.agent_id
+            action = event.payload.get("action")
+            if on_action_effect and action is not None:
+                on_action_effect(agent_id, action)
+
+        def message_delivery_handler(event: "Event", scheduler: "EventScheduler") -> None:
+            """Deliver message via message broker."""
+            recipient_id = event.agent_id
+            sender_id = event.payload.get("sender")
+            message_content = event.payload.get("message", {})
+
+            # Publish message via message broker
+            if self.message_broker is not None and sender_id is not None:
+                self.publish_action(
+                    sender_id=sender_id,
+                    recipient_id=recipient_id,
+                    action=message_content.get("action"),
+                ) if "action" in message_content else self.publish_info(
+                    sender_id=sender_id,
+                    recipient_id=recipient_id,
+                    info=message_content,
+                )
+
+        self.scheduler.set_handler(EventType.AGENT_TICK, agent_tick_handler)
+        self.scheduler.set_handler(EventType.ACTION_EFFECT, action_effect_handler)
+        self.scheduler.set_handler(EventType.MESSAGE_DELIVERY, message_delivery_handler)
+
     def run_event_driven(
         self,
         t_end: float,
         max_events: Optional[int] = None,
     ) -> int:
-        """Run event-driven simulation until time limit.
+        """Run event-driven simulation until time limit. [Testing Only]
 
         Args:
             t_end: Stop when simulation time exceeds this
@@ -313,10 +374,391 @@ class HeronEnvCore:
 
     @property
     def simulation_time(self) -> float:
-        """Current simulation time (from scheduler or timestep)."""
+        """Current simulation time (from scheduler or timestep). [Both Modes]"""
         if self.scheduler:
             return self.scheduler.current_time
         return float(self._timestep)
+
+    # ============================================
+    # Distributed Mode (Message Broker)
+    # ============================================
+
+    def setup_broker_channels(self) -> None:
+        """Setup message broker channels for all registered agents. [Distributed Mode]
+
+        Creates action and info channels for each agent based on their hierarchy.
+        Should be called after all agents are registered.
+
+        Raises:
+            RuntimeError: If message broker is not configured
+        """
+        if self.message_broker is None:
+            raise RuntimeError("Message broker not configured.")
+
+        for agent_id, agent in self._heron_agents.items():
+            # Get agent's hierarchy info
+            upstream_id = getattr(agent, 'upstream_id', None)
+            subordinate_ids = list(getattr(agent, 'subordinates', {}).keys())
+
+            # Get channels for this agent
+            channels = ChannelManager.agent_channels(
+                agent_id=agent_id,
+                upstream_id=upstream_id,
+                subordinate_ids=subordinate_ids,
+                env_id=self.env_id,
+            )
+
+            # Create all channels
+            for channel in channels['subscribe'] + channels['publish']:
+                self.message_broker.create_channel(channel)
+
+    def publish_action(
+        self,
+        sender_id: AgentID,
+        recipient_id: AgentID,
+        action: Any,
+    ) -> None:
+        """Publish an action from sender to recipient via message broker. [Distributed Mode]
+
+        Args:
+            sender_id: ID of the agent sending the action
+            recipient_id: ID of the agent receiving the action
+            action: Action data to send
+
+        Raises:
+            RuntimeError: If message broker is not configured
+        """
+        if self.message_broker is None:
+            raise RuntimeError("Message broker not configured.")
+
+        channel = ChannelManager.action_channel(sender_id, recipient_id, self.env_id)
+        msg = Message(
+            env_id=self.env_id,
+            sender_id=sender_id,
+            recipient_id=recipient_id,
+            timestamp=float(self._timestep),
+            message_type=MessageType.ACTION,
+            payload={"action": action},
+        )
+        self.message_broker.publish(channel, msg)
+
+    def publish_info(
+        self,
+        sender_id: AgentID,
+        recipient_id: AgentID,
+        info: Dict[str, Any],
+    ) -> None:
+        """Publish info from sender to recipient via message broker. [Distributed Mode]
+
+        Args:
+            sender_id: ID of the agent sending the info
+            recipient_id: ID of the agent receiving the info
+            info: Information data to send
+
+        Raises:
+            RuntimeError: If message broker is not configured
+        """
+        if self.message_broker is None:
+            raise RuntimeError("Message broker not configured.")
+
+        channel = ChannelManager.info_channel(sender_id, recipient_id, self.env_id)
+        msg = Message(
+            env_id=self.env_id,
+            sender_id=sender_id,
+            recipient_id=recipient_id,
+            timestamp=float(self._timestep),
+            message_type=MessageType.INFO,
+            payload=info,
+        )
+        self.message_broker.publish(channel, msg)
+
+    def publish_state_update(
+        self,
+        state: Dict[str, Any],
+    ) -> None:
+        """Publish state update to the state update channel. [Distributed Mode]
+
+        Used by the environment to broadcast state updates to all interested agents.
+
+        Args:
+            state: State data to broadcast
+
+        Raises:
+            RuntimeError: If message broker is not configured
+        """
+        if self.message_broker is None:
+            raise RuntimeError("Message broker not configured.")
+
+        channel = ChannelManager.state_update_channel(self.env_id)
+        msg = Message(
+            env_id=self.env_id,
+            sender_id="environment",
+            recipient_id="broadcast",
+            timestamp=float(self._timestep),
+            message_type=MessageType.STATE_UPDATE,
+            payload=state,
+        )
+        self.message_broker.publish(channel, msg)
+
+    def broadcast_to_agents(
+        self,
+        sender_id: str,
+        payload: Dict[str, Any],
+        agent_ids: Optional[List[AgentID]] = None,
+    ) -> None:
+        """Broadcast a message to multiple agents. [Distributed Mode]
+
+        Args:
+            sender_id: ID of the broadcasting agent/entity
+            payload: Message payload
+            agent_ids: List of recipient agent IDs (default: all agents)
+
+        Raises:
+            RuntimeError: If message broker is not configured
+        """
+        if self.message_broker is None:
+            raise RuntimeError("Message broker not configured.")
+
+        if agent_ids is None:
+            agent_ids = list(self._heron_agents.keys())
+
+        for agent_id in agent_ids:
+            channel = ChannelManager.broadcast_channel(sender_id, self.env_id)
+            msg = Message(
+                env_id=self.env_id,
+                sender_id=sender_id,
+                recipient_id=agent_id,
+                timestamp=float(self._timestep),
+                message_type=MessageType.BROADCAST,
+                payload=payload,
+            )
+            self.message_broker.publish(channel, msg)
+
+    def consume_actions_for_agent(
+        self,
+        agent_id: AgentID,
+        upstream_id: Optional[AgentID] = None,
+    ) -> List[Message]:
+        """Consume action messages for an agent from its upstream. [Distributed Mode]
+
+        Args:
+            agent_id: ID of the agent consuming actions
+            upstream_id: ID of the upstream agent (auto-detected if not provided)
+
+        Returns:
+            List of action messages
+
+        Raises:
+            RuntimeError: If message broker is not configured
+        """
+        if self.message_broker is None:
+            raise RuntimeError("Message broker not configured.")
+
+        if upstream_id is None:
+            agent = self._heron_agents.get(agent_id)
+            if agent:
+                upstream_id = getattr(agent, 'upstream_id', None)
+
+        if upstream_id is None:
+            return []
+
+        channel = ChannelManager.action_channel(upstream_id, agent_id, self.env_id)
+        return self.message_broker.consume(channel, agent_id, self.env_id)
+
+    def consume_info_for_agent(
+        self,
+        agent_id: AgentID,
+        subordinate_ids: Optional[List[AgentID]] = None,
+    ) -> Dict[AgentID, List[Message]]:
+        """Consume info messages for an agent from its subordinates. [Distributed Mode]
+
+        Args:
+            agent_id: ID of the agent consuming info
+            subordinate_ids: IDs of subordinates (auto-detected if not provided)
+
+        Returns:
+            Dict mapping subordinate IDs to their info messages
+
+        Raises:
+            RuntimeError: If message broker is not configured
+        """
+        if self.message_broker is None:
+            raise RuntimeError("Message broker not configured.")
+
+        if subordinate_ids is None:
+            agent = self._heron_agents.get(agent_id)
+            if agent:
+                subordinate_ids = list(getattr(agent, 'subordinates', {}).keys())
+
+        if not subordinate_ids:
+            return {}
+
+        result = {}
+        for sub_id in subordinate_ids:
+            channel = ChannelManager.info_channel(sub_id, agent_id, self.env_id)
+            messages = self.message_broker.consume(channel, agent_id, self.env_id)
+            if messages:
+                result[sub_id] = messages
+
+        return result
+
+    def clear_broker_environment(self) -> None:
+        """Clear all messages for this environment from the broker. [Distributed Mode]
+
+        Useful for resetting the environment.
+        """
+        if self.message_broker is not None:
+            self.message_broker.clear_environment(self.env_id)
+
+    def close_heron(self) -> None:
+        """Clean up HERON-specific resources. [Both Modes]"""
+        if self.message_broker is not None:
+            self.message_broker.close()
+
+    # ============================================
+    # SystemAgent Integration (Both Modes)
+    # ============================================
+
+    def set_system_agent(self, system_agent: "SystemAgent") -> None:
+        """Set the SystemAgent for this environment. [Both Modes]
+
+        The SystemAgent serves as the interface between the environment and
+        the agent hierarchy. When set, the environment can use:
+        - system_agent.update_from_environment() to push state
+        - system_agent.get_state_for_environment() to get actions
+
+        Args:
+            system_agent: SystemAgent instance to manage agent hierarchy
+        """
+        self._system_agent = system_agent
+
+        # Register all coordinators from the system agent
+        for coord_id, coordinator in system_agent.coordinators.items():
+            self.register_agent(coordinator)
+
+        # Configure message broker for system agent
+        if self.message_broker:
+            system_agent.set_message_broker(self.message_broker)
+            system_agent.env_id = self.env_id
+
+    @property
+    def system_agent(self) -> Optional["SystemAgent"]:
+        """Get the SystemAgent for this environment. [Both Modes]"""
+        return getattr(self, '_system_agent', None)
+
+    def set_proxy_agent(self, proxy_agent: "ProxyAgent") -> None:
+        """Set the ProxyAgent for state distribution. [Both Modes]
+
+        The ProxyAgent manages state distribution to agents with visibility
+        filtering. When set, agents can request state through the proxy
+        instead of accessing the environment directly.
+
+        Args:
+            proxy_agent: ProxyAgent instance for state distribution
+        """
+        self._proxy_agent = proxy_agent
+        self.register_agent(proxy_agent)
+
+    @property
+    def proxy_agent(self) -> Optional["ProxyAgent"]:
+        """Get the ProxyAgent for this environment. [Both Modes]"""
+        return getattr(self, '_proxy_agent', None)
+
+    def update_proxy_state(self, state: Dict[str, Any]) -> None:
+        """Update the ProxyAgent's cached state. [Both Modes]
+
+        Convenience method to update the proxy agent's state cache.
+        Should be called after physics/simulation updates.
+
+        Args:
+            state: Current environment state to cache
+
+        Raises:
+            RuntimeError: If no proxy agent is configured
+        """
+        if self._proxy_agent is None:
+            raise RuntimeError("No proxy agent configured. Call set_proxy_agent() first.")
+        self._proxy_agent.update_state(state)
+
+    def step_with_system_agent(
+        self,
+        actions: Dict[AgentID, Any],
+        global_state: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Execute step using SystemAgent pattern. [Training - Option A]
+
+        This convenience method implements the standard CTDE flow:
+        1. SystemAgent observes (aggregates from coordinators)
+        2. SystemAgent acts (distributes actions to coordinators)
+        3. Environment applies physics/simulation
+        4. SystemAgent receives updated state
+
+        Args:
+            actions: Dictionary mapping coordinator IDs to actions
+            global_state: Optional global state for observation
+
+        Raises:
+            RuntimeError: If no system agent is configured
+        """
+        if self._system_agent is None:
+            raise RuntimeError("No system agent configured. Call set_system_agent() first.")
+
+        # 1. Observe
+        observation = self._system_agent.observe(global_state)
+
+        # 2. Act (distribute actions to coordinators)
+        self._system_agent.act(observation, upstream_action=actions)
+
+    def run_event_driven_with_system_agent(
+        self,
+        t_end: float,
+        get_global_state: Optional[Callable[[], Dict[str, Any]]] = None,
+        on_action_effect: Optional[Callable[[AgentID, Any], None]] = None,
+        max_events: Optional[int] = None,
+    ) -> int:
+        """Run event-driven simulation with SystemAgent. [Testing - Option B]
+
+        This convenience method sets up and runs event-driven execution
+        with the SystemAgent hierarchy. It:
+        1. Sets up the scheduler and registers all agents
+        2. Configures default event handlers
+        3. Runs the simulation until t_end
+
+        Args:
+            t_end: Stop when simulation time exceeds this
+            get_global_state: Optional function returning current global state
+            on_action_effect: Optional callback(agent_id, action) for actions
+            max_events: Optional maximum number of events to process
+
+        Returns:
+            Number of events processed
+
+        Raises:
+            RuntimeError: If no system agent is configured
+        """
+        if self._system_agent is None:
+            raise RuntimeError("No system agent configured. Call set_system_agent() first.")
+
+        # Setup scheduler if not already done
+        if self.scheduler is None:
+            self.setup_event_driven()
+
+        # Register system agent with scheduler
+        self.scheduler.register_agent(
+            agent_id=self._system_agent.agent_id,
+            tick_interval=self._system_agent.tick_interval,
+            obs_delay=self._system_agent.obs_delay,
+            act_delay=self._system_agent.act_delay,
+        )
+
+        # Setup default handlers
+        self.setup_default_handlers(
+            global_state_fn=get_global_state,
+            on_action_effect=on_action_effect,
+        )
+
+        # Run simulation
+        return self.run_event_driven(t_end=t_end, max_events=max_events)
 
 
 class BaseEnv(gym.Env, HeronEnvCore, ABC):
@@ -332,18 +774,14 @@ class BaseEnv(gym.Env, HeronEnvCore, ABC):
     def __init__(
         self,
         env_id: Optional[str] = None,
-        message_broker: Optional[MessageBroker] = None,
     ):
         """Initialize base environment.
 
         Args:
             env_id: Environment identifier (auto-generated if not provided)
-            message_broker: Optional message broker for distributed mode
         """
         gym.Env.__init__(self)
-        self._init_heron_core(
-            env_id=env_id, message_broker=message_broker, distributed=False
-        )
+        self._init_heron_core(env_id=env_id)
 
     @abstractmethod
     def reset(
@@ -387,34 +825,43 @@ class MultiAgentEnv(HeronEnvCore, ABC):
     Use one of the interface adapters (PettingZooParallelEnv, RLlibMultiAgentEnv)
     for compatibility with specific frameworks.
 
+    Execution Modes:
+        - Option A (Training): Synchronous step() with CTDE pattern
+        - Option B (Testing): Event-driven via EventScheduler with timing delays
+
     Subclasses must implement:
         - reset()
         - step()
         - get_joint_observation_space()
         - get_joint_action_space()
+
+    Attributes:
+        system_agent: Optional SystemAgent for hierarchical agent management
+        proxy_agent: Optional ProxyAgent for state distribution
     """
 
     def __init__(
         self,
         env_id: Optional[str] = None,
-        message_broker: Optional[MessageBroker] = None,
-        distributed: bool = False,
         scheduler: Optional["EventScheduler"] = None,
+        message_broker: Optional[MessageBroker] = None,
     ):
         """Initialize multi-agent environment.
 
         Args:
             env_id: Environment identifier
-            message_broker: Message broker for distributed mode
-            distributed: If True, use distributed execution mode
             scheduler: Optional EventScheduler for event-driven mode
+            message_broker: Optional MessageBroker (defaults to InMemoryBroker)
         """
         self._init_heron_core(
             env_id=env_id,
-            message_broker=message_broker,
-            distributed=distributed,
             scheduler=scheduler,
+            message_broker=message_broker,
         )
+
+        # SystemAgent integration (set via set_system_agent)
+        self._system_agent: Optional["SystemAgent"] = None
+        self._proxy_agent: Optional["ProxyAgent"] = None
 
     @abstractmethod
     def reset(

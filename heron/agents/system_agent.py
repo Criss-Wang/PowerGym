@@ -2,6 +2,11 @@
 
 SystemAgent is the top level in the agent hierarchy, typically handling
 system-wide coordination, visibility filtering, and environment interaction.
+
+In synchronous mode (Option A - Training), the system agent:
+1. Collects observations from all coordinators
+2. Optionally computes system-level actions
+3. Distributes actions to coordinators
 """
 
 from abc import abstractmethod
@@ -25,12 +30,8 @@ class SystemAgent(Agent):
     SystemAgent serves as the interface between the environment and the agent
     hierarchy. It handles:
     - System-wide state management
-    - Visibility filtering for distributed mode
-    - Communication with the environment
-
-    In distributed mode, SystemAgent acts as a proxy between the environment
-    and the coordinator/field agents, ensuring agents never access the
-    environment state directly.
+    - Visibility filtering for constrained information
+    - Communication with coordinators
 
     Attributes:
         coordinators: Dictionary mapping coordinator IDs to CoordinatorAgent instances
@@ -40,20 +41,28 @@ class SystemAgent(Agent):
         self,
         agent_id: Optional[AgentID] = None,
 
-        # communication params
-        message_broker: Optional["MessageBroker"] = None,
+        # hierarchy params
         env_id: Optional[str] = None,
 
         # SystemAgent specific params
         config: Optional[DictType[str, Any]] = None,
+
+        # timing params (for event-driven scheduling)
+        tick_interval: float = 300.0,  # System agents tick least frequently
+        obs_delay: float = 0.0,
+        act_delay: float = 0.0,
+        msg_delay: float = 0.0,
     ):
         """Initialize system agent.
 
         Args:
             agent_id: Unique identifier
-            message_broker: Optional message broker for hierarchical execution
             env_id: Optional environment ID for multi-environment isolation
             config: System agent configuration dictionary
+            tick_interval: Time between agent ticks (default 300s for system level)
+            obs_delay: Observation delay
+            act_delay: Action delay
+            msg_delay: Message delay
         """
         config = config or {}
 
@@ -61,7 +70,6 @@ class SystemAgent(Agent):
         coordinator_configs = config.get('coordinators', [])
         self.coordinators = self._build_coordinators(
             coordinator_configs,
-            message_broker=message_broker,
             env_id=env_id,
             upstream_id=agent_id
         )
@@ -69,16 +77,18 @@ class SystemAgent(Agent):
         super().__init__(
             agent_id=agent_id or "system_agent",
             level=SYSTEM_LEVEL,
-            message_broker=message_broker,
             upstream_id=None,  # System agent has no upstream
             env_id=env_id,
             subordinates=self.coordinators,
+            tick_interval=tick_interval,
+            obs_delay=obs_delay,
+            act_delay=act_delay,
+            msg_delay=msg_delay,
         )
 
     def _build_coordinators(
         self,
         coordinator_configs: List[DictType[str, Any]],
-        message_broker: Optional["MessageBroker"] = None,
         env_id: Optional[str] = None,
         upstream_id: Optional[AgentID] = None,
     ) -> DictType[AgentID, CoordinatorAgent]:
@@ -89,7 +99,6 @@ class SystemAgent(Agent):
 
         Args:
             coordinator_configs: List of coordinator configuration dictionaries
-            message_broker: Optional message broker for communication
             env_id: Environment ID for multi-environment isolation
             upstream_id: Upstream agent ID (this system agent)
 
@@ -100,11 +109,11 @@ class SystemAgent(Agent):
         return {}
 
     # ============================================
-    # Core Agent Lifecycle Methods
+    # Core Agent Lifecycle Methods (Both Modes)
     # ============================================
 
     def reset(self, *, seed: Optional[int] = None, **kwargs) -> None:
-        """Reset system agent and all coordinators.
+        """Reset system agent and all coordinators. [Both Modes]
 
         Args:
             seed: Random seed
@@ -116,8 +125,15 @@ class SystemAgent(Agent):
         for _, coordinator in self.coordinators.items():
             coordinator.reset(seed=seed, **kwargs)
 
+    # ============================================
+    # Synchronous Execution (Option A - Training)
+    # ============================================
+
     def observe(self, global_state: Optional[DictType[str, Any]] = None, *args, **kwargs) -> Observation:
-        """Collect observations from coordinators. [Only for synchronous direct execution]
+        """Collect observations from coordinators. [Both Modes]
+
+        - Training (Option A): Called by environment
+        - Testing (Option B): Called internally by tick()
 
         Args:
             global_state: Environment state
@@ -138,7 +154,10 @@ class SystemAgent(Agent):
         )
 
     def act(self, observation: Observation, upstream_action: Any = None) -> None:
-        """Distribute actions to coordinators. [Only for synchronous direct execution]
+        """Distribute actions to coordinators. [Training Only - Direct Call]
+
+        Note: In Testing (Option B), tick() handles action distribution via
+        MESSAGE_DELIVERY events instead of calling this method directly.
 
         Args:
             observation: Aggregated observation
@@ -165,58 +184,76 @@ class SystemAgent(Agent):
                     coordinator.act(obs, upstream_action=upstream_action)
 
     # ============================================
-    # Abstract Methods for Hierarchical Execution
+    # Event-Driven Execution (Option B - Testing)
     # ============================================
 
-    def _derive_local_action(self, upstream_action: Optional[Any]) -> Optional[Any]:
-        """Derive local action (none for system agent).
-
-        Args:
-            upstream_action: Not used (system agent has no upstream)
-
-        Returns:
-            None
-        """
-        return None
-
-    async def _derive_downstream_actions(
+    def tick(
         self,
-        upstream_action: Optional[Any]
-    ) -> DictType[AgentID, Any]:
-        """Derive actions for coordinators.
+        scheduler: "EventScheduler",
+        current_time: float,
+        global_state: Optional[DictType[str, Any]] = None,
+        proxy: Optional["Agent"] = None,
+    ) -> None:
+        """Execute one tick in event-driven mode. [Testing Only]
 
-        Override this to implement system-level action decomposition.
+        In Option B, SystemAgent:
+        1. Updates timestep
+        2. Gets observation from coordinators
+        3. Optionally computes system-level action
+        4. Schedules MESSAGE_DELIVERY events to coordinators with msg_delay
 
         Args:
-            upstream_action: System-level action
-
-        Returns:
-            Dict mapping coordinator IDs to their actions
+            scheduler: EventScheduler for scheduling future events
+            current_time: Current simulation time
+            global_state: Optional global state for observation
+            proxy: Optional ProxyAgent for delayed observations
         """
+        self._timestep = current_time
+
+        # Get observation from coordinators
+        observation = self.observe(global_state)
+        self._last_observation = observation
+
+        # SystemAgent typically doesn't have a policy - it distributes
+        # external actions or signals. Override in subclasses for custom behavior.
+        # Check message broker for any external actions
+        upstream_action = None
+        actions = self.receive_action_messages()
+        if actions:
+            upstream_action = actions[-1]  # Use most recent action
+
         if upstream_action is None:
-            return {}
+            # No action to distribute
+            return
 
+        # Distribute actions to coordinators via MESSAGE_DELIVERY events
         if isinstance(upstream_action, dict):
-            return upstream_action
-
-        # Default: broadcast same action to all coordinators
-        return {coord_id: upstream_action for coord_id in self.coordinators}
-
-    def _execute_local_action(self, action: Optional[Any]) -> None:
-        """Execute own action (none for system agent).
-
-        Args:
-            action: Not used
-        """
-        pass
+            # Per-coordinator actions
+            for coord_id, action in upstream_action.items():
+                if coord_id in self.coordinators:
+                    scheduler.schedule_message_delivery(
+                        sender_id=self.agent_id,
+                        recipient_id=coord_id,
+                        message={"action": action},
+                        delay=self.msg_delay,
+                    )
+        else:
+            # Single action for all coordinators
+            for coord_id in self.coordinators:
+                scheduler.schedule_message_delivery(
+                    sender_id=self.agent_id,
+                    recipient_id=coord_id,
+                    message={"action": upstream_action},
+                    delay=self.msg_delay,
+                )
 
     # ============================================
-    # Environment Interface Methods
+    # Environment Interface Methods (Both Modes)
     # ============================================
 
     @abstractmethod
     def update_from_environment(self, env_state: DictType[str, Any]) -> None:
-        """Update internal state from environment.
+        """Update internal state from environment. [Both Modes]
 
         This method should be called by the environment to provide
         the system agent with the current environment state.
@@ -228,7 +265,7 @@ class SystemAgent(Agent):
 
     @abstractmethod
     def get_state_for_environment(self) -> DictType[str, Any]:
-        """Get agent actions/state for environment.
+        """Get agent actions/state for environment. [Both Modes]
 
         This method should be called by the environment to get
         the agents' actions to apply.
@@ -239,7 +276,7 @@ class SystemAgent(Agent):
         pass
 
     # ============================================
-    # Visibility Filtering Methods
+    # Visibility Filtering Methods (Both Modes)
     # ============================================
 
     def filter_state_for_agent(
@@ -248,7 +285,7 @@ class SystemAgent(Agent):
         requestor_id: AgentID,
         requestor_level: int
     ) -> DictType[str, np.ndarray]:
-        """Filter state based on agent's visibility level.
+        """Filter state based on agent's visibility level. [Both Modes]
 
         Uses the FeatureProvider visibility rules to filter which
         parts of the state are visible to the requesting agent.
@@ -264,58 +301,19 @@ class SystemAgent(Agent):
         return state.observed_by(requestor_id, requestor_level)
 
     def broadcast_to_coordinators(self, message: DictType[str, Any]) -> None:
-        """Broadcast a message to all coordinators.
+        """Broadcast a message to all coordinators. [Both Modes]
 
-        In distributed mode, this publishes messages via the message broker.
+        Uses message broker if available for distributed communication.
 
         Args:
             message: Message content to broadcast
         """
-        if not self.message_broker:
-            return
-
-        from heron.messaging.base import ChannelManager, Message, MessageType
-
-        for coord_id in self.coordinators:
-            channel = ChannelManager.info_channel(
-                self.agent_id,
-                coord_id,
-                self.env_id
-            )
-            msg = Message(
-                env_id=self.env_id,
-                sender_id=self.agent_id,
-                recipient_id=coord_id,
-                timestamp=self._timestep,
-                message_type=MessageType.INFO,
-                payload=message
-            )
-            self.message_broker.publish(channel, msg)
+        if self._message_broker is not None:
+            for coord_id in self.coordinators:
+                self.send_message(message, recipient_id=coord_id)
 
     # ============================================
-    # Cost/Safety Methods
-    # ============================================
-
-    @property
-    def cost(self) -> float:
-        """Get total cost from all coordinators."""
-        return sum(coord.cost for coord in self.coordinators.values())
-
-    @property
-    def safety(self) -> float:
-        """Get total safety penalty from all coordinators."""
-        return sum(coord.safety for coord in self.coordinators.values())
-
-    def get_reward(self) -> DictType[str, float]:
-        """Get system-wide reward.
-
-        Returns:
-            Dict with total cost and safety values
-        """
-        return {"cost": self.cost, "safety": self.safety}
-
-    # ============================================
-    # Utility Methods
+    # Utility Methods (Both Modes)
     # ============================================
 
     def __repr__(self) -> str:

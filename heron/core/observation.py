@@ -1,15 +1,13 @@
-"""Observation and message abstractions for agent communication.
+"""Observation abstraction for agent observations.
 
-This module defines the core data structures for agent observations and
-inter-agent communication in the HERON framework.
+This module defines the core data structure for agent observations
+in the HERON framework.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict
 
 import numpy as np
-
-from heron.utils.typing import AgentID
 
 
 @dataclass
@@ -19,12 +17,10 @@ class Observation:
     Attributes:
         local: Local agent state (e.g., device measurements, internal state)
         global_info: Global information visible to this agent (e.g., shared metrics)
-        messages: Communication messages from other agents
         timestamp: Current simulation time
     """
     local: Dict[str, Any] = field(default_factory=dict)
     global_info: Dict[str, Any] = field(default_factory=dict)
-    messages: List['Message'] = field(default_factory=list)
     timestamp: float = 0.0
 
     def vector(self) -> np.ndarray:
@@ -71,21 +67,3 @@ class Observation:
                 # Recursively flatten nested dicts
                 vec = self._flatten_dict(val, vec)
         return vec
-
-
-@dataclass
-class Message:
-    """Inter-agent communication message.
-
-    Attributes:
-        sender: ID of sending agent
-        content: Message payload (e.g., price signals, setpoints, constraints)
-        recipient: Target agent(s), None for broadcast
-        timestamp: Time when message was sent
-        priority: Message priority (higher = more important)
-    """
-    sender: AgentID
-    content: Dict[str, Any]
-    recipient: Optional[Union[AgentID, List[AgentID]]] = None  # None = broadcast
-    timestamp: float = 0.0
-    priority: int = 0

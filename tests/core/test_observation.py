@@ -1,17 +1,16 @@
-"""Comprehensive tests for Observation and Message classes.
+"""Comprehensive tests for Observation class.
 
 Tests cover:
 1. Observation initialization and structure
 2. Vector flattening (simple and nested dicts)
 3. Handling different data types (scalars, arrays, nested dicts)
-4. Message structure and attributes
-5. Edge cases (empty obs, complex nesting, large arrays)
+4. Edge cases (empty obs, complex nesting, large arrays)
 """
 
 import pytest
 import numpy as np
 
-from heron.core.observation import Observation, Message
+from heron.core.observation import Observation
 
 
 # =============================================================================
@@ -27,26 +26,22 @@ class TestObservationInitialization:
 
         assert obs.local == {}
         assert obs.global_info == {}
-        assert obs.messages == []
         assert obs.timestamp == 0.0
 
     def test_initialization_with_values(self):
         """Test initialization with provided values."""
         local = {"power": 100.0, "voltage": 1.0}
         global_info = {"grid_freq": 60.0}
-        messages = []
         timestamp = 5.5
 
         obs = Observation(
             local=local,
             global_info=global_info,
-            messages=messages,
             timestamp=timestamp
         )
 
         assert obs.local == local
         assert obs.global_info == global_info
-        assert obs.messages == messages
         assert obs.timestamp == 5.5
 
     def test_initialization_partial(self):
@@ -55,7 +50,6 @@ class TestObservationInitialization:
 
         assert obs.local == {"voltage": 1.0}
         assert obs.global_info == {}
-        assert obs.messages == []
         assert obs.timestamp == 2.0
 
 
@@ -345,132 +339,6 @@ class TestObservationLocalGlobal:
         assert len(vec) == 2
         np.testing.assert_almost_equal(vec[0], 1.0, decimal=5)  # local voltage
         np.testing.assert_almost_equal(vec[1], 1.05, decimal=5)  # global voltage
-
-
-# =============================================================================
-# Message Tests
-# =============================================================================
-
-class TestMessage:
-    """Test Message dataclass."""
-
-    def test_message_initialization_basic(self):
-        """Test basic message initialization."""
-        msg = Message(
-            sender="agent_1",
-            content={"price": 50.0}
-        )
-
-        assert msg.sender == "agent_1"
-        assert msg.content == {"price": 50.0}
-        assert msg.recipient is None  # Broadcast
-        assert msg.timestamp == 0.0
-
-    def test_message_initialization_full(self):
-        """Test message with all fields."""
-        msg = Message(
-            sender="agent_1",
-            content={"setpoint": [100.0, 20.0]},
-            recipient="agent_2",
-            timestamp=5.5
-        )
-
-        assert msg.sender == "agent_1"
-        assert msg.content == {"setpoint": [100.0, 20.0]}
-        assert msg.recipient == "agent_2"
-        assert msg.timestamp == 5.5
-
-    def test_message_broadcast(self):
-        """Test broadcast message (no recipient)."""
-        msg = Message(
-            sender="controller",
-            content={"price": 60.0}
-        )
-
-        assert msg.recipient is None
-
-    def test_message_multiple_recipients(self):
-        """Test message with multiple recipients."""
-        msg = Message(
-            sender="coordinator",
-            content={"action": "start"},
-            recipient=["agent_1", "agent_2", "agent_3"]
-        )
-
-        assert len(msg.recipient) == 3
-        assert "agent_1" in msg.recipient
-
-    def test_message_complex_content(self):
-        """Test message with complex content."""
-        content = {
-            "type": "coordination",
-            "actions": {
-                "gen1": [100.0, 20.0],
-                "ess1": [-50.0, 10.0]
-            },
-            "metadata": {
-                "cost": 150.5,
-                "timestamp": 1.0
-            }
-        }
-
-        msg = Message(sender="controller", content=content)
-
-        assert msg.content["type"] == "coordination"
-        assert msg.content["actions"]["gen1"] == [100.0, 20.0]
-        assert msg.content["metadata"]["cost"] == 150.5
-
-    def test_message_empty_content(self):
-        """Test message with empty content."""
-        msg = Message(sender="agent", content={})
-        assert msg.content == {}
-
-
-# =============================================================================
-# Observation with Messages Tests
-# =============================================================================
-
-class TestObservationWithMessages:
-    """Test Observation containing messages."""
-
-    def test_observation_with_single_message(self):
-        """Test observation containing one message."""
-        msg = Message(sender="agent_1", content={"price": 50.0})
-        obs = Observation(
-            local={"power": 100.0},
-            messages=[msg]
-        )
-
-        assert len(obs.messages) == 1
-        assert obs.messages[0].sender == "agent_1"
-        assert obs.messages[0].content["price"] == 50.0
-
-    def test_observation_with_multiple_messages(self):
-        """Test observation with multiple messages."""
-        msg1 = Message(sender="agent_1", content={"price": 50.0})
-        msg2 = Message(sender="agent_2", content={"setpoint": 100.0})
-        msg3 = Message(sender="agent_3", content={"constraint": "max_power"})
-
-        obs = Observation(messages=[msg1, msg2, msg3])
-
-        assert len(obs.messages) == 3
-        assert obs.messages[0].sender == "agent_1"
-        assert obs.messages[1].sender == "agent_2"
-        assert obs.messages[2].sender == "agent_3"
-
-    def test_observation_vector_ignores_messages(self):
-        """Test that vector() doesn't include message content."""
-        msg = Message(sender="agent_1", content={"value": 999.0})
-        obs = Observation(
-            local={"value": 10.0},
-            messages=[msg]
-        )
-
-        vec = obs.vector()
-
-        # Should only contain local value, not message content
-        assert len(vec) == 1
-        assert vec[0] == 10.0
 
 
 # =============================================================================

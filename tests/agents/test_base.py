@@ -5,7 +5,9 @@ import pytest
 import gymnasium as gym
 from gymnasium.spaces import Box
 
-from heron.agents.base import Agent, Observation, Message
+from heron.agents.base import Agent
+from heron.core.observation import Observation
+from heron.messaging.in_memory_broker import InMemoryBroker
 from heron.core.policies import RandomPolicy
 
 
@@ -17,26 +19,22 @@ class TestObservation:
         obs = Observation()
         assert isinstance(obs.local, dict)
         assert isinstance(obs.global_info, dict)
-        assert isinstance(obs.messages, list)
         assert obs.timestamp == 0.0
 
     def test_observation_custom_values(self):
         """Test observation with custom values."""
         local = {"P": 1.0, "Q": 0.5}
         global_info = {"voltage": 1.05}
-        messages = [Message("agent1", {"price": 50.0})]
         timestamp = 10.0
 
         obs = Observation(
             local=local,
             global_info=global_info,
-            messages=messages,
             timestamp=timestamp
         )
 
         assert obs.local == local
         assert obs.global_info == global_info
-        assert len(obs.messages) == 1
         assert obs.timestamp == 10.0
 
     def test_as_vector_empty(self):
@@ -91,45 +89,6 @@ class TestObservation:
         assert vec.dtype == np.float32
 
 
-class TestMessage:
-    """Test Message dataclass."""
-
-    def test_message_initialization(self):
-        """Test message initialization."""
-        msg = Message(
-            sender="agent1",
-            content={"price": 50.0}
-        )
-
-        assert msg.sender == "agent1"
-        assert msg.content == {"price": 50.0}
-        assert msg.recipient is None
-        assert msg.timestamp == 0.0
-
-    def test_message_with_recipient(self):
-        """Test message with specific recipient."""
-        msg = Message(
-            sender="agent1",
-            content={"setpoint": 100.0},
-            recipient="agent2",
-            timestamp=5.0
-        )
-
-        assert msg.sender == "agent1"
-        assert msg.recipient == "agent2"
-        assert msg.timestamp == 5.0
-
-    def test_message_with_multiple_recipients(self):
-        """Test message with multiple recipients."""
-        msg = Message(
-            sender="grid",
-            content={"price": 50.0},
-            recipient=["agent1", "agent2", "agent3"]
-        )
-
-        assert msg.recipient == ["agent1", "agent2", "agent3"]
-
-
 class ConcreteAgent(Agent):
     """Concrete implementation of Agent for testing."""
 
@@ -157,7 +116,7 @@ class TestAgent:
 
         assert agent.agent_id == "test_agent"
         assert agent.level == 1
-        assert len(agent.mailbox) == 0
+        assert agent._message_broker is None
         assert agent._timestep == 0.0
 
     def test_agent_with_spaces(self):
@@ -178,15 +137,11 @@ class TestAgent:
     def test_agent_reset(self):
         """Test agent reset clears state."""
         agent = ConcreteAgent(agent_id="test")
-
-        # Add some messages
-        agent.mailbox.append(Message("other", {"data": 1}))
         agent._timestep = 10.0
 
         # Reset
         agent.reset()
 
-        assert len(agent.mailbox) == 0
         assert agent._timestep == 0.0
 
     def test_agent_observe(self):
@@ -210,66 +165,68 @@ class TestAgent:
         assert isinstance(action, np.ndarray)
         np.testing.assert_array_equal(action, [1.0])
 
-    def test_send_message_broadcast(self):
-        """Test sending broadcast message."""
-        agent = ConcreteAgent(agent_id="sender")
-        agent._timestep = 5.0
+    def test_send_message_via_broker(self):
+        """Test sending message via message broker."""
+        broker = InMemoryBroker()
+        sender = ConcreteAgent(agent_id="sender", env_id="test_env")
+        receiver = ConcreteAgent(agent_id="receiver", env_id="test_env", upstream_id="sender")
 
-        msg = agent.send_message({"price": 50.0})
+        sender.set_message_broker(broker)
+        receiver.set_message_broker(broker)
+        sender._timestep = 5.0
 
-        assert msg.sender == "sender"
-        assert msg.content == {"price": 50.0}
-        assert msg.recipient is None
-        assert msg.timestamp == 5.0
+        # Send message
+        sender.send_message({"price": 50.0}, recipient_id="receiver")
 
-    def test_send_message_to_recipient(self):
-        """Test sending message to specific recipient."""
-        agent = ConcreteAgent(agent_id="sender")
+        # Receive message
+        messages = receiver.receive_messages(sender_id="sender")
 
-        msg = agent.send_message(
-            {"setpoint": 100.0},
-            recipients="receiver"
-        )
+        assert len(messages) == 1
+        assert messages[0] == {"price": 50.0}
 
-        assert msg.recipient == "receiver"
-
-    def test_send_message_to_multiple_recipients(self):
-        """Test sending message to multiple recipients."""
-        agent = ConcreteAgent(agent_id="sender")
-
-        msg = agent.send_message(
-            {"price": 50.0},
-            recipients=["agent1", "agent2"]
-        )
-
-        assert msg.recipient == ["agent1", "agent2"]
-
-    def test_receive_message(self):
-        """Test receiving message."""
-        agent = ConcreteAgent(agent_id="receiver")
-        msg = Message("sender", {"data": 1})
-
-        agent.receive_message(msg)
-
-        assert len(agent.mailbox) == 1
-        assert agent.mailbox[0] == msg
-
-    def test_clear_mailbox(self):
-        """Test clearing mailbox."""
+    def test_set_message_broker(self):
+        """Test setting message broker on agent."""
+        broker = InMemoryBroker()
         agent = ConcreteAgent(agent_id="test")
 
-        # Add messages
-        msg1 = Message("sender1", {"data": 1})
-        msg2 = Message("sender2", {"data": 2})
-        agent.mailbox.extend([msg1, msg2])
+        assert agent.message_broker is None
 
-        # Clear mailbox
-        messages = agent.clear_mailbox()
+        agent.set_message_broker(broker)
 
-        assert len(messages) == 2
-        assert len(agent.mailbox) == 0
-        assert messages[0] == msg1
-        assert messages[1] == msg2
+        assert agent.message_broker == broker
+
+    def test_receive_messages_no_broker(self):
+        """Test receiving messages when no broker configured."""
+        agent = ConcreteAgent(agent_id="test")
+
+        messages = agent.receive_messages()
+
+        assert messages == []
+
+    def test_send_message_no_broker_raises(self):
+        """Test sending message without broker raises error."""
+        agent = ConcreteAgent(agent_id="test")
+
+        with pytest.raises(RuntimeError, match="no message broker configured"):
+            agent.send_message({"data": 1}, recipient_id="other")
+
+    def test_receive_action_messages(self):
+        """Test receiving action messages via broker."""
+        broker = InMemoryBroker()
+        sender = ConcreteAgent(agent_id="sender", env_id="test_env")
+        receiver = ConcreteAgent(agent_id="receiver", env_id="test_env", upstream_id="sender")
+
+        sender.set_message_broker(broker)
+        receiver.set_message_broker(broker)
+
+        # Send action
+        sender.send_action_to_subordinate("receiver", action=[1.0, 2.0])
+
+        # Receive action
+        actions = receiver.receive_action_messages()
+
+        assert len(actions) == 1
+        assert actions[0] == [1.0, 2.0]
 
     def test_update_timestep(self):
         """Test updating timestep."""
@@ -302,10 +259,10 @@ class TestRandomPolicy:
         action1 = policy.forward(obs)
         action2 = policy.forward(obs)
 
-        assert action1.shape == (3,)
-        assert action2.shape == (3,)
+        assert action1.c.shape == (3,)
+        assert action2.c.shape == (3,)
         # Actions should be different (with high probability)
-        assert not np.allclose(action1, action2)
+        assert not np.allclose(action1.c, action2.c)
 
     def test_random_policy_reset(self):
         """Test random policy reset."""

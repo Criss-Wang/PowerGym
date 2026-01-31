@@ -10,7 +10,6 @@ from powergrid.core.features.electrical import ElectricalBasePh
 from powergrid.core.features.power_limits import PowerLimits
 from powergrid.core.features.status import StatusBlock
 from powergrid.core.features.storage import StorageBlock
-from heron.messaging.base import ChannelManager, Message, MessageType
 from heron.utils.typing import float_if_not_none
 from powergrid.utils.phase import PhaseModel, PhaseSpec, check_phase_model_consistency
 
@@ -91,7 +90,6 @@ class ESS(DeviceAgent):
         agent_id: Optional[str] = None,
         policy: Optional[Policy] = None,
         protocol: Protocol = NoProtocol(),
-        message_broker: Optional['MessageBroker'] = None,
         upstream_id: Optional[str] = None,
         env_id: Optional[str] = None,
         device_config: Dict[str, Any],
@@ -131,7 +129,6 @@ class ESS(DeviceAgent):
             agent_id=agent_id,
             policy=policy,
             protocol=protocol,
-            message_broker=message_broker,
             upstream_id=upstream_id,
             env_id=env_id,
             device_config=device_config,

@@ -45,7 +45,6 @@ class SimpleAgent(Agent):
         self.action = Action()
         self.action.dim_c = action_dim
         self.action.dim_d = 0
-        self.mailbox = []
         self.last_action = None
         self.observation = Observation(local={"value": 1.0}, timestamp=0.0)
 
@@ -55,10 +54,6 @@ class SimpleAgent(Agent):
     def act(self, observation, upstream_action=None, *args, **kwargs):
         self.last_action = upstream_action
         return np.array([1.0] * self.action.dim_c)
-
-    def receive_message(self, message):
-        """Receive a message and add to mailbox."""
-        self.mailbox.append(message)
 
 
 # =============================================================================

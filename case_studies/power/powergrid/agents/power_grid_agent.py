@@ -8,7 +8,7 @@ standard coordinator-level capabilities while adding power-grid specific
 functionality.
 """
 
-from typing import Any, Dict as DictType, Iterable, List, Optional
+from typing import Any, Dict as DictType, Iterable, List, Optional, Union
 
 import gymnasium as gym
 import numpy as np
@@ -17,6 +17,7 @@ from gymnasium.spaces import Box, Dict, Discrete, MultiDiscrete
 
 from heron.agents.coordinator_agent import CoordinatorAgent, COORDINATOR_LEVEL
 from heron.agents.base import Agent, AgentID
+from heron.core.action import Action
 from heron.core.observation import Observation
 from powergrid.agents.device_agent import DeviceAgent
 from heron.core.policies import Policy
@@ -25,7 +26,6 @@ from powergrid.core.state.state import GridState
 from powergrid.agents.generator import Generator
 from powergrid.agents.storage import ESS
 from powergrid.core.features.network import BusVoltages, LineFlows, NetworkMetrics
-from heron.messaging.base import ChannelManager, MessageBroker
 
 
 GRID_LEVEL = COORDINATOR_LEVEL  # Level identifier for grid-level agents (same as coordinator)
@@ -52,8 +52,7 @@ class GridAgent(CoordinatorAgent):
         policy: Optional[Policy] = None,
         protocol: Protocol = NoProtocol(),
 
-        # communication params
-        message_broker: Optional[MessageBroker] = None,
+        # hierarchy params
         upstream_id: Optional[AgentID] = None,
         env_id: Optional[str] = None,
 
@@ -61,6 +60,12 @@ class GridAgent(CoordinatorAgent):
         devices: Optional[List[DeviceAgent]] = None,
         centralized: bool = True,
         grid_config: DictType[str, Any] = {},
+
+        # timing params (for event-driven scheduling - Option B)
+        tick_interval: float = 60.0,
+        obs_delay: float = 0.0,
+        act_delay: float = 0.0,
+        msg_delay: float = 0.0,
     ):
         """Initialize grid coordinator.
 
@@ -68,12 +73,15 @@ class GridAgent(CoordinatorAgent):
             agent_id: Unique identifier
             policy: Optional centralized policy for joint action computation
             protocol: Protocol for coordinating devices
-            message_broker: Optional message broker for hierarchical execution
-            upstream_id: Optional parent agent ID for hierarchical execution
+            upstream_id: Optional parent agent ID for hierarchy structure
             env_id: Optional environment ID for multi-environment isolation
             devices: List of device agents to manage (alternative to grid_config)
             centralized: If True, uses centralized policy; if False, devices act independently
             grid_config: Grid configuration dictionary
+            tick_interval: Time between agent ticks (default 60s for coordinators)
+            obs_delay: Observation delay
+            act_delay: Action delay
+            msg_delay: Message delay
         """
         self.centralized = centralized
         self._grid_config = grid_config
@@ -92,10 +100,13 @@ class GridAgent(CoordinatorAgent):
             agent_id=agent_id,
             policy=policy,
             protocol=protocol,
-            message_broker=message_broker,
             upstream_id=upstream_id,
             env_id=env_id,
             config=config,
+            tick_interval=tick_interval,
+            obs_delay=obs_delay,
+            act_delay=act_delay,
+            msg_delay=msg_delay,
         )
 
         # Use GridState instead of CoordinatorAgentState for power-grid domain
@@ -130,7 +141,6 @@ class GridAgent(CoordinatorAgent):
     def _build_subordinate_agents(
         self,
         agent_configs: List[DictType[str, Any]],
-        message_broker: Optional[MessageBroker] = None,
         env_id: Optional[str] = None,
         upstream_id: Optional[AgentID] = None,
     ) -> DictType[AgentID, DeviceAgent]:
@@ -140,7 +150,6 @@ class GridAgent(CoordinatorAgent):
 
         Args:
             agent_configs: List of device configuration dictionaries
-            message_broker: Optional message broker for communication
             env_id: Environment ID for multi-environment isolation
             upstream_id: Upstream agent ID (this grid agent)
 
@@ -149,7 +158,6 @@ class GridAgent(CoordinatorAgent):
         """
         return self._build_device_agents(
             agent_configs,
-            message_broker=message_broker,
             env_id=env_id,
             upstream_id=upstream_id
         )
@@ -157,7 +165,6 @@ class GridAgent(CoordinatorAgent):
     def _build_device_agents(
         self,
         device_configs: List[DictType[str, Any]],
-        message_broker: Optional[MessageBroker] = None,
         env_id: Optional[str] = None,
         upstream_id: Optional[AgentID] = None,
     ) -> DictType[AgentID, DeviceAgent]:
@@ -167,7 +174,6 @@ class GridAgent(CoordinatorAgent):
 
         Args:
             device_configs: List of device configuration dictionaries
-            message_broker: Optional message broker for communication
             env_id: Environment ID for multi-environment isolation
             upstream_id: Upstream agent ID (this grid agent)
 
@@ -213,6 +219,14 @@ class GridAgent(CoordinatorAgent):
         """Set safety value explicitly."""
         self._safety = value
 
+    def get_reward(self) -> DictType[str, float]:
+        """Get aggregated reward from devices.
+
+        Returns:
+            Dict with total cost and safety values
+        """
+        return {"cost": self.cost, "safety": self.safety}
+
     # ============================================
     # Observation Methods (Override for device terminology)
     # ============================================
@@ -246,7 +260,7 @@ class GridAgent(CoordinatorAgent):
     # Action Methods (Override for centralized flag)
     # ============================================
 
-    def act(self, observation: Observation, upstream_action: Any = None) -> Any:
+    def act(self, observation: Observation, upstream_action: Any = None) -> Optional[Action]:
         """Compute coordination action and distribute to devices.
 
         Extends CoordinatorAgent.act() with centralized mode check.
@@ -256,7 +270,7 @@ class GridAgent(CoordinatorAgent):
             upstream_action: Pre-computed action (if any)
 
         Returns:
-            Joint action array (if centralized mode with policy)
+            Action object (if centralized mode with policy)
 
         Raises:
             NotImplementedError: If decentralized mode without policy
@@ -352,36 +366,19 @@ class GridAgent(CoordinatorAgent):
     # ============================================
 
     def _consume_network_state(self) -> Optional[DictType[str, Any]]:
-        """Consume network state from ProxyAgent via message broker.
+        """Consume network state from message broker.
 
-        In distributed mode, agents retrieve network state from the ProxyAgent
-        rather than directly from the environment. The ProxyAgent acts as the
-        single source of truth for network information.
+        In Option B (event-driven mode), agents retrieve network state from
+        messages delivered via the message broker.
 
         Returns:
             Network state payload or None if no message available
         """
-        if not self.message_broker or not self.env_id:
-            return None
-
-        # Receive network state from ProxyAgent (not directly from environment)
-        # ProxyAgent sends state via info channel: proxy_agent -> grid_agent
-        channel = ChannelManager.info_channel(
-            "proxy_agent",  # ProxyAgent is the sender
-            self.agent_id,   # This grid agent is the recipient
-            self.env_id
-        )
-        messages = self.message_broker.consume(
-            channel,
-            recipient_id=self.agent_id,
-            env_id=self.env_id,
-            clear=True
-        )
-
-        if messages:
-            # Return the most recent message
-            return messages[-1].payload
-
+        # Check message broker for network state messages
+        messages = self.receive_messages(clear=True)
+        for msg in messages:
+            if 'network_state' in msg:
+                return msg['network_state']
         return None
 
     def __repr__(self) -> str:
@@ -410,7 +407,6 @@ class PowerGridAgent(GridAgent):
         # Base class args
         protocol: Protocol = NoProtocol(),
         policy: Optional[Policy] = None,
-        message_broker: Optional[MessageBroker] = None,
         upstream_id: Optional[AgentID] = None,
         env_id: Optional[str] = None,
         grid_config: DictType[str, Any] = {},
@@ -421,19 +417,28 @@ class PowerGridAgent(GridAgent):
 
         # PowerGridAgent specific params
         net: Optional[pp.pandapowerNet] = None,
+
+        # timing params (for event-driven scheduling - Option B)
+        tick_interval: float = 60.0,
+        obs_delay: float = 0.0,
+        act_delay: float = 0.0,
+        msg_delay: float = 0.0,
     ):
         """Initialize power grid agent.
 
         Args:
             protocol: Coordination protocol
             policy: Optional centralized policy
-            message_broker: Optional message broker for hierarchical execution
-            upstream_id: Optional parent agent ID for hierarchical execution
+            upstream_id: Optional parent agent ID for hierarchy structure
             env_id: Optional environment ID for multi-environment isolation
             grid_config: Grid configuration dictionary
             devices: Optional list of device agents to manage
             centralized: If True, uses centralized policy for coordination
             net: PandaPower network object (required)
+            tick_interval: Time between agent ticks (default 60s for coordinators)
+            obs_delay: Observation delay
+            act_delay: Action delay
+            msg_delay: Message delay
         """
         if net is None:
             raise ValueError("PandaPower network 'net' must be provided to PowerGridAgent.")
@@ -450,18 +455,20 @@ class PowerGridAgent(GridAgent):
             agent_id=self.name,
             protocol=protocol,
             policy=policy,
-            message_broker=message_broker,
             upstream_id=upstream_id,
             env_id=env_id,
             devices=devices,
             centralized=centralized,
             grid_config=grid_config,
+            tick_interval=tick_interval,
+            obs_delay=obs_delay,
+            act_delay=act_delay,
+            msg_delay=msg_delay,
         )
 
     def _build_device_agents(
         self,
         device_configs: List[DictType[str, Any]],
-        message_broker: Optional[MessageBroker] = None,
         env_id: Optional[str] = None,
         upstream_id: Optional[AgentID] = None,
     ) -> DictType[AgentID, DeviceAgent]:
@@ -469,7 +476,6 @@ class PowerGridAgent(GridAgent):
 
         Args:
             device_configs: List of device configuration dictionaries
-            message_broker: Optional message broker for communication
             env_id: Environment ID for multi-environment isolation
             upstream_id: Upstream agent ID (this grid agent)
 
@@ -496,7 +502,6 @@ class PowerGridAgent(GridAgent):
 
             if device_type == 'Generator':
                 generator = Generator(
-                    message_broker=message_broker,
                     upstream_id=upstream_id,
                     env_id=env_id,
                     device_config=wrapped_config,
@@ -505,7 +510,6 @@ class PowerGridAgent(GridAgent):
                 generators.append(generator)
             elif device_type == 'ESS':
                 ess = ESS(
-                    message_broker=message_broker,
                     upstream_id=upstream_id,
                     env_id=env_id,
                     device_config=wrapped_config,
@@ -996,16 +1000,15 @@ class PowerGridAgent(GridAgent):
 
                 self.safety += overloading + overvoltage + undervoltage
         else:
-            # Distributed mode: receive network state via ProxyAgent
-            if self.message_broker and self.env_id:
-                network_state = self._consume_network_state()
-                if network_state and network_state.get('converged', False):
-                    # Extract pre-computed safety metrics from ProxyAgent message
-                    bus_voltages = network_state.get('bus_voltages', {})
-                    line_loading = network_state.get('line_loading', {})
+            # Event-driven mode (Option B): check mailbox for network state
+            network_state = self._consume_network_state()
+            if network_state and network_state.get('converged', False):
+                # Extract pre-computed safety metrics from message
+                bus_voltages = network_state.get('bus_voltages', {})
+                line_loading = network_state.get('line_loading', {})
 
-                    overvoltage = bus_voltages.get('overvoltage', 0)
-                    undervoltage = bus_voltages.get('undervoltage', 0)
-                    overloading = line_loading.get('overloading', 0)
+                overvoltage = bus_voltages.get('overvoltage', 0)
+                undervoltage = bus_voltages.get('undervoltage', 0)
+                overloading = line_loading.get('overloading', 0)
 
-                    self.safety += overloading + overvoltage + undervoltage
+                self.safety += overloading + overvoltage + undervoltage

@@ -2,6 +2,11 @@
 
 CoordinatorAgent manages a set of field agents, implementing coordination
 protocols like price signals, setpoints, or consensus algorithms.
+
+In synchronous mode (Option A - Training), the coordinator:
+1. Collects observations from all subordinates via observe()
+2. Computes joint action using centralized policy
+3. Distributes actions to subordinates via coordinate_subordinates()
 """
 
 from typing import Any, Dict as DictType, List, Optional
@@ -39,13 +44,18 @@ class CoordinatorAgent(Agent):
         policy: Optional[Policy] = None,
         protocol: Optional["Protocol"] = None,
 
-        # communication params
-        message_broker: Optional["MessageBroker"] = None,
+        # hierarchy params
         upstream_id: Optional[AgentID] = None,
         env_id: Optional[str] = None,
 
         # CoordinatorAgent specific params
         config: Optional[DictType[str, Any]] = None,
+
+        # timing params (for event-driven scheduling)
+        tick_interval: float = 60.0,  # Coordinators typically tick less frequently
+        obs_delay: float = 0.0,
+        act_delay: float = 0.0,
+        msg_delay: float = 0.0,
     ):
         """Initialize coordinator agent.
 
@@ -53,10 +63,13 @@ class CoordinatorAgent(Agent):
             agent_id: Unique identifier
             policy: Optional centralized policy for joint action computation
             protocol: Protocol for coordinating subordinate agents
-            message_broker: Optional message broker for hierarchical execution
-            upstream_id: Optional parent agent ID for hierarchical execution
+            upstream_id: Optional parent agent ID for hierarchy structure
             env_id: Optional environment ID for multi-environment isolation
             config: Coordinator configuration dictionary
+            tick_interval: Time between agent ticks (default 60s for coordinators)
+            obs_delay: Observation delay
+            act_delay: Action delay
+            msg_delay: Message delay
         """
         config = config or {}
 
@@ -71,7 +84,6 @@ class CoordinatorAgent(Agent):
         agent_configs = config.get('agents', [])
         self.subordinate_agents = self._build_subordinate_agents(
             agent_configs,
-            message_broker=message_broker,
             env_id=env_id,
             upstream_id=agent_id  # Subordinates' upstream is this coordinator
         )
@@ -79,16 +91,18 @@ class CoordinatorAgent(Agent):
         super().__init__(
             agent_id=agent_id,
             level=COORDINATOR_LEVEL,
-            message_broker=message_broker,
             upstream_id=upstream_id,
             env_id=env_id,
             subordinates=self.subordinate_agents,
+            tick_interval=tick_interval,
+            obs_delay=obs_delay,
+            act_delay=act_delay,
+            msg_delay=msg_delay,
         )
 
     def _build_subordinate_agents(
         self,
         agent_configs: List[DictType[str, Any]],
-        message_broker: Optional["MessageBroker"] = None,
         env_id: Optional[str] = None,
         upstream_id: Optional[AgentID] = None,
     ) -> DictType[AgentID, FieldAgent]:
@@ -99,7 +113,6 @@ class CoordinatorAgent(Agent):
 
         Args:
             agent_configs: List of agent configuration dictionaries
-            message_broker: Optional message broker for communication
             env_id: Environment ID for multi-environment isolation
             upstream_id: Upstream agent ID (this coordinator)
 
@@ -110,11 +123,11 @@ class CoordinatorAgent(Agent):
         return {}
 
     # ============================================
-    # Core Agent Lifecycle Methods
+    # Core Agent Lifecycle Methods (Both Modes)
     # ============================================
 
     def reset(self, *, seed: Optional[int] = None, **kwargs) -> None:
-        """Reset coordinator and all subordinate agents.
+        """Reset coordinator and all subordinate agents. [Both Modes]
 
         Args:
             seed: Random seed
@@ -130,8 +143,15 @@ class CoordinatorAgent(Agent):
         if self.policy is not None:
             self.policy.reset()
 
+    # ============================================
+    # Synchronous Execution (Option A - Training)
+    # ============================================
+
     def observe(self, global_state: Optional[DictType[str, Any]] = None, *args, **kwargs) -> Observation:
-        """Collect observations from subordinate agents. [Only for synchronous direct execution]
+        """Collect observations from subordinate agents. [Both Modes]
+
+        - Training (Option A): Called by environment/system agent
+        - Testing (Option B): Called internally by tick()
 
         Args:
             global_state: Environment state
@@ -164,7 +184,9 @@ class CoordinatorAgent(Agent):
         *args,
         **kwargs
     ) -> Any:
-        """Build local observation from subordinate observations.
+        """Build local observation from subordinate observations. [Both Modes]
+
+        Called by observe() which is used in both modes.
 
         Args:
             subordinate_obs: Dictionary mapping agent IDs to their observations
@@ -180,7 +202,10 @@ class CoordinatorAgent(Agent):
         }
 
     def act(self, observation: Observation, upstream_action: Any = None) -> None:
-        """Compute coordination action and distribute to subordinates. [Only for synchronous direct execution]
+        """Compute coordination action and distribute to subordinates. [Training Only - Direct Call]
+
+        Note: In Testing (Option B), tick() handles action distribution via
+        MESSAGE_DELIVERY events instead of calling this method directly.
 
         Args:
             observation: Aggregated observation
@@ -201,96 +226,93 @@ class CoordinatorAgent(Agent):
         self.coordinate_subordinates(observation, action)
 
     # ============================================
-    # Abstract Methods for Hierarchical Execution
+    # Event-Driven Execution (Option B - Testing)
     # ============================================
 
-    def _derive_local_action(self, upstream_action: Optional[Any]) -> Optional[Any]:
-        """Derive local action from upstream action.
-
-        CoordinatorAgent is typically a pure coordinator with no local physical action.
-
-        Args:
-            upstream_action: Action received from upstream agent
-
-        Returns:
-            None - Coordinator has no local action to execute
-        """
-        return None
-
-    async def _derive_downstream_actions(
+    def tick(
         self,
-        upstream_action: Optional[Any]
-    ) -> DictType[AgentID, Any]:
-        """Derive actions for subordinates from upstream action.
+        scheduler: "EventScheduler",
+        current_time: float,
+        global_state: Optional[DictType[str, Any]] = None,
+        proxy: Optional["Agent"] = None,
+    ) -> None:
+        """Execute one tick in event-driven mode. [Testing Only]
 
-        Decomposes the flat action vector from upstream (or from policy)
-        into per-agent actions by splitting based on agent action dimensions.
+        In Option B, CoordinatorAgent:
+        1. Updates timestep
+        2. Checks message broker for upstream action (from SystemAgent if any)
+        3. Gets observation from subordinates (potentially stale in async mode)
+        4. Computes joint action using policy
+        5. Schedules MESSAGE_DELIVERY events to subordinates with msg_delay
+
+        Note: In event-driven mode, the coordinator does NOT call subordinate.tick()
+        directly. Instead, it sends messages that subordinates will process on their
+        own tick schedule. This models realistic async communication.
 
         Args:
-            upstream_action: Action received from upstream agent (flat numpy array or dict)
-
-        Returns:
-            Dict mapping subordinate IDs to their actions
+            scheduler: EventScheduler for scheduling future events
+            current_time: Current simulation time
+            global_state: Optional global state for observation
+            proxy: Optional ProxyAgent for delayed observations
         """
-        downstream_actions = {}
-        if not self.subordinate_agents or upstream_action is None:
-            return downstream_actions
+        self._timestep = current_time
 
-        # Handle Dict action space (continuous + discrete)
-        continuous_action = None
-        discrete_action = None
+        # Check message broker for upstream action (from SystemAgent)
+        upstream_action = None
+        actions = self.receive_action_messages()
+        if actions:
+            upstream_action = actions[-1]  # Use most recent action
 
-        if isinstance(upstream_action, dict):
-            # For Dict spaces with 'continuous' and 'discrete' keys
-            if 'continuous' in upstream_action:
-                continuous_action = np.asarray(upstream_action['continuous'])
-            if 'discrete' in upstream_action:
-                discrete_action = np.asarray(upstream_action['discrete'])
+        # Get observation from subordinates
+        # Note: In async mode, subordinates may have stale state
+        observation = self.observe(global_state)
+        self._last_observation = observation
 
-            # If neither key is present, assume it's already a per-agent dict
-            if continuous_action is None and discrete_action is None:
-                return upstream_action
+        # Compute action
+        if upstream_action is not None:
+            action = upstream_action
+        elif self.policy is not None:
+            action = self.policy.forward(observation)
         else:
-            continuous_action = np.asarray(upstream_action)
+            # No action to take
+            return
 
-        # Decompose flat action vectors into per-agent actions
-        cont_offset = 0
-        disc_offset = 0
+        # Distribute actions to subordinates via MESSAGE_DELIVERY events
+        subordinate_obs = observation.local.get("subordinate_obs", {})
 
-        for agent_id, agent in self.subordinate_agents.items():
-            # Build per-agent action by combining continuous and discrete parts
-            agent_action_parts = []
+        if self.protocol is not None:
+            # Use protocol for action distribution
+            subordinate_states = {
+                agent_id: obs.local for agent_id, obs in subordinate_obs.items()
+            }
+            context = {
+                "subordinates": self.subordinate_agents,
+                "coordinator_id": self.agent_id,
+                "coordinator_action": action,
+                "timestamp": current_time,
+            }
+            _, actions = self.protocol.coordinate(
+                coordinator_state=observation.local,
+                subordinate_states=subordinate_states,
+                coordinator_action=action,
+                context=context
+            )
+        else:
+            # Simple action distribution
+            actions = self._simple_action_distribution(action, subordinate_obs)
 
-            # Add continuous part
-            if agent.action.dim_c > 0 and continuous_action is not None:
-                cont_part = continuous_action[cont_offset:cont_offset + agent.action.dim_c]
-                agent_action_parts.append(cont_part)
-                cont_offset += agent.action.dim_c
-
-            # Add discrete part
-            if agent.action.dim_d > 0 and discrete_action is not None:
-                disc_part = discrete_action[disc_offset:disc_offset + agent.action.dim_d]
-                agent_action_parts.append(disc_part)
-                disc_offset += agent.action.dim_d
-
-            # Concatenate parts into single action array
-            if agent_action_parts:
-                agent_action = np.concatenate(agent_action_parts)
-                downstream_actions[agent_id] = agent_action
-
-        return downstream_actions
-
-    def _execute_local_action(self, action: Optional[Any]) -> None:
-        """Execute own action and update internal state.
-
-        Args:
-            action: Action to execute
-        """
-        # Coordinator typically doesn't perform local action
-        pass
+        # Schedule message delivery to subordinates (with msg_delay)
+        for agent_id, sub_action in actions.items():
+            if agent_id in self.subordinate_agents and sub_action is not None:
+                scheduler.schedule_message_delivery(
+                    sender_id=self.agent_id,
+                    recipient_id=agent_id,
+                    message={"action": sub_action},
+                    delay=self.msg_delay,
+                )
 
     # ============================================
-    # Coordination Methods
+    # Coordination Methods (Training Only)
     # ============================================
 
     def coordinate_subordinates(
@@ -298,7 +320,7 @@ class CoordinatorAgent(Agent):
         observation: Observation,
         action: Any,
     ) -> None:
-        """Unified coordination method using protocol.
+        """Unified coordination method using protocol. [Training Only]
 
         Coordinates subordinate actions using the protocol's communication and
         action components. Delegates to centralized or decentralized paths
@@ -343,7 +365,7 @@ class CoordinatorAgent(Agent):
         action: Any,
         subordinate_obs: DictType[AgentID, Observation]
     ) -> DictType[AgentID, Any]:
-        """Simple action distribution without protocol.
+        """Simple action distribution without protocol. [Both Modes]
 
         Distributes action to subordinates by splitting based on dimensions.
 
@@ -377,18 +399,18 @@ class CoordinatorAgent(Agent):
         actions: DictType[AgentID, Any],
         subordinate_obs: DictType[AgentID, Observation],
     ) -> None:
-        """Apply coordination: send messages and apply actions to subordinates.
+        """Apply coordination: send messages and apply actions to subordinates. [Training Only]
 
         Args:
             messages: Coordination messages to send
             actions: Actions to apply to subordinates
             subordinate_obs: Subordinate observations for context
         """
-        # Send messages to subordinates (informational)
-        for agent_id, message in messages.items():
-            if agent_id in self.subordinate_agents:
-                # Store message in agent's mailbox or handle synchronously
-                pass  # Override in subclasses if needed
+        # Send messages to subordinates via message broker (informational)
+        if self._message_broker is not None:
+            for agent_id, message in messages.items():
+                if agent_id in self.subordinate_agents:
+                    self.send_message(message, recipient_id=agent_id)
 
         # Apply actions directly to subordinates
         for agent_id, action in actions.items():
@@ -398,11 +420,11 @@ class CoordinatorAgent(Agent):
                     self.subordinate_agents[agent_id].act(obs, upstream_action=action)
 
     # ============================================
-    # Space Construction Methods
+    # Space Construction Methods (Both Modes)
     # ============================================
 
     def get_subordinate_action_spaces(self) -> DictType[str, gym.Space]:
-        """Get action spaces for all subordinate agents.
+        """Get action spaces for all subordinate agents. [Both Modes]
 
         Returns:
             Dictionary mapping agent IDs to their action spaces
@@ -413,7 +435,7 @@ class CoordinatorAgent(Agent):
         }
 
     def get_joint_action_space(self) -> gym.Space:
-        """Construct combined action space for all subordinate agents.
+        """Construct combined action space for all subordinate agents. [Both Modes]
 
         Returns:
             Gymnasium space representing joint action space
@@ -453,29 +475,7 @@ class CoordinatorAgent(Agent):
             return Discrete(1)
 
     # ============================================
-    # Cost/Safety Methods
-    # ============================================
-
-    @property
-    def cost(self) -> float:
-        """Get total cost from all subordinate agents."""
-        return sum(agent.cost for agent in self.subordinate_agents.values())
-
-    @property
-    def safety(self) -> float:
-        """Get total safety penalty from all subordinate agents."""
-        return sum(agent.safety for agent in self.subordinate_agents.values())
-
-    def get_reward(self) -> DictType[str, float]:
-        """Get aggregated reward from subordinates.
-
-        Returns:
-            Dict with total cost and safety values
-        """
-        return {"cost": self.cost, "safety": self.safety}
-
-    # ============================================
-    # Utility Methods
+    # Utility Methods (Both Modes)
     # ============================================
 
     def __repr__(self) -> str:

@@ -16,7 +16,6 @@ from powergrid.core.state.state import DeviceState
 from heron.core.policies import Policy
 from heron.protocols.base import NoProtocol, Protocol
 from heron.utils.typing import AgentID
-from heron.messaging.base import MessageBroker
 
 DEVICE_LEVEL = 1  # Level identifier for device-level agents
 
@@ -47,13 +46,18 @@ class DeviceAgent(FieldAgent):
         protocol: Protocol = NoProtocol(),
         policy: Optional[Policy] = None,
 
-        # communication params
-        message_broker: Optional[MessageBroker] = None,
+        # hierarchy params
         upstream_id: Optional[AgentID] = None,
         env_id: Optional[str] = None,
 
         # DeviceAgent specific params
         device_config: Dict[str, Any] = {},
+
+        # timing params (for event-driven scheduling - Option B)
+        tick_interval: float = 1.0,
+        obs_delay: float = 0.0,
+        act_delay: float = 0.0,
+        msg_delay: float = 0.0,
     ):
         """Initialize device agent.
 
@@ -61,10 +65,13 @@ class DeviceAgent(FieldAgent):
             agent_id: Agent ID (defaults to device name from config)
             policy: Decision policy (optional)
             protocol: Communication protocol (defaults to NoProtocol)
-            message_broker: Optional message broker for hierarchical execution
-            upstream_id: Optional upstream agent ID for hierarchical execution
+            upstream_id: Optional upstream agent ID for hierarchy structure
             env_id: Optional environment ID for multi-environment isolation
             device_config: Device configuration dict
+            tick_interval: Time between agent ticks (default 1s for devices)
+            obs_delay: Observation delay
+            act_delay: Action delay
+            msg_delay: Message delay
         """
         # Convert device_config to the config format expected by FieldAgent
         config = {
@@ -81,10 +88,13 @@ class DeviceAgent(FieldAgent):
             agent_id=agent_id or config["name"],
             protocol=protocol,
             policy=policy,
-            message_broker=message_broker,
             upstream_id=upstream_id,
             env_id=env_id,
             config=config,
+            tick_interval=tick_interval,
+            obs_delay=obs_delay,
+            act_delay=act_delay,
+            msg_delay=msg_delay,
         )
 
         # Use DeviceState instead of FieldAgentState for power-grid domain
@@ -92,6 +102,10 @@ class DeviceAgent(FieldAgent):
             owner_id=self.agent_id,
             owner_level=DEVICE_LEVEL
         )
+
+        # Power-grid specific cost/safety metrics
+        self.cost: float = 0.0
+        self.safety: float = 0.0
 
         # Re-initialize state with device-specific setup
         self._init_state()
@@ -185,6 +199,14 @@ class DeviceAgent(FieldAgent):
             **kwargs: Keyword arguments
         """
         raise NotImplementedError
+
+    def get_reward(self) -> Dict[str, float]:
+        """Get device reward based on cost and safety metrics.
+
+        Returns:
+            Dict with cost and safety values
+        """
+        return {"cost": self.cost, "safety": self.safety}
 
     # ============================================
     # Utility Methods
