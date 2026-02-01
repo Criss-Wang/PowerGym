@@ -97,6 +97,11 @@ class Generator(DeviceAgent):
         upstream_id: Optional[str] = None,
         env_id: Optional[str] = None,
         device_config: Dict[str, Any] = {},
+        # timing params (for event-driven scheduling)
+        tick_interval: float = 1.0,
+        obs_delay: float = 0.0,
+        act_delay: float = 0.0,
+        msg_delay: float = 0.0,
     ):
         state_config = device_config.get("device_state_config", {})
 
@@ -140,6 +145,10 @@ class Generator(DeviceAgent):
             upstream_id=upstream_id,
             env_id=env_id,
             device_config=device_config,
+            tick_interval=tick_interval,
+            obs_delay=obs_delay,
+            act_delay=act_delay,
+            msg_delay=msg_delay,
         )
 
     def set_device_action(self) -> None:
@@ -461,32 +470,6 @@ class Generator(DeviceAgent):
         violations = self.limits.feasible(P, Q)
         self.safety = np.sum(list(violations.values())) * on * dt
 
-    def _publish_state_updates(self) -> None:
-        """Publish electrical state to environment for pandapower sync.
-
-        This method is called during hierarchical execution to send device
-        state updates to the environment via message broker.
-        """
-        if not self.message_broker:
-            return
-
-        channel = ChannelManager.state_update_channel(self.env_id)
-        message = Message(
-            env_id=self.env_id,
-            sender_id=self.agent_id,
-            recipient_id="environment",
-            timestamp=self._timestep,
-            message_type=MessageType.STATE_UPDATE,
-            payload={
-                'agent_id': self.agent_id,
-                'device_type': 'sgen',
-                'P_MW': float(self.electrical.P_MW),
-                'Q_MVAr': float(self.electrical.Q_MVAr or 0.0),
-                'in_service': bool(self.status.in_service),
-            }
-        )
-        self.message_broker.publish(channel, message)
-
     @property
     def electrical(self) -> ElectricalBasePh:
         for f in self.state.features:
@@ -517,6 +500,26 @@ class Generator(DeviceAgent):
     def source(self) -> Optional[str]:
         """Get renewable source type ('solar', 'wind', or None for dispatchable)."""
         return self._generator_config.source
+
+    # ============================================
+    # Distributed Mode Overrides
+    # ============================================
+
+    def _get_pandapower_device_type(self) -> str:
+        """Get the PandaPower element type for this generator."""
+        return 'sgen'
+
+    def _get_power_output(self) -> float:
+        """Get current real power output in MW."""
+        return float(self.electrical.P_MW) if self.electrical else 0.0
+
+    def _get_reactive_power(self) -> float:
+        """Get current reactive power output in MVAr."""
+        return float(self.electrical.Q_MVAr or 0.0) if self.electrical else 0.0
+
+    def _is_in_service(self) -> bool:
+        """Check if generator is currently in service."""
+        return bool(self.status.in_service) if self.status else True
 
     def __repr__(self) -> str:
         name = self.config.name

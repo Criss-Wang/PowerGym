@@ -8,10 +8,13 @@ It processes events in timestamp order, supporting:
 """
 
 import heapq
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, TYPE_CHECKING
 
 from heron.scheduling.event import Event, EventType
 from heron.utils.typing import AgentID
+
+if TYPE_CHECKING:
+    from heron.scheduling.tick_config import TickConfig
 
 
 class EventScheduler:
@@ -50,10 +53,13 @@ class EventScheduler:
         self.event_queue: List[Event] = []
         self._sequence_counter: int = 0
 
-        # Agent configuration
-        self.agent_intervals: Dict[AgentID, float] = {}
-        self.agent_obs_delays: Dict[AgentID, float] = {}
-        self.agent_act_delays: Dict[AgentID, float] = {}
+        # Agent configuration - TickConfig storage
+        self._agent_tick_configs: Dict[AgentID, "TickConfig"] = {}
+
+        # Legacy dicts for backward compatibility (computed from TickConfig)
+        self._agent_intervals: Dict[AgentID, float] = {}
+        self._agent_obs_delays: Dict[AgentID, float] = {}
+        self._agent_act_delays: Dict[AgentID, float] = {}
 
         # Event handlers: EventType -> Callable[[Event, EventScheduler], None]
         self.handlers: Dict[EventType, Callable[[Event, "EventScheduler"], None]] = {}
@@ -62,6 +68,26 @@ class EventScheduler:
         self._processed_count: int = 0
         self._active_agents: Set[AgentID] = set()
 
+    @property
+    def agent_tick_configs(self) -> Dict[AgentID, "TickConfig"]:
+        """Get the tick configs for all agents."""
+        return self._agent_tick_configs
+
+    @property
+    def agent_intervals(self) -> Dict[AgentID, float]:
+        """Backward-compatible access to base tick intervals."""
+        return self._agent_intervals
+
+    @property
+    def agent_obs_delays(self) -> Dict[AgentID, float]:
+        """Backward-compatible access to base obs delays."""
+        return self._agent_obs_delays
+
+    @property
+    def agent_act_delays(self) -> Dict[AgentID, float]:
+        """Backward-compatible access to base act delays."""
+        return self._agent_act_delays
+
     def register_agent(
         self,
         agent_id: AgentID,
@@ -69,19 +95,38 @@ class EventScheduler:
         obs_delay: float = 0.0,
         act_delay: float = 0.0,
         first_tick: Optional[float] = None,
+        tick_config: Optional["TickConfig"] = None,
     ) -> None:
         """Register an agent with the scheduler.
 
         Args:
             agent_id: Unique agent identifier
-            tick_interval: Time between agent ticks (steps)
-            obs_delay: Observation delay (agent sees state from t - obs_delay)
-            act_delay: Action delay (action takes effect at t + act_delay)
+            tick_interval: Time between agent ticks (ignored if tick_config provided)
+            obs_delay: Observation delay (ignored if tick_config provided)
+            act_delay: Action delay (ignored if tick_config provided)
             first_tick: Time of first tick (defaults to current_time)
+            tick_config: Optional TickConfig for full control including jitter
         """
-        self.agent_intervals[agent_id] = tick_interval
-        self.agent_obs_delays[agent_id] = obs_delay
-        self.agent_act_delays[agent_id] = act_delay
+        if tick_config is not None:
+            self._agent_tick_configs[agent_id] = tick_config
+            # Store base values in legacy dicts for backward compatibility
+            self._agent_intervals[agent_id] = tick_config.tick_interval
+            self._agent_obs_delays[agent_id] = tick_config.obs_delay
+            self._agent_act_delays[agent_id] = tick_config.act_delay
+        else:
+            # Legacy: create deterministic config from individual params
+            from heron.scheduling.tick_config import TickConfig as TC
+
+            config = TC.deterministic(
+                tick_interval=tick_interval,
+                obs_delay=obs_delay,
+                act_delay=act_delay,
+            )
+            self._agent_tick_configs[agent_id] = config
+            self._agent_intervals[agent_id] = tick_interval
+            self._agent_obs_delays[agent_id] = obs_delay
+            self._agent_act_delays[agent_id] = act_delay
+
         self._active_agents.add(agent_id)
 
         # Schedule first tick
@@ -100,9 +145,10 @@ class EventScheduler:
             agent_id: Agent to remove
         """
         self._active_agents.discard(agent_id)
-        self.agent_intervals.pop(agent_id, None)
-        self.agent_obs_delays.pop(agent_id, None)
-        self.agent_act_delays.pop(agent_id, None)
+        self._agent_tick_configs.pop(agent_id, None)
+        self._agent_intervals.pop(agent_id, None)
+        self._agent_obs_delays.pop(agent_id, None)
+        self._agent_act_delays.pop(agent_id, None)
 
     def schedule(self, event: Event) -> None:
         """Schedule an event for future processing.
@@ -123,13 +169,19 @@ class EventScheduler:
     ) -> None:
         """Schedule an agent tick event.
 
+        Uses jittered interval from TickConfig if available.
+
         Args:
             agent_id: Agent to tick
-            timestamp: When to tick (defaults to current_time + interval)
+            timestamp: When to tick (defaults to current_time + jittered interval)
             payload: Optional event payload
         """
         if timestamp is None:
-            interval = self.agent_intervals.get(agent_id, 1.0)
+            config = self._agent_tick_configs.get(agent_id)
+            if config:
+                interval = config.get_tick_interval()  # Jittered!
+            else:
+                interval = self._agent_intervals.get(agent_id, 1.0)
             timestamp = self.current_time + interval
 
         self.schedule(Event(
@@ -147,13 +199,19 @@ class EventScheduler:
     ) -> None:
         """Schedule a delayed action effect.
 
+        Uses jittered delay from TickConfig if available.
+
         Args:
             agent_id: Agent whose action this is
             action: The action to apply
-            delay: Delay before action takes effect (defaults to agent's act_delay)
+            delay: Delay before action takes effect (defaults to jittered act_delay)
         """
         if delay is None:
-            delay = self.agent_act_delays.get(agent_id, 0.0)
+            config = self._agent_tick_configs.get(agent_id)
+            if config:
+                delay = config.get_act_delay()  # Jittered!
+            else:
+                delay = self._agent_act_delays.get(agent_id, 0.0)
 
         self.schedule(Event(
             timestamp=self.current_time + delay,
@@ -162,21 +220,54 @@ class EventScheduler:
             payload={"action": action}
         ))
 
+    def get_obs_delay(self, agent_id: AgentID) -> float:
+        """Get (possibly jittered) observation delay for agent.
+
+        Args:
+            agent_id: Agent ID
+
+        Returns:
+            Observation delay (jittered if config has jitter enabled)
+        """
+        config = self._agent_tick_configs.get(agent_id)
+        if config:
+            return config.get_obs_delay()
+        return self._agent_obs_delays.get(agent_id, 0.0)
+
+    def get_msg_delay(self, agent_id: AgentID) -> float:
+        """Get (possibly jittered) message delay for agent.
+
+        Args:
+            agent_id: Agent ID
+
+        Returns:
+            Message delay (jittered if config has jitter enabled)
+        """
+        config = self._agent_tick_configs.get(agent_id)
+        if config:
+            return config.get_msg_delay()
+        return 0.0
+
     def schedule_message_delivery(
         self,
         sender_id: AgentID,
         recipient_id: AgentID,
         message: Any,
-        delay: float = 0.0,
+        delay: Optional[float] = None,
     ) -> None:
         """Schedule a delayed message delivery.
+
+        Uses jittered delay from sender's TickConfig if delay not provided.
 
         Args:
             sender_id: Sending agent
             recipient_id: Receiving agent
             message: Message content
-            delay: Communication delay
+            delay: Communication delay (defaults to sender's jittered msg_delay)
         """
+        if delay is None:
+            delay = self.get_msg_delay(sender_id)
+
         self.schedule(Event(
             timestamp=self.current_time + delay,
             event_type=EventType.MESSAGE_DELIVERY,

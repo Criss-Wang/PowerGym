@@ -1,15 +1,16 @@
 """
-Example 7: Event-Driven Mode (Option B)
-=======================================
+Example 7: Event-Driven Mode (Option B) for Power Grid Testing
+===============================================================
 
 This example demonstrates the event-driven execution mode of HERON, which is used
-for testing policy robustness under realistic timing constraints.
+for testing policy robustness under realistic timing constraints with the
+PowerGrid case study.
 
 What you'll learn:
 - How to setup event-driven execution with EventScheduler
-- Configuring agent tick intervals and delays
+- Configuring agent tick intervals and delays for power grid agents
 - How hierarchical coordination works in async mode
-- Differences between Option A (sync) and Option B (event-driven)
+- Testing trained MAPPO policies in event-driven mode
 
 Key Concepts:
 - Option A (Synchronous): All agents step together in env.step()
@@ -21,11 +22,17 @@ Key Concepts:
   - Configurable delays (obs_delay, act_delay, msg_delay)
   - Coordinator sends messages that subordinates receive on their next tick
 
-Runtime: ~5 seconds
+HERON Timing Parameters:
+- tick_interval: How often an agent steps (e.g., 1s for devices, 60s for grid)
+- obs_delay: Agent sees state from t - obs_delay (simulates sensor latency)
+- act_delay: Action takes effect at t + act_delay (simulates actuator delay)
+- msg_delay: Messages arrive after msg_delay (simulates communication latency)
+
+Runtime: ~10 seconds
 """
 
 import numpy as np
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from gymnasium.spaces import Box
 
@@ -34,6 +41,7 @@ from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.core.observation import Observation
 from heron.core.policies import Policy
+from heron.messaging.in_memory_broker import InMemoryBroker
 
 
 class SimplePolicy(Policy):
@@ -210,17 +218,9 @@ def run_event_driven_example():
             print(f"  t={event.timestamp:5.1f}: {agent_id} action effect #{action_count[agent_id]}")
 
     def on_message_delivery(event: Event, sched: EventScheduler) -> None:
-        """Handle MESSAGE_DELIVERY events via message broker."""
+        """Handle MESSAGE_DELIVERY events."""
         recipient_id = event.agent_id
         sender = event.payload.get("sender")
-        message = event.payload.get("message", {})
-
-        # Publish message via message broker if available
-        if env.message_broker is not None and sender is not None:
-            if "action" in message:
-                env.publish_action(sender_id=sender, recipient_id=recipient_id, action=message.get("action"))
-            else:
-                env.publish_info(sender_id=sender, recipient_id=recipient_id, info=message)
         print(f"  t={event.timestamp:5.1f}: Message delivered to {recipient_id} from {sender}")
 
     scheduler.set_handler(EventType.AGENT_TICK, on_agent_tick)
@@ -264,6 +264,106 @@ def run_event_driven_example():
     print()
 
 
+def run_power_grid_event_driven():
+    """Run event-driven simulation with PowerGrid agents."""
+
+    print("=" * 80)
+    print("PowerGrid Event-Driven Mode")
+    print("=" * 80)
+    print()
+
+    # ============================================================
+    # Step 1: Create PowerGrid Environment in Distributed Mode
+    # ============================================================
+    print("Step 1: Creating PowerGrid environment in distributed mode...")
+    print("-" * 80)
+
+    from powergrid.setups.loader import load_setup
+    from powergrid.envs.multi_agent_microgrids import MultiAgentMicrogrids
+
+    # Load environment config and set distributed mode
+    env_config = load_setup('ieee34_ieee13')
+    env_config['train'] = False
+    env_config['centralized'] = False  # Enable distributed/event-driven mode
+
+    # Create environment
+    env = MultiAgentMicrogrids(env_config)
+    print(f"Created environment with {len(env.agent_dict)} grid agents")
+
+    # Configure all agents for distributed mode
+    env.configure_agents_for_distributed()
+    print("Configured agents for distributed execution")
+    print()
+
+    # ============================================================
+    # Step 2: Show Agent Timing Configuration
+    # ============================================================
+    print("Step 2: Agent Timing Configuration")
+    print("-" * 80)
+
+    for agent_id, agent in env.agent_dict.items():
+        print(f"Grid Agent: {agent_id}")
+        print(f"  tick_interval: {agent.tick_interval}s")
+        print(f"  obs_delay: {agent.obs_delay}s")
+        print(f"  act_delay: {agent.act_delay}s")
+        print(f"  msg_delay: {agent.msg_delay}s")
+
+        if hasattr(agent, 'devices'):
+            for device_id, device in agent.devices.items():
+                print(f"  Device: {device_id}")
+                print(f"    tick_interval: {device.tick_interval}s")
+                print(f"    act_delay: {device.act_delay}s")
+
+    print()
+
+    # ============================================================
+    # Step 3: Run Event-Driven Episode
+    # ============================================================
+    print("Step 3: Running event-driven episode...")
+    print("-" * 80)
+
+    obs, info = env.reset()
+    done = {"__all__": False}
+    step = 0
+    total_reward = 0.0
+
+    while not done.get("__all__", False) and step < 10:
+        # Random actions for demonstration
+        actions = {}
+        for agent_id in env.actionable_agents:
+            action_space = env.action_spaces[agent_id]
+            actions[agent_id] = action_space.sample()
+
+        # Step environment (in distributed mode)
+        obs, rewards, terminateds, truncateds, infos = env.step(actions)
+        done = terminateds
+
+        step_reward = sum(rewards.values())
+        total_reward += step_reward
+
+        print(f"Step {step + 1}: reward={step_reward:.2f}")
+        step += 1
+
+    print()
+    print(f"Episode complete: {step} steps, total reward={total_reward:.2f}")
+    print()
+
+    # ============================================================
+    # Step 4: Get Collective Metrics
+    # ============================================================
+    print("Step 4: Collective CTDE Metrics")
+    print("-" * 80)
+
+    metrics = env.get_power_grid_metrics()
+    for key, value in metrics.items():
+        if isinstance(value, float):
+            print(f"  {key}: {value:.4f}")
+        else:
+            print(f"  {key}: {value}")
+
+    print()
+
+
 def compare_option_a_vs_b():
     """Compare synchronous (Option A) vs event-driven (Option B)."""
 
@@ -298,12 +398,22 @@ def compare_option_a_vs_b():
     print("msg_delay:     Messages arrive after msg_delay")
     print()
 
+    print("CTDE Workflow:")
+    print("-" * 40)
+    print("1. Training (Option A): Centralized - agents share rewards")
+    print("2. Testing (Option B): Decentralized - agents act independently")
+    print("3. Validation: Compare performance between modes")
+    print()
+
 
 def main():
     """Run all demonstrations."""
 
-    # Main event-driven example
+    # Main event-driven example (abstract agents)
     run_event_driven_example()
+
+    # PowerGrid-specific event-driven example
+    run_power_grid_event_driven()
 
     # Comparison explanation
     compare_option_a_vs_b()
@@ -318,6 +428,7 @@ def main():
     print("3. Coordinator sends messages that arrive with delay")
     print("4. Field agents apply actions with act_delay")
     print("5. Use Option A for training, Option B for testing robustness")
+    print("6. PowerGrid agents integrate seamlessly with HERON event-driven mode")
     print()
 
 

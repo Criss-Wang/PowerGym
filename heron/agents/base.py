@@ -30,6 +30,7 @@ from heron.utils.typing import AgentID
 
 if TYPE_CHECKING:
     from heron.messaging.base import MessageBroker
+    from heron.scheduling.tick_config import TickConfig, JitterType
 
 
 class Agent(ABC):
@@ -71,6 +72,9 @@ class Agent(ABC):
         obs_delay: float = 0.0,
         act_delay: float = 0.0,
         msg_delay: float = 0.0,
+
+        # NEW: TickConfig for full control (overrides individual timing params)
+        tick_config: Optional["TickConfig"] = None,
     ):
         """Initialize agent.
 
@@ -82,10 +86,11 @@ class Agent(ABC):
             upstream_id: Optional upstream agent ID for hierarchy structure
             subordinates: Optional dict of subordinate agents
             env_id: Optional environment ID for multi-environment isolation
-            tick_interval: Time between agent steps (for event-driven scheduling)
-            obs_delay: Observation delay - agent sees state from t - obs_delay
-            act_delay: Action delay - action takes effect at t + act_delay
-            msg_delay: Message delay - messages arrive after msg_delay
+            tick_interval: Time between agent steps (ignored if tick_config provided)
+            obs_delay: Observation delay (ignored if tick_config provided)
+            act_delay: Action delay (ignored if tick_config provided)
+            msg_delay: Message delay (ignored if tick_config provided)
+            tick_config: Optional TickConfig for full control including jitter
         """
         self.agent_id = agent_id
         self.level = level
@@ -99,17 +104,101 @@ class Agent(ABC):
         # Message broker reference (set by environment in distributed mode)
         self._message_broker: Optional["MessageBroker"] = None
 
-        # Timing/latency attributes (for event-driven scheduling)
-        self.tick_interval = tick_interval
-        self.obs_delay = obs_delay
-        self.act_delay = act_delay
-        self.msg_delay = msg_delay
+        # Timing configuration (via TickConfig)
+        if tick_config is not None:
+            self._tick_config = tick_config
+        else:
+            # Create deterministic config from legacy params
+            from heron.scheduling.tick_config import TickConfig as TC
+
+            self._tick_config = TC.deterministic(
+                tick_interval=tick_interval,
+                obs_delay=obs_delay,
+                act_delay=act_delay,
+                msg_delay=msg_delay,
+            )
 
         # Hierarchy structure (used by coordinators)
         self.upstream_id = upstream_id
         self.subordinates = subordinates or {}
         self.env_id = env_id
         self.subordinates_info: Dict[AgentID, Dict[str, Any]] = {}
+
+    # ============================================
+    # Tick Configuration (Event-Driven Mode)
+    # ============================================
+
+    @property
+    def tick_config(self) -> "TickConfig":
+        """Get the tick configuration for this agent."""
+        return self._tick_config
+
+    @tick_config.setter
+    def tick_config(self, config: "TickConfig") -> None:
+        """Set the tick configuration for this agent."""
+        self._tick_config = config
+
+    # Backward-compatible properties (read base values from config)
+    @property
+    def tick_interval(self) -> float:
+        """Base tick interval (use tick_config.get_tick_interval() for jittered)."""
+        return self._tick_config.tick_interval
+
+    @property
+    def obs_delay(self) -> float:
+        """Base observation delay (use tick_config.get_obs_delay() for jittered)."""
+        return self._tick_config.obs_delay
+
+    @property
+    def act_delay(self) -> float:
+        """Base action delay (use tick_config.get_act_delay() for jittered)."""
+        return self._tick_config.act_delay
+
+    @property
+    def msg_delay(self) -> float:
+        """Base message delay (use tick_config.get_msg_delay() for jittered)."""
+        return self._tick_config.msg_delay
+
+    def enable_jitter(
+        self,
+        jitter_type: "JitterType" = None,
+        jitter_ratio: float = 0.1,
+        seed: Optional[int] = None,
+    ) -> None:
+        """Enable jitter for testing mode.
+
+        Converts current tick_config to use jitter with same base values.
+
+        Args:
+            jitter_type: Distribution type for jitter (default: GAUSSIAN)
+            jitter_ratio: Jitter magnitude as fraction of base
+            seed: Optional RNG seed for reproducibility
+        """
+        from heron.scheduling.tick_config import TickConfig as TC, JitterType
+
+        if jitter_type is None:
+            jitter_type = JitterType.GAUSSIAN
+
+        self._tick_config = TC.with_jitter(
+            tick_interval=self._tick_config.tick_interval,
+            obs_delay=self._tick_config.obs_delay,
+            act_delay=self._tick_config.act_delay,
+            msg_delay=self._tick_config.msg_delay,
+            jitter_type=jitter_type,
+            jitter_ratio=jitter_ratio,
+            seed=seed,
+        )
+
+    def disable_jitter(self) -> None:
+        """Disable jitter (switch to deterministic mode)."""
+        from heron.scheduling.tick_config import TickConfig as TC
+
+        self._tick_config = TC.deterministic(
+            tick_interval=self._tick_config.tick_interval,
+            obs_delay=self._tick_config.obs_delay,
+            act_delay=self._tick_config.act_delay,
+            msg_delay=self._tick_config.msg_delay,
+        )
 
     # ============================================
     # Core Lifecycle Methods (Both Modes)

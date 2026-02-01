@@ -8,7 +8,7 @@ In synchronous mode (Option A - Training), field agents:
 2. Execute actions via act() - either from coordinator or own policy
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 from dataclasses import dataclass
 
 import numpy as np
@@ -20,6 +20,9 @@ from heron.core.state import FieldAgentState
 from heron.core.action import Action
 from heron.core.policies import Policy
 from heron.utils.typing import AgentID
+
+if TYPE_CHECKING:
+    from heron.scheduling.tick_config import TickConfig
 
 FIELD_LEVEL = 1  # Level identifier for field-level agents
 
@@ -70,6 +73,9 @@ class FieldAgent(Agent):
         obs_delay: float = 0.0,
         act_delay: float = 0.0,
         msg_delay: float = 0.0,
+
+        # NEW: TickConfig for full control (overrides individual timing params)
+        tick_config: Optional["TickConfig"] = None,
     ):
         """Initialize field agent.
 
@@ -80,10 +86,11 @@ class FieldAgent(Agent):
             upstream_id: Optional upstream agent ID for hierarchy structure
             env_id: Optional environment ID for multi-environment isolation
             config: Agent configuration dict
-            tick_interval: Time between agent ticks (default 1s for field agents)
-            obs_delay: Observation delay
-            act_delay: Action delay
-            msg_delay: Message delay
+            tick_interval: Time between agent ticks (ignored if tick_config provided)
+            obs_delay: Observation delay (ignored if tick_config provided)
+            act_delay: Action delay (ignored if tick_config provided)
+            msg_delay: Message delay (ignored if tick_config provided)
+            tick_config: Optional TickConfig for full control including jitter
         """
         config = config or {}
 
@@ -112,6 +119,7 @@ class FieldAgent(Agent):
             obs_delay=obs_delay,
             act_delay=act_delay,
             msg_delay=msg_delay,
+            tick_config=tick_config,
         )
 
         self._init_action()

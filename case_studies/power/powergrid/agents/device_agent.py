@@ -209,6 +209,100 @@ class DeviceAgent(FieldAgent):
         return {"cost": self.cost, "safety": self.safety}
 
     # ============================================
+    # Distributed Mode Configuration
+    # ============================================
+
+    def configure_for_distributed(self, message_broker=None) -> None:
+        """Configure this device for distributed execution mode.
+
+        In distributed mode, the device communicates via message broker
+        rather than direct method calls. This enables realistic async
+        communication with configurable delays.
+
+        Args:
+            message_broker: MessageBroker instance for inter-agent communication.
+                           If None, uses the broker from parent (upstream) agent.
+        """
+        if message_broker is not None:
+            self.set_message_broker(message_broker)
+
+        # Create message channel for this device (uses result channel for device state)
+        if self.message_broker is not None:
+            from heron.messaging.base import ChannelManager
+            env_id = self.env_id or "default"
+            channel = ChannelManager.result_channel(env_id, self.agent_id)
+            self.message_broker.create_channel(channel)
+
+    def publish_state_update(self) -> None:
+        """Publish current state to message broker for environment sync.
+
+        In distributed mode (Option B), devices publish their state updates
+        which the environment then applies to the PandaPower network.
+        Called after tick() processes action in event-driven mode.
+        """
+        if self.message_broker is None:
+            return
+
+        from heron.messaging.base import ChannelManager, Message, MessageType
+
+        # Build state update payload
+        state_update = {
+            'agent_id': self.agent_id,
+            'device_type': self._get_pandapower_device_type(),
+            'P_MW': self._get_power_output(),
+            'Q_MVAr': self._get_reactive_power(),
+            'in_service': self._is_in_service(),
+        }
+
+        # Publish to state update channel
+        channel = ChannelManager.state_update_channel(self.env_id)
+        message = Message(
+            env_id=self.env_id,
+            sender_id=self.agent_id,
+            recipient_id="environment",
+            timestamp=self._timestep,
+            message_type=MessageType.STATE_UPDATE,
+            payload=state_update,
+        )
+        self.message_broker.publish(channel, message)
+
+    def _get_pandapower_device_type(self) -> str:
+        """Get the PandaPower element type for this device.
+
+        Returns:
+            String identifier for PandaPower element type (e.g., 'sgen', 'storage')
+        """
+        # Override in subclasses (Generator -> 'sgen', ESS -> 'storage')
+        return 'sgen'
+
+    def _get_power_output(self) -> float:
+        """Get current real power output in MW.
+
+        Returns:
+            Real power output (positive = generation)
+        """
+        # Override in subclasses to return actual power
+        return 0.0
+
+    def _get_reactive_power(self) -> float:
+        """Get current reactive power output in MVAr.
+
+        Returns:
+            Reactive power output
+        """
+        # Override in subclasses to return actual reactive power
+        return 0.0
+
+    def _is_in_service(self) -> bool:
+        """Check if device is currently in service.
+
+        Returns:
+            True if device is operational
+        """
+        # Override in subclasses to return actual status
+        return True
+
+    # ============================================
     # Utility Methods
     # ============================================
 

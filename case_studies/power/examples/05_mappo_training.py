@@ -1,30 +1,44 @@
 """
-Example 5: MAPPO Training for Cooperative Multi-Agent Systems
-==============================================================
+Example 5: MAPPO Training for Cooperative Multi-Agent Systems (CTDE)
+=====================================================================
 
-This example demonstrates production-ready training of Multi-Agent PPO (MAPPO)
-or Independent PPO (IPPO) on cooperative multi-agent microgrids with full
-experiment management capabilities.
+This example demonstrates production-ready CTDE (Centralized Training with
+Decentralized Execution) using Multi-Agent PPO (MAPPO) or Independent PPO
+(IPPO) on cooperative multi-agent microgrids with full experiment management.
+
+HERON Framework Integration:
+    This example showcases the key HERON features for multi-agent systems:
+    - 3-level agent hierarchy (Device → Grid → System)
+    - Centralized training with shared rewards for cooperation
+    - Event-driven validation mode for realistic testing
+    - Timing parameters for heterogeneous agent tick rates
 
 What you'll learn:
-- Command-line training script with comprehensive arguments
+- CTDE training: Centralized Training with Decentralized Execution
 - MAPPO vs IPPO for cooperative tasks
-- Shared rewards to encourage cooperation
+- Shared rewards to encourage collective optimization
+- Event-driven validation after synchronous training
 - Experiment tracking with Weights & Biases
 - Checkpointing and resuming training
-- Performance monitoring and logging
 
-Architecture:
+Architecture (HERON 3-Level Hierarchy):
     RLlib (PPO Algorithm)
-    └── ParallelPettingZooEnv (Wrapper)
-        └── MultiAgentMicrogrids (PowerGrid)
-            ├── GridAgent MG1
-            ├── GridAgent MG2
-            └── GridAgent MG3
+    └── PettingZooParallelEnv (HERON Adapter)
+        └── MultiAgentMicrogrids (NetworkedGridEnv)
+            ├── PowerGridAgent MG1 (CoordinatorAgent)
+            │   ├── Generator (FieldAgent/DeviceAgent)
+            │   └── ESS (FieldAgent/DeviceAgent)
+            ├── PowerGridAgent MG2 (CoordinatorAgent)
+            │   ├── Generator (FieldAgent/DeviceAgent)
+            │   └── ESS (FieldAgent/DeviceAgent)
+            └── PowerGridAgent MG3 (CoordinatorAgent)
+                ├── Generator (FieldAgent/DeviceAgent)
+                └── ESS (FieldAgent/DeviceAgent)
 
-Cooperative Task:
-    Agents learn to balance loads, maintain voltage stability, and share
-    resources optimally through shared rewards and communication protocols.
+CTDE Workflow:
+    1. Training (Centralized): All agents share rewards and observe global state
+    2. Validation (Decentralized): Agents execute with local observations only
+    3. Event-Driven Testing: Validate with realistic async communication delays
 
 Usage:
     # Train with shared policy (MAPPO) for cooperative tasks
@@ -45,6 +59,9 @@ Usage:
 
     # Quick test mode (3 iterations for verification)
     python examples/05_mappo_training.py --test --no-cuda
+
+    # Train and run event-driven validation
+    python examples/05_mappo_training.py --iterations 100 --event-driven-test
 
 Requirements:
     pip install "ray[rllib]==2.9.0"
@@ -134,6 +151,12 @@ def parse_args():
                         help='W&B entity (username or team name)')
     parser.add_argument('--experiment-name', type=str, default=None,
                         help='Custom experiment name (auto-generated if not provided)')
+
+    # Event-driven validation
+    parser.add_argument('--event-driven-test', action='store_true',
+                        help='Run event-driven validation after training (CTDE decentralized phase)')
+    parser.add_argument('--event-driven-episodes', type=int, default=5,
+                        help='Number of episodes for event-driven validation')
 
     # Miscellaneous
     parser.add_argument('--seed', type=int, default=42,
@@ -241,6 +264,7 @@ def main():
 
     # Override with command line args
     env_config['train'] = True
+    env_config['centralized'] = True  # Use centralized mode for training (CTDE)
     env_config['penalty'] = args.penalty
     env_config['share_reward'] = args.share_reward
     env_config['max_episode_steps'] = 96  # 4 days at 1-hour timesteps
@@ -421,6 +445,13 @@ def main():
     final_path = algo.save(checkpoint_dir)
     print(f"  Final checkpoint: {final_path}")
 
+    # Event-driven validation (CTDE decentralized execution phase)
+    if args.event_driven_test:
+        print("\n" + "=" * 80)
+        print("Event-Driven Validation (Decentralized Execution)")
+        print("=" * 80)
+        run_event_driven_validation(algo, env_config, args)
+
     # Cleanup
     algo.stop()
     ray.shutdown()
@@ -432,6 +463,101 @@ def main():
             pass
 
     print("=" * 80)
+
+
+def run_event_driven_validation(algo, env_config, args):
+    """Run event-driven validation after training.
+
+    This demonstrates the 'Decentralized Execution' phase of CTDE:
+    - Agents execute with local observations only
+    - Communication happens via message broker with delays
+    - Heterogeneous tick rates across agent hierarchy
+
+    Args:
+        algo: Trained RLlib algorithm
+        env_config: Environment configuration
+        args: Command line arguments
+    """
+    import numpy as np
+
+    # Create environment in distributed mode for event-driven testing
+    test_config = env_config.copy()
+    test_config['train'] = False
+    test_config['centralized'] = False  # Enable distributed/event-driven mode
+
+    print(f"Running {args.event_driven_episodes} episodes in event-driven mode...")
+    print("-" * 80)
+
+    # Create test environment
+    test_env = MultiAgentMicrogrids(test_config)
+
+    # Configure agents for distributed execution
+    test_env.configure_agents_for_distributed()
+
+    episode_rewards = []
+    episode_metrics = []
+
+    for ep in range(args.event_driven_episodes):
+        obs, info = test_env.reset()
+        done = {"__all__": False}
+        episode_reward = {agent_id: 0.0 for agent_id in test_env.agent_dict}
+
+        while not done.get("__all__", False):
+            # Get actions from trained policy
+            actions = {}
+            for agent_id, agent_obs in obs.items():
+                if args.independent_policies:
+                    policy_id = agent_id
+                else:
+                    policy_id = 'shared_policy'
+                actions[agent_id] = algo.compute_single_action(
+                    agent_obs,
+                    policy_id=policy_id,
+                    explore=False,
+                )
+
+            # Step environment (in distributed mode)
+            obs, rewards, terminateds, truncateds, infos = test_env.step(actions)
+
+            # Accumulate rewards
+            for agent_id, reward in rewards.items():
+                episode_reward[agent_id] += reward
+
+            # Check if done
+            done = terminateds
+
+        # Get collective metrics
+        metrics = test_env.get_power_grid_metrics()
+
+        total_reward = sum(episode_reward.values())
+        episode_rewards.append(total_reward)
+        episode_metrics.append(metrics)
+
+        print(f"Episode {ep + 1}: Total Reward = {total_reward:.2f}, "
+              f"Cost = {metrics['total_cost']:.2f}, "
+              f"Safety = {metrics['total_safety']:.2f}, "
+              f"Cooperation = {metrics['cooperation_score']:.3f}")
+
+    print("-" * 80)
+    print(f"Event-Driven Validation Results:")
+    print(f"  Mean Reward: {np.mean(episode_rewards):.2f} ± {np.std(episode_rewards):.2f}")
+    print(f"  Mean Cost: {np.mean([m['total_cost'] for m in episode_metrics]):.2f}")
+    print(f"  Mean Safety: {np.mean([m['total_safety'] for m in episode_metrics]):.2f}")
+    print(f"  Mean Cooperation Score: {np.mean([m['cooperation_score'] for m in episode_metrics]):.3f}")
+
+    # Log to W&B if enabled
+    if args.wandb:
+        try:
+            import wandb
+            wandb.log({
+                'event_driven/mean_reward': np.mean(episode_rewards),
+                'event_driven/std_reward': np.std(episode_rewards),
+                'event_driven/mean_cost': np.mean([m['total_cost'] for m in episode_metrics]),
+                'event_driven/mean_safety': np.mean([m['total_safety'] for m in episode_metrics]),
+                'event_driven/cooperation_score': np.mean([m['cooperation_score'] for m in episode_metrics]),
+            })
+        except:
+            pass
 
 
 if __name__ == '__main__':
