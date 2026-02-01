@@ -14,12 +14,37 @@ import numpy as np
 import pandapower as pp
 
 from powergrid.agents.power_grid_agent import PowerGridAgent
-from heron.protocols.vertical import SetpointProtocol
+from heron.protocols.vertical import SetpointProtocol, PriceSignalProtocol
+from heron.protocols.horizontal import PeerToPeerTradingProtocol, ConsensusProtocol
 from powergrid.setups.loader import load_dataset
 from powergrid.envs.networked_grid_env import NetworkedGridEnv
 from powergrid.networks.ieee13 import IEEE13Bus
 from powergrid.networks.ieee34 import IEEE34Bus
 from heron.utils.typing import AgentID
+
+
+# Protocol factory for ablation experiments
+PROTOCOL_REGISTRY = {
+    'setpoint': SetpointProtocol,
+    'price_signal': PriceSignalProtocol,
+    'p2p': PeerToPeerTradingProtocol,
+    'consensus': ConsensusProtocol,
+}
+
+
+def create_protocol(protocol_name: str):
+    """Create a coordination protocol by name.
+
+    Args:
+        protocol_name: One of 'setpoint', 'price_signal', 'p2p', 'consensus'
+
+    Returns:
+        Protocol instance
+    """
+    if protocol_name not in PROTOCOL_REGISTRY:
+        raise ValueError(f"Unknown protocol: {protocol_name}. "
+                        f"Available: {list(PROTOCOL_REGISTRY.keys())}")
+    return PROTOCOL_REGISTRY[protocol_name]()
 
 
 class MultiAgentMicrogrids(NetworkedGridEnv):
@@ -97,9 +122,9 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
 
     def _build_microgrid_agent(self, microgrid_config) -> PowerGridAgent:
         """Build microgrid agent from config."""
-        # Initialize protocol and policy
-        # TODO: Make protocol configurable
-        protocol = SetpointProtocol()
+        # Initialize protocol from config (supports ablation experiments)
+        protocol_name = self.env_config.get('protocol', 'setpoint')
+        protocol = create_protocol(protocol_name)
         policy = None
         
         # Create microgrid net

@@ -656,6 +656,35 @@ class PowerGridAgent(GridAgent):
     # Observation Methods
     # ============================================
 
+    def observe(self, global_state: Optional[DictType[str, Any]] = None,
+                visibility_level: str = 'system', **kwargs) -> Observation:
+        """Collect observations with visibility-based filtering.
+
+        Supports visibility levels for observability ablation experiments:
+        - system: Full observation (all device states + network state)
+        - upper_level: Coordinator view (own devices + subordinate aggregates)
+        - owner: Local device state only
+        - public: Public/shared information only
+
+        Args:
+            global_state: Environment state
+            visibility_level: Visibility level for observation filtering
+
+        Returns:
+            Observation filtered by visibility level
+        """
+        # Get base observation from parent
+        obs = super().observe(global_state, **kwargs)
+
+        # Apply visibility-based filtering to the state vector
+        if visibility_level != 'system':
+            # Store visibility level for use in _get_obs
+            self._current_visibility_level = visibility_level
+        else:
+            self._current_visibility_level = 'system'
+
+        return obs
+
     def _build_local_observation(self, device_obs: DictType[AgentID, Observation], *args, **kwargs) -> Any:
         """Build local observation including device states and network results.
 
@@ -685,6 +714,11 @@ class PowerGridAgent(GridAgent):
         provides load data via set_load_data() which is cached in _cached_load_pq.
         This ensures proper isolation between agents and the fused network.
 
+        Observation filtering based on visibility_level:
+        - system/upper_level: Full observation (device states + load P/Q)
+        - owner: Device states only (no load P/Q)
+        - public: Minimal observation (placeholder for future extension)
+
         Args:
             net: Deprecated - should be None. Environment provides data via set_load_data()
             device_obs: Optional device observations (computed if not provided)
@@ -703,10 +737,14 @@ class PowerGridAgent(GridAgent):
             # P, Q, UC status of generators
             obs = np.concatenate((obs, ob.local['state']))
 
-        # P, Q at all buses - use cached load data from environment
+        # Get current visibility level (set by observe())
+        visibility_level = getattr(self, '_current_visibility_level', 'system')
+
+        # P, Q at all buses - only include for system/upper_level visibility
         # (set via set_load_data() by the environment after power flow)
-        if hasattr(self, '_cached_load_pq') and self._cached_load_pq is not None:
-            obs = np.concatenate([obs, self._cached_load_pq.ravel() / self.base_power])
+        if visibility_level in ('system', 'upper_level'):
+            if hasattr(self, '_cached_load_pq') and self._cached_load_pq is not None:
+                obs = np.concatenate([obs, self._cached_load_pq.ravel() / self.base_power])
 
         return obs.astype(np.float32)
 
@@ -846,15 +884,22 @@ class PowerGridAgent(GridAgent):
         else:  # No actionable agents
             return Discrete(1)
 
-    def get_grid_observation_space(self, net=None):
+    def get_grid_observation_space(self, net=None, visibility_level: str = 'system'):
         """Get observation space for this grid.
 
         Uses the agent's local network (self.net) to determine observation shape.
         This works because observation shape depends on number of devices and loads,
         which is fixed per agent regardless of network fusion.
 
+        Observation space size varies with visibility_level for ablation experiments:
+        - system: Full observation (all device states + load P/Q)
+        - upper_level: Device states + load P/Q (same as system for now)
+        - owner: Device states only (no load P/Q)
+        - public: Minimal public info (placeholder)
+
         Args:
             net: Deprecated - not used. Kept for API compatibility.
+            visibility_level: Visibility level for observation filtering
 
         Returns:
             Gymnasium Box space for grid observations
@@ -878,10 +923,15 @@ class PowerGridAgent(GridAgent):
         )
 
         # Get load size from local network (before fusion)
-        try:
-            local_load_ids = pp.get_element_index(local_net, 'load', self.name, False)
-            load_obs_size = len(local_load_ids) * 2  # P and Q for each load
-        except (KeyError, UserWarning):
+        # Only include loads for system and upper_level visibility
+        if visibility_level in ('system', 'upper_level'):
+            try:
+                local_load_ids = pp.get_element_index(local_net, 'load', self.name, False)
+                load_obs_size = len(local_load_ids) * 2  # P and Q for each load
+            except (KeyError, UserWarning):
+                load_obs_size = 0
+        else:
+            # owner and public visibility: no load info
             load_obs_size = 0
 
         total_obs_size = device_obs_size + load_obs_size

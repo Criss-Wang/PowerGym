@@ -122,6 +122,20 @@ def parse_args():
     parser.add_argument('--no-share-reward', dest='share_reward', action='store_false')
     parser.set_defaults(share_reward=True)
 
+    # Observability ablation (Table 2 in paper)
+    parser.add_argument('--visibility-level', type=str, default='system',
+                        choices=['system', 'upper_level', 'owner', 'public'],
+                        help='Visibility level for observability ablation experiments. '
+                             'system=full network state, upper_level=coordinator view, '
+                             'owner=local device only, public=shared info only')
+
+    # Protocol comparison (Table 4 in paper)
+    parser.add_argument('--protocol', type=str, default='setpoint',
+                        choices=['setpoint', 'price_signal', 'p2p', 'consensus'],
+                        help='Coordination protocol: setpoint (centralized), '
+                             'price_signal (decentralized incentive), p2p (peer trading), '
+                             'consensus (distributed averaging)')
+
     # Policy parameters
     parser.add_argument('--independent-policies', action='store_true',
                         help='Use independent policies for each agent (IPPO vs MAPPO)')
@@ -268,6 +282,8 @@ def main():
     env_config['penalty'] = args.penalty
     env_config['share_reward'] = args.share_reward
     env_config['max_episode_steps'] = 96  # 4 days at 1-hour timesteps
+    env_config['visibility_level'] = args.visibility_level  # Observability ablation
+    env_config['protocol'] = args.protocol  # Protocol comparison
 
     temp_env = env_creator(env_config)
 
@@ -288,6 +304,8 @@ def main():
     print(f"Experiment:        {args.experiment_name}")
     print(f"Policy type:       {policy_type}")
     print(f"Shared reward:     {args.share_reward} (encourages cooperation)")
+    print(f"Visibility level:  {args.visibility_level} (observability ablation)")
+    print(f"Protocol:          {args.protocol} (coordination mechanism)")
     print(f"Iterations:        {args.iterations}")
     print(f"Safety penalty:    {args.penalty}")
     print(f"Learning rate:     {args.lr}")

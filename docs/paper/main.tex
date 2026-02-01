@@ -206,48 +206,43 @@ Many CPS are naturally hierarchical: fast local controllers, mid-level coordinat
 \heron{} supports two execution patterns:
 
 \begin{enumerate}[nosep]
-    \item \textbf{Direct mode}: Synchronous \texttt{observe()} $\rightarrow$ \texttt{act()} calls. Simple, fast, suitable for centralized training.
-    \item \textbf{Distributed mode}: Event-driven \texttt{step\_distributed()} with message passing. Agents react to messages and coordinate through the MessageBroker.
+    \item \textbf{Synchronous mode}: Direct \texttt{observe()} $\rightarrow$ \texttt{act()} calls within \texttt{env.step()}. Simple, fast, suitable for centralized training (CTDE).
+    \item \textbf{Event-driven mode}: Discrete-event simulation via \texttt{EventScheduler} with configurable timing. Agents \texttt{tick()} independently at heterogeneous rates with realistic delays.
 \end{enumerate}
 
-This dual-mode design enables development in direct mode (fast iteration) and validation in distributed mode (realistic event-driven execution).
+This dual-mode design enables training in synchronous mode (fast iteration, shared rewards) and validation in event-driven mode (realistic distributed execution with latencies).
 
-\paragraph{Event-driven hierarchical execution.}
-The \texttt{step\_distributed()} method (Algorithm~\ref{alg:step-distributed}) is the core of \heron{}'s event-driven execution model. It is an \texttt{async} Python method that:
+\paragraph{Event-driven execution via discrete-event simulation.}
+The event-driven mode (Algorithm~\ref{alg:event-driven}) uses a priority-queue \texttt{EventScheduler} where each agent has a \texttt{tick()} method:
 \begin{itemize}[nosep]
-    \item Agents \textbf{react to messages} (events) from the MessageBroker rather than polling global state
-    \item Enables \textbf{concurrent execution} of subordinate agents via \texttt{asyncio.gather()}
-    \item Supports \textbf{heterogeneous decision rates} by allowing agents to execute independently
+    \item Agents \textbf{tick independently} at configurable intervals (\texttt{tick\_interval})
+    \item \textbf{Configurable delays}: observation delay (\texttt{obs\_delay}), action effect delay (\texttt{act\_delay}), message delivery delay (\texttt{msg\_delay})
+    \item \textbf{Optional jitter}: Uniform or Gaussian randomization via \texttt{TickConfig} for robustness testing
+    \item Supports \textbf{heterogeneous decision rates} across the agent hierarchy
 \end{itemize}
 
 \begin{algorithm}[t]
-\caption{\texttt{step\_distributed()} -- Event-driven hierarchical execution}
-\label{alg:step-distributed}
+\caption{Event-driven execution via \texttt{EventScheduler}}
+\label{alg:event-driven}
 \begin{algorithmic}[1]
-\REQUIRE Agent with message\_broker, upstream\_id, subordinates
-\STATE \textbf{async def} step\_distributed():
-\STATE \hspace{0.5cm} \COMMENT{1. Receive from upstream via message broker}
-\STATE \hspace{0.5cm} upstream\_action $\gets$ consume(action\_channel)
-\STATE \hspace{0.5cm} upstream\_info $\gets$ consume(info\_channel)
-\STATE \hspace{0.5cm} update\_state(upstream\_info)
+\REQUIRE EventScheduler with priority queue, registered agents with TickConfig
+\STATE \textbf{def} run\_until(t\_end):
+\STATE \hspace{0.5cm} \textbf{while} queue not empty \textbf{and} current\_time $<$ t\_end:
+\STATE \hspace{1.0cm} event $\gets$ pop\_min(queue) \COMMENT{Get earliest event}
+\STATE \hspace{1.0cm} current\_time $\gets$ event.timestamp
 \STATE
-\STATE \hspace{0.5cm} \textbf{if} subordinates exist \textbf{then}
-\STATE \hspace{1.0cm} \COMMENT{2. Derive and send actions to subordinates}
-\STATE \hspace{1.0cm} downstream\_actions $\gets$ derive\_actions(upstream\_action)
-\STATE \hspace{1.0cm} \textbf{for} sub\_id, action \textbf{in} downstream\_actions:
-\STATE \hspace{1.5cm} publish(action\_channel[sub\_id], action)
+\STATE \hspace{1.0cm} \textbf{if} event.type == AGENT\_TICK:
+\STATE \hspace{1.5cm} agent $\gets$ agents[event.agent\_id]
+\STATE \hspace{1.5cm} obs $\gets$ agent.observe(state\_at(t - obs\_delay)) \COMMENT{Delayed observation}
+\STATE \hspace{1.5cm} action $\gets$ agent.act(obs)
+\STATE \hspace{1.5cm} schedule(ACTION\_EFFECT, t + act\_delay, action) \COMMENT{Delayed action}
+\STATE \hspace{1.5cm} schedule(AGENT\_TICK, t + tick\_interval) \COMMENT{Next tick}
 \STATE
-\STATE \hspace{1.0cm} \COMMENT{3. Execute subordinates concurrently}
-\STATE \hspace{1.0cm} \textbf{await} asyncio.gather(*[s.step\_distributed() for s in subordinates])
+\STATE \hspace{1.0cm} \textbf{else if} event.type == ACTION\_EFFECT:
+\STATE \hspace{1.5cm} apply\_action(event.agent\_id, event.payload)
 \STATE
-\STATE \hspace{1.0cm} \COMMENT{4. Collect info from subordinates}
-\STATE \hspace{1.0cm} \textbf{for} sub\_id \textbf{in} subordinates:
-\STATE \hspace{1.5cm} subordinates\_info[sub\_id] $\gets$ consume(info\_channel[sub\_id])
-\STATE
-\STATE \hspace{0.5cm} \COMMENT{5. Execute local action and publish state}
-\STATE \hspace{0.5cm} local\_action $\gets$ derive\_local\_action(upstream\_action)
-\STATE \hspace{0.5cm} execute(local\_action)
-\STATE \hspace{0.5cm} publish\_state\_updates()
+\STATE \hspace{1.0cm} \textbf{else if} event.type == MESSAGE\_DELIVERY:
+\STATE \hspace{1.5cm} broker.deliver(event.payload) \COMMENT{Delayed message}
 \end{algorithmic}
 \end{algorithm}
 
@@ -488,9 +483,9 @@ The power case study serves as a reference template: users extend \texttt{FieldA
 
 \textbf{Current limitations.}
 \begin{itemize}[nosep]
-    \item \textbf{Message latency}: While \texttt{step\_distributed()} supports asynchronous execution, explicit latency modeling (configurable delays, stochastic timing) is future work.
-    \item \textbf{Communication realism}: We support channel-based messaging but do not yet model packet loss or bandwidth constraints.
+    \item \textbf{Communication realism}: We support channel-based messaging with configurable delays and jitter, but do not yet model packet loss or bandwidth constraints.
     \item \textbf{Dynamic observability}: Visibility rules are configuration-driven; learning or negotiating information access is future work.
+    \item \textbf{Latency distributions}: Current jitter supports uniform and Gaussian distributions; domain-specific profiles (SCADA-like, V2X-like) are future work.
 \end{itemize}
 
 \textbf{Power domain limitations.}
@@ -501,7 +496,7 @@ The power case study serves as a reference template: users extend \texttt{FieldA
 
 \textbf{Roadmap.}
 \begin{itemize}[nosep]
-    \item Configurable message latency profiles (SCADA-like, V2X-like) for timing studies.
+    \item Domain-specific latency profiles (SCADA-like, V2X-like) for timing studies.
     \item Distributed MessageBroker backends (Kafka, RabbitMQ) for deployment validation.
     \item Additional domain instantiations (traffic, robotics) to validate cross-domain reuse.
     \item Standardized observability/protocol leaderboards.
@@ -514,7 +509,7 @@ The power case study serves as a reference template: users extend \texttt{FieldA
 
 We presented \heron{}, a hierarchical multi-agent framework built around a single organizing principle: \textbf{multi-agent simulation should make execution model, information structure, and coordination mechanisms explicit}. \heron{} provides:
 \begin{itemize}[nosep]
-    \item A three-level agent hierarchy with \texttt{step\_distributed()} for event-driven, message-based execution.
+    \item A three-level agent hierarchy with dual execution modes: synchronous for training and event-driven (via \texttt{EventScheduler} with configurable delays and jitter) for realistic validation.
     \item FeatureProviders with visibility labels for systematic observability control.
     \item A MessageBroker abstraction for explicit, channel-based communication.
     \item Composable vertical and horizontal protocols for coordination studies.

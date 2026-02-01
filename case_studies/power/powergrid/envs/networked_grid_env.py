@@ -80,6 +80,10 @@ class NetworkedGridEnv(PettingZooParallelEnv):
         self.centralized = centralized
         self.train = env_config.get('train', True)
 
+        # Visibility level for observability ablation experiments
+        # Maps to HERON's visibility levels: system, upper_level, owner, public
+        self.visibility_level = env_config.get('visibility_level', 'system')
+
         # Build environment components
         self.agent_dict = self._build_agents()
         self.net = self._build_net()
@@ -554,6 +558,12 @@ class NetworkedGridEnv(PettingZooParallelEnv):
         network state to agents via sync_global_state() (centralized) or
         ProxyAgent messages (distributed).
 
+        Observations are filtered based on visibility_level for ablation experiments:
+        - system: Full network state (all features visible)
+        - upper_level: Coordinator-level view (own + subordinate features)
+        - owner: Local device state only
+        - public: Shared/public information only
+
         Returns:
             Dict mapping agent_id to observation array
         """
@@ -561,7 +571,7 @@ class NetworkedGridEnv(PettingZooParallelEnv):
         for agent_id, agent in self.agent_dict.items():
             # Agents observe without network access - data comes from cached state
             # set by sync_global_state() (centralized) or ProxyAgent (distributed)
-            obs = agent.observe()
+            obs = agent.observe(visibility_level=self.visibility_level)
             # Extract state from observation
             obs_dict[agent_id] = obs.local['state']
 
@@ -573,15 +583,20 @@ class NetworkedGridEnv(PettingZooParallelEnv):
         In centralized mode, observation space includes network load information.
         In distributed mode, observation space excludes load information (agents
         don't have direct network access).
+
+        Observation space size depends on visibility_level for ablation experiments.
         """
         ac_spaces = {}
         ob_spaces = {}
 
         for name, agent in self.agent_dict.items():
             ac_spaces[name] = agent.get_grid_action_space()
-            # Pass net only in centralized mode
+            # Pass net only in centralized mode, and visibility level for filtering
             net_for_obs = self.net if self.centralized else None
-            ob_spaces[name] = agent.get_grid_observation_space(net_for_obs)
+            ob_spaces[name] = agent.get_grid_observation_space(
+                net_for_obs,
+                visibility_level=self.visibility_level
+            )
 
         # Use adapter's _init_spaces method to set up spaces
         self._init_spaces(ac_spaces, ob_spaces)
