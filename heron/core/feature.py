@@ -116,12 +116,15 @@ class FeatureProvider(ABC):
     ) -> bool:
         """Check if this feature is observable by the requesting agent.
 
-        Visibility rules (checked in order):
+        Visibility rules are OR-ed together. A feature with visibility
+        ["owner", "upper_level"] is visible to both the owner AND agents
+        one level above.
+
+        Visibility options:
             - "public": All agents can observe
-            - "owner": Only owner (requestor_id == owner_id) can observe
+            - "owner": Owner (requestor_id == owner_id) can observe
             - "system": System-level agents (level >= 3) can observe
             - "upper_level": Agents one level above owner can observe
-            - Default: No one can observe (private)
 
         Args:
             requestor_id: ID of agent requesting observation
@@ -133,13 +136,14 @@ class FeatureProvider(ABC):
         Returns:
             True if requestor can observe this feature, False otherwise
         """
+        # OR logic: any matching visibility grants access
         if "public" in self.visibility:
             return True
-        if "owner" in self.visibility:
-            return requestor_id == owner_id
-        if "system" in self.visibility:
-            return requestor_level >= 3
-        if "upper_level" in self.visibility:
-            return requestor_level == owner_level + 1
-        # Default: treat as private
+        if "owner" in self.visibility and requestor_id == owner_id:
+            return True
+        if "system" in self.visibility and requestor_level >= 3:
+            return True
+        if "upper_level" in self.visibility and requestor_level == owner_level + 1:
+            return True
+        # Default: no visibility rules matched
         return False

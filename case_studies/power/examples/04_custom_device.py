@@ -184,11 +184,13 @@ class SolarPanel(DeviceAgent):
             agent_id=agent_id,
             policy=policy,
             protocol=protocol,
-            message_broker=message_broker,
             upstream_id=upstream_id,
             env_id=env_id,
             device_config=device_config,
         )
+        # Set message broker separately (DeviceAgent doesn't accept it in __init__)
+        if message_broker is not None:
+            self.set_message_broker(message_broker)
 
     @property
     def bus(self) -> str:
@@ -350,11 +352,7 @@ class CustomDeviceEnv(NetworkedGridEnv):
     """Environment demonstrating custom solar panel device."""
 
     def _build_agents(self):
-        """Build grid agents - populated in _build_net."""
-        return {}
-
-    def _build_net(self):
-        """Build network with custom solar panel."""
+        """Build grid agents with custom solar panel device."""
         net = IEEE13Bus("MG1")
 
         # For custom devices, we need to use config-based approach
@@ -388,19 +386,20 @@ class CustomDeviceEnv(NetworkedGridEnv):
         # Create GridAgent with standard devices
         mg_agent = PowerGridAgent(
             net=net,
-            message_broker=self.message_broker,
             upstream_id=self._name,  # Environment is the upstream in distributed mode
-            env_id=self._env_id,
+            env_id=self.env_id,
             grid_config=grid_config,
             protocol=SetpointProtocol(),
         )
+        # Set message broker if available (for distributed mode)
+        if self.message_broker is not None:
+            mg_agent.set_message_broker(self.message_broker)
 
         # Now manually add our custom solar panel device
         solar = SolarPanel(
             agent_id="solar1",
-            message_broker=self.message_broker,
             upstream_id="MG1",  # GridAgent is the upstream
-            env_id=self._env_id,
+            env_id=self.env_id,
             device_config={
                 "name": "solar1",
                 "device_state_config": {
@@ -433,12 +432,15 @@ class CustomDeviceEnv(NetworkedGridEnv):
         self.data_size = len(dataset["load"])
         self._total_days = self.data_size // self.max_episode_steps
 
-        # Store
-        self.possible_agents = ["MG1"]
-        self.agent_dict = {"MG1": mg_agent}
-        self.net = net
+        return {"MG1": mg_agent}
 
-        return net
+    def _build_net(self):
+        """Build the fused network.
+
+        For a single microgrid, we just return the agent's network directly.
+        """
+        mg_agent = self.agent_dict["MG1"]
+        return mg_agent.net
 
     def _create_solar_dataset(self):
         """Create dataset with solar irradiance patterns."""

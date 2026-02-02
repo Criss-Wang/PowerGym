@@ -14,20 +14,6 @@ from heron.core.feature import FeatureProvider
 from heron.utils.array_utils import cat_f32
 
 
-KNOWN_FEATURES: Dict[str, Type[FeatureProvider]] = {}
-
-
-def _vec_names(feat: FeatureProvider) -> Tuple[np.ndarray, List[str]]:
-    """Extract vector and names from a feature provider."""
-    v = np.asarray(feat.vector(), np.float32).ravel()
-    n = feat.names()
-    if len(n) != v.size:
-        raise ValueError(
-            f"{feat.__class__.__name__}: names ({len(n)}) != vector size ({v.size})."
-        )
-    return v, n
-
-
 @dataclass(slots=True)
 class State(ABC):
     """Generic agent state, defined by a list of feature providers.

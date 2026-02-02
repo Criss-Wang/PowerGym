@@ -64,9 +64,10 @@ By following this guide, you'll create a complete multi-agent power grid simulat
 10. [Step 6: Run RL Training](#step-6-run-rl-training)
     - [MAPPO vs IPPO](#63-mappo-vs-ippo-when-to-use-each)
     - [Reward Engineering](#64-reward-engineering)
-11. [Advanced Topics](#advanced-topics)
-12. [Troubleshooting](#troubleshooting)
-13. [Summary](#summary)
+11. [Step 7: Event-Driven Testing](#step-7-event-driven-testing-key-heron-differentiator) ⭐ **Key Differentiator**
+12. [Advanced Topics](#advanced-topics)
+13. [Troubleshooting](#troubleshooting)
+14. [Summary](#summary)
 
 ---
 
@@ -291,20 +292,29 @@ Each agent's observation dimension depends on its devices. The action space is s
 
 ## Step 1: Define Domain Features
 
-Features represent observable state components. Create power-specific features by extending HERON's `FeatureBlock`:
+Features represent observable state components with **declarative visibility**. This is a key HERON contribution—features declare who can see them, eliminating manual observation filtering.
 
 ### 1.1 Electrical Features
 
 ```python
 # powergrid/core/features/electrical.py
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 import numpy as np
-from heron.core.feature import FeatureBlock
+from heron.core.feature import FeatureProvider
 
 @dataclass
-class ElectricalBasePh(FeatureBlock):
-    """Base electrical features for single-phase devices."""
+class ElectricalBasePh(FeatureProvider):
+    """Base electrical features for single-phase devices.
+
+    Key HERON pattern: visibility declares who can see this feature.
+    - 'owner': The device itself
+    - 'upper_level': Parent coordinator (microgrid)
+    - 'system': System operator (DSO)
+    """
+
+    # Visibility: device + coordinator + system can see electrical state
+    visibility: List[str] = field(default_factory=lambda: ['owner', 'upper_level', 'system'])
 
     # Active power (MW)
     p_MW: float = 0.0
@@ -318,26 +328,44 @@ class ElectricalBasePh(FeatureBlock):
     # Voltage angle (degrees)
     va_deg: float = 0.0
 
-    def to_array(self) -> np.ndarray:
+    def vector(self) -> np.ndarray:
         """Convert to numpy array for RL observation."""
-        return np.array([self.p_MW, self.q_MVAr, self.v_pu, self.va_deg])
+        return np.array([self.p_MW, self.q_MVAr, self.v_pu, self.va_deg], dtype=np.float32)
+
+    def names(self) -> List[str]:
+        """Feature names for debugging."""
+        return ['p_MW', 'q_MVAr', 'v_pu', 'va_deg']
+
+    def to_dict(self) -> dict:
+        return {'p_MW': self.p_MW, 'q_MVAr': self.q_MVAr, 'v_pu': self.v_pu, 'va_deg': self.va_deg}
 
     @classmethod
-    def from_array(cls, arr: np.ndarray) -> "ElectricalBasePh":
-        """Construct from numpy array."""
-        return cls(p_MW=arr[0], q_MVAr=arr[1], v_pu=arr[2], va_deg=arr[3])
+    def from_dict(cls, d: dict) -> "ElectricalBasePh":
+        return cls(**d)
+
+    def set_values(self, **kwargs):
+        for k, v in kwargs.items():
+            if hasattr(self, k):
+                setattr(self, k, float(v))
 ```
 
 ### 1.2 Storage Features
 
 ```python
 # powergrid/core/features/storage.py
-from dataclasses import dataclass
-from heron.core.feature import FeatureBlock
+from dataclasses import dataclass, field
+from typing import List
+import numpy as np
+from heron.core.feature import FeatureProvider
 
 @dataclass
-class StorageBlock(FeatureBlock):
-    """State-of-charge and capacity features for storage devices."""
+class StorageBlock(FeatureProvider):
+    """State-of-charge and capacity features for storage devices.
+
+    Visibility: owner + upper_level (coordinator needs SOC for dispatch decisions)
+    """
+
+    visibility: List[str] = field(default_factory=lambda: ['owner', 'upper_level'])
 
     # Current state of charge (0-1)
     soc: float = 0.5
@@ -353,6 +381,25 @@ class StorageBlock(FeatureBlock):
 
     # Discharge efficiency
     dsc_eff: float = 0.95
+
+    def vector(self) -> np.ndarray:
+        return np.array([self.soc, self.e_capacity_MWh, self.e_stored_MWh], dtype=np.float32)
+
+    def names(self) -> List[str]:
+        return ['soc', 'e_capacity_MWh', 'e_stored_MWh']
+
+    def to_dict(self) -> dict:
+        return {'soc': self.soc, 'e_capacity_MWh': self.e_capacity_MWh,
+                'e_stored_MWh': self.e_stored_MWh, 'ch_eff': self.ch_eff, 'dsc_eff': self.dsc_eff}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "StorageBlock":
+        return cls(**d)
+
+    def set_values(self, **kwargs):
+        for k, v in kwargs.items():
+            if hasattr(self, k):
+                setattr(self, k, float(v))
 ```
 
 ### 1.3 Network Features
@@ -360,12 +407,18 @@ class StorageBlock(FeatureBlock):
 ```python
 # powergrid/core/features/network.py
 from dataclasses import dataclass, field
+from typing import List
 import numpy as np
-from heron.core.feature import FeatureBlock
+from heron.core.feature import FeatureProvider
 
 @dataclass
-class BusVoltages(FeatureBlock):
-    """Aggregated bus voltage information."""
+class BusVoltages(FeatureProvider):
+    """Aggregated bus voltage information.
+
+    Visibility: 'system' - only DSO/system operator sees full network voltages
+    """
+
+    visibility: List[str] = field(default_factory=lambda: ['system'])
 
     # Voltage magnitudes for all buses (per-unit)
     vm_pu: np.ndarray = field(default_factory=lambda: np.array([1.0]))
@@ -376,9 +429,28 @@ class BusVoltages(FeatureBlock):
     # Maximum voltage in network
     v_max: float = 1.0
 
+    def vector(self) -> np.ndarray:
+        return np.array([self.v_min, self.v_max], dtype=np.float32)
+
+    def names(self) -> List[str]:
+        return ['v_min', 'v_max']
+
+    def to_dict(self) -> dict:
+        return {'vm_pu': self.vm_pu.tolist(), 'v_min': self.v_min, 'v_max': self.v_max}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "BusVoltages":
+        d['vm_pu'] = np.array(d['vm_pu'])
+        return cls(**d)
+
 @dataclass
-class LineFlows(FeatureBlock):
-    """Line power flow information."""
+class LineFlows(FeatureProvider):
+    """Line power flow information.
+
+    Visibility: 'system' - only DSO sees line loading
+    """
+
+    visibility: List[str] = field(default_factory=lambda: ['system'])
 
     # Active power flows (MW)
     p_MW: np.ndarray = field(default_factory=lambda: np.array([0.0]))
@@ -388,6 +460,22 @@ class LineFlows(FeatureBlock):
 
     # Maximum loading across all lines
     max_loading: float = 0.0
+
+    def vector(self) -> np.ndarray:
+        return np.array([self.max_loading / 100.0], dtype=np.float32)
+
+    def names(self) -> List[str]:
+        return ['max_loading_norm']
+
+    def to_dict(self) -> dict:
+        return {'p_MW': self.p_MW.tolist(), 'loading_pct': self.loading_pct.tolist(),
+                'max_loading': self.max_loading}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "LineFlows":
+        d['p_MW'] = np.array(d['p_MW'])
+        d['loading_pct'] = np.array(d['loading_pct'])
+        return cls(**d)
 ```
 
 ---
@@ -849,7 +937,10 @@ class PowerGridAgent(CoordinatorAgent):
 
 ## Step 4: Create the Environment
 
-The environment wraps agents in a PettingZoo-compatible interface.
+The environment wraps agents using **HERON's `PettingZooParallelEnv` adapter** (not raw `ParallelEnv`). This is critical for enabling:
+- Event-driven execution mode
+- Agent registration and management
+- Message broker integration
 
 ### 4.1 Base Environment
 
@@ -859,13 +950,21 @@ from abc import abstractmethod
 from typing import Any, Dict, List, Optional
 import numpy as np
 from gymnasium.spaces import Box, Dict as SpaceDict
-from pettingzoo import ParallelEnv
+
+# IMPORTANT: Use HERON's adapter, NOT raw PettingZoo ParallelEnv
+from heron.envs.adapters import PettingZooParallelEnv
 
 from powergrid.agents.power_grid_agent import PowerGridAgent
 from heron.messaging.memory import InMemoryBroker
 
-class NetworkedGridEnv(ParallelEnv):
+class NetworkedGridEnv(PettingZooParallelEnv):
     """Base multi-agent environment for networked power grids.
+
+    Uses HERON's PettingZooParallelEnv adapter which provides:
+    - register_agent() for agent management
+    - setup_event_driven() for realistic timing
+    - run_event_driven() for event-based simulation
+    - Message broker integration for distributed mode
 
     Supports both centralized and distributed execution modes.
     """
@@ -873,7 +972,8 @@ class NetworkedGridEnv(ParallelEnv):
     metadata = {"render_modes": ["human"], "name": "networked_grid_v0"}
 
     def __init__(self, env_config: Dict[str, Any]):
-        super().__init__()
+        # Initialize HERON's adapter FIRST
+        super().__init__(env_id=env_config.get('env_id', 'networked_grid'))
 
         self.env_config = env_config
         self.max_episode_steps = env_config.get('max_episode_steps', 24)
@@ -884,18 +984,27 @@ class NetworkedGridEnv(ParallelEnv):
 
         # Will be set by subclasses
         self.agent_dict: Dict[str, PowerGridAgent] = {}
-        self.possible_agents: List[str] = []
         self.net = None
 
         # Build components
         self.message_broker = self._build_message_broker()
         self.net = self._build_net()
         self._build_agents()
-        self._init_spaces()
+
+        # HERON pattern: Register agents and initialize spaces
+        self._register_agents_with_heron()
+        self._setup_spaces()
 
         # Episode state
         self._t = 0
-        self.agents = list(self.possible_agents)
+
+    def _register_agents_with_heron(self) -> None:
+        """Register all agents with HERON for event-driven support."""
+        for agent_id, agent in self.agent_dict.items():
+            self.register_agent(agent)  # HERON's register_agent()
+
+        # Use HERON helpers to set up PettingZoo attributes
+        self._set_agent_ids(list(self.agent_dict.keys()))
 
     @abstractmethod
     def _build_net(self):
@@ -918,15 +1027,15 @@ class NetworkedGridEnv(ParallelEnv):
             return None
         return InMemoryBroker()
 
-    def _init_spaces(self) -> None:
-        """Initialize observation and action spaces."""
-        self.observation_spaces = {}
-        self.action_spaces = {}
+    def _setup_spaces(self) -> None:
+        """Initialize observation and action spaces using HERON helpers."""
+        obs_spaces = {}
+        act_spaces = {}
 
         for agent_id, agent in self.agent_dict.items():
             # Observation space
             obs_dim = len(agent.get_observation())
-            self.observation_spaces[agent_id] = Box(
+            obs_spaces[agent_id] = Box(
                 low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
             )
 
@@ -934,11 +1043,17 @@ class NetworkedGridEnv(ParallelEnv):
             action_space = agent.get_action_space()
             if isinstance(action_space, SpaceDict):
                 total_dim = sum(s.shape[0] for s in action_space.spaces.values())
-                self.action_spaces[agent_id] = Box(
+                act_spaces[agent_id] = Box(
                     low=-1.0, high=1.0, shape=(total_dim,), dtype=np.float32
                 )
             else:
-                self.action_spaces[agent_id] = action_space
+                act_spaces[agent_id] = action_space
+
+        # Use HERON's helper to initialize spaces
+        self._init_spaces(
+            action_spaces=act_spaces,
+            observation_spaces=obs_spaces,
+        )
 
     def reset(self, seed=None, options=None):
         """Reset environment to initial state."""
@@ -946,11 +1061,11 @@ class NetworkedGridEnv(ParallelEnv):
             np.random.seed(seed)
 
         self._t = 0
-        self.agents = list(self.possible_agents)
+        self._timestep = 0  # HERON internal timestep
+        self._agents = self._possible_agents.copy()  # Reset active agents
 
-        # Reset all agents
-        for agent in self.agent_dict.values():
-            agent.reset()
+        # Use HERON's reset_agents helper
+        self.reset_agents(seed=seed)
 
         # Run initial power flow
         import pandapower as pp
@@ -1374,6 +1489,195 @@ Where:
 
        return rewards, safety
    ```
+
+---
+
+## Step 7: Event-Driven Testing (Key HERON Differentiator)
+
+> **This is what differentiates HERON from PettingZoo wrappers.** Event-driven execution cannot be achieved by wrapping—it requires architectural support built into the framework.
+
+### 7.1 Why Event-Driven Testing?
+
+Policies trained in synchronous mode may fail in deployment where:
+
+| Real-World Factor | Training Mode | Reality |
+|-------------------|---------------|---------|
+| Agent tick rates | All same | Devices: 1s, Coordinators: 60s, DSO: 300s |
+| Observation delay | 0ms | 50-2000ms (SCADA latency) |
+| Action delay | 0ms | 100-500ms (actuator response) |
+| Timing jitter | None | ±10-40% (network/processing variance) |
+
+### 7.2 Enabling Event-Driven Mode
+
+```python
+# In your environment's __init__:
+class NetworkedGridEnv(PettingZooParallelEnv):
+    def __init__(self, env_config):
+        super().__init__(env_id="networked_grid")
+
+        self.event_driven = env_config.get('event_driven', False)
+
+        # ... build agents ...
+
+        # Setup event-driven mode if enabled
+        if self.event_driven:
+            self._setup_event_driven_mode()
+
+    def _setup_event_driven_mode(self):
+        """Configure HERON's event-driven execution."""
+        # HERON's built-in method creates the scheduler
+        self.setup_event_driven()
+
+        # Setup handlers for agent ticks and action effects
+        def on_action_effect(agent_id, action):
+            """Called when action effects are applied."""
+            agent = self.agent_dict.get(agent_id)
+            if agent:
+                agent.step(action)
+
+        self.setup_default_handlers(
+            global_state_fn=lambda: self._get_global_state(),
+            on_action_effect=on_action_effect,
+        )
+```
+
+### 7.3 Configuring Agent Timing
+
+Set timing parameters on your agents:
+
+```python
+class Generator(DeviceAgent):
+    def __init__(self, agent_id, device_state_config, **kwargs):
+        super().__init__(
+            agent_id=agent_id,
+            tick_interval=1.0,    # Device ticks every 1 second
+            **kwargs
+        )
+        # Additional timing for event-driven mode
+        self.obs_delay = 0.05    # 50ms observation delay
+        self.act_delay = 0.1     # 100ms action delay
+
+class PowerGridAgent(CoordinatorAgent):
+    def __init__(self, net, grid_config, **kwargs):
+        super().__init__(
+            agent_id=grid_config['name'],
+            tick_interval=60.0,   # Coordinator ticks every 60 seconds
+            **kwargs
+        )
+        self.obs_delay = 0.2     # 200ms for aggregated observations
+        self.act_delay = 0.5     # 500ms for coordinated actions
+```
+
+### 7.4 Using TickConfig for Realistic Timing
+
+HERON provides `TickConfig` for configurable timing with jitter:
+
+```python
+from heron.scheduling.tick_config import TickConfig, JitterType
+
+# Training: deterministic timing (fast, reproducible)
+training_timing = TickConfig.deterministic(
+    tick_interval=1.0,
+    obs_delay=0.0,
+    act_delay=0.0,
+)
+
+# Testing: realistic timing with jitter
+testing_timing = TickConfig.with_jitter(
+    tick_interval=1.0,
+    obs_delay=0.1,       # 100ms base delay
+    act_delay=0.2,       # 200ms base delay
+    jitter_type=JitterType.GAUSSIAN,
+    jitter_ratio=0.2,    # 20% standard deviation
+    seed=42,
+)
+
+# CPS-calibrated timing (IEEE 2030 SCADA)
+scada_timing = TickConfig.with_jitter(
+    tick_interval=60.0,   # SCADA poll interval
+    obs_delay=2.0,        # ~2s SCADA latency
+    act_delay=1.5,        # ~1.5s command latency
+    jitter_type=JitterType.GAUSSIAN,
+    jitter_ratio=0.4,     # High variance for SCADA
+)
+```
+
+### 7.5 Running Event-Driven Simulation
+
+```python
+def step(self, actions):
+    self._timestep += 1
+
+    if self.event_driven:
+        return self._step_event_driven(actions)
+    else:
+        return self._step_synchronous(actions)
+
+def _step_event_driven(self, actions):
+    """Event-driven step using HERON's scheduler."""
+    # Store actions for agents
+    for agent_id, action in actions.items():
+        self._pending_actions[agent_id] = action
+
+    # Run simulation for one "step" duration
+    step_duration = 1.0  # 1 second per step
+    end_time = self.scheduler.current_time + step_duration
+
+    # HERON's built-in method runs the event loop
+    self.run_event_driven(t_end=end_time)
+
+    # Collect results
+    observations = {aid: agent.get_observation()
+                   for aid, agent in self.agent_dict.items()}
+    # ... compute rewards, terminateds, etc.
+
+    return observations, rewards, terminateds, truncateds, infos
+```
+
+### 7.6 Testing Workflow
+
+```python
+# 1. Train in synchronous mode (fast)
+train_config = {
+    'event_driven': False,
+    'max_episode_steps': 96,
+}
+train_env = MultiAgentMicrogrids(train_config)
+trained_policy = train_mappo(train_env, iterations=100)
+
+# 2. Test in event-driven mode (realistic)
+test_config = {
+    'event_driven': True,
+    'timing_jitter': 0.2,  # 20% jitter
+    'max_episode_steps': 96,
+}
+test_env = MultiAgentMicrogrids(test_config)
+
+# 3. Evaluate performance gap
+sync_reward = evaluate(train_env, trained_policy)
+event_reward = evaluate(test_env, trained_policy)
+
+print(f"Synchronous reward: {sync_reward:.2f}")
+print(f"Event-driven reward: {event_reward:.2f}")
+print(f"Performance gap: {(sync_reward - event_reward) / sync_reward * 100:.1f}%")
+
+# 4. If gap is large, consider:
+#    - Training with timing awareness
+#    - Adding robustness regularization
+#    - Using domain randomization on timing
+```
+
+### 7.7 Key Takeaways
+
+| Aspect | Synchronous Mode | Event-Driven Mode |
+|--------|-----------------|-------------------|
+| **Use case** | Training | Testing/Deployment |
+| **Speed** | Fast | Slower |
+| **Realism** | Low | High |
+| **Reproducibility** | Deterministic | Configurable jitter |
+| **HERON method** | `step()` | `run_event_driven()` |
+
+**This dual-mode capability is architectural**—it cannot be achieved by wrapping PettingZoo. HERON's `PettingZooParallelEnv` adapter provides this natively through `setup_event_driven()`, `setup_default_handlers()`, and `run_event_driven()`.
 
 ---
 

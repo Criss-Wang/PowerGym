@@ -99,8 +99,8 @@ class ConcreteNetworkedGridEnv(NetworkedGridEnv):
             "MG2": MockPowerGridAgent("MG2", net, has_devices=True),
             "MG3": MockPowerGridAgent("MG3", net, has_devices=False),
         }
-        self.possible_agents = list(self.agent_dict.keys())
-        self.agents = self.possible_agents
+        # Use adapter method to set PettingZoo agent IDs
+        self._set_agent_ids(list(self.agent_dict.keys()))
         self.data_size = 100
         self._total_days = 4  # Use underscore prefix like base class expects
         self._mock_agents_created = True

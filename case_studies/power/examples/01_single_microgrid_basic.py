@@ -35,15 +35,16 @@ from powergrid.networks.ieee13 import IEEE13Bus
 class SingleMicrogridEnv(NetworkedGridEnv):
     """Simple environment with one microgrid and 3 devices."""
 
-    def _build_net(self):
-        """Build network with single microgrid."""
-        # Create IEEE 13-bus network
+    def _build_agents(self):
+        """Build microgrid agents."""
+        # Create IEEE 13-bus network for this microgrid
         net = IEEE13Bus("MG1")
 
         # Create GridAgent with centralized control using full grid_config
         # Note: Devices are now automatically created from grid_config
         mg_agent = PowerGridAgent(
             net=net,
+            env_id=self.env_id,
             grid_config={
                 "name": "MG1",
                 "base_power": 1.0,
@@ -86,6 +87,9 @@ class SingleMicrogridEnv(NetworkedGridEnv):
             },
             protocol=SetpointProtocol(),
         )
+        # Set message broker if available (for distributed mode)
+        if self.message_broker is not None:
+            mg_agent.set_message_broker(self.message_broker)
 
         # Add dataset (simple synthetic data)
         dataset = self._create_synthetic_dataset()
@@ -95,12 +99,16 @@ class SingleMicrogridEnv(NetworkedGridEnv):
         self.data_size = len(dataset["load"])
         self._total_days = self.data_size // self.max_episode_steps
 
-        # Store agents
-        self.possible_agents = ["MG1"]
-        self.agent_dict = {"MG1": mg_agent}
-        self.net = net
+        return {"MG1": mg_agent}
 
-        return net
+    def _build_net(self):
+        """Build the fused network.
+
+        For a single microgrid, we just return the agent's network directly.
+        """
+        # Get the single agent's network
+        mg_agent = self.agent_dict["MG1"]
+        return mg_agent.net
 
     def _create_synthetic_dataset(self):
         """Create simple dataset with multiple days for training."""

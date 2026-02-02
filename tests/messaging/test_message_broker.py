@@ -21,7 +21,7 @@ from heron.messaging.base import (
     MessageBroker,
     ChannelManager
 )
-from heron.messaging.memory import InMemoryBroker
+from heron.messaging.in_memory_broker import InMemoryBroker
 
 
 # =============================================================================

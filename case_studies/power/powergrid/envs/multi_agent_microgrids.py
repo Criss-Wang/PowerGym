@@ -2,19 +2,49 @@
 
 This is a modernized version of the legacy MultiAgentMicrogrids that uses
 PowerGridAgent instead of GridEnv while maintaining identical logic.
+
+This environment supports CTDE (Centralized Training with Decentralized Execution):
+- Training: Agents share a collective reward to encourage cooperation
+- Execution: Agents can operate in event-driven mode with limited communication
 """
 
-from typing import Dict, List
+from typing import Any, Dict, List
 
+import numpy as np
 import pandapower as pp
 
 from powergrid.agents.power_grid_agent import PowerGridAgent
-from heron.protocols.vertical import SetpointProtocol
+from heron.protocols.vertical import SetpointProtocol, PriceSignalProtocol
+from heron.protocols.horizontal import PeerToPeerTradingProtocol, ConsensusProtocol
 from powergrid.setups.loader import load_dataset
 from powergrid.envs.networked_grid_env import NetworkedGridEnv
 from powergrid.networks.ieee13 import IEEE13Bus
 from powergrid.networks.ieee34 import IEEE34Bus
 from heron.utils.typing import AgentID
+
+
+# Protocol factory for ablation experiments
+PROTOCOL_REGISTRY = {
+    'setpoint': SetpointProtocol,
+    'price_signal': PriceSignalProtocol,
+    'p2p': PeerToPeerTradingProtocol,
+    'consensus': ConsensusProtocol,
+}
+
+
+def create_protocol(protocol_name: str):
+    """Create a coordination protocol by name.
+
+    Args:
+        protocol_name: One of 'setpoint', 'price_signal', 'p2p', 'consensus'
+
+    Returns:
+        Protocol instance
+    """
+    if protocol_name not in PROTOCOL_REGISTRY:
+        raise ValueError(f"Unknown protocol: {protocol_name}. "
+                        f"Available: {list(PROTOCOL_REGISTRY.keys())}")
+    return PROTOCOL_REGISTRY[protocol_name]()
 
 
 class MultiAgentMicrogrids(NetworkedGridEnv):
@@ -78,21 +108,23 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
 
         # No actionable devices in DSO, purely coordinating
         self.dso = PowerGridAgent(
-            message_broker=self.message_broker,
             upstream_id=self._name,
-            env_id=self._env_id,
+            env_id=self.env_id,
             grid_config=dso_config,
             net=net,
         )
+        # Set message broker if available (for distributed mode)
+        if self.message_broker is not None:
+            self.dso.set_message_broker(self.message_broker)
         self.dso.add_dataset(self._read_data(load_area, renew_area))
 
         return net
 
     def _build_microgrid_agent(self, microgrid_config) -> PowerGridAgent:
         """Build microgrid agent from config."""
-        # Initialize protocol and policy
-        # TODO: Make protocol configurable
-        protocol = SetpointProtocol()
+        # Initialize protocol from config (supports ablation experiments)
+        protocol_name = self.env_config.get('protocol', 'setpoint')
+        protocol = create_protocol(protocol_name)
         policy = None
         
         # Create microgrid net
@@ -102,12 +134,14 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
         microgrid_agent = PowerGridAgent(
             protocol=protocol,
             policy=policy,
-            message_broker=self.message_broker,
             upstream_id=self._name,
-            env_id=self._env_id,
+            env_id=self.env_id,
             grid_config=microgrid_config,
             net=microgrid_net,
         )
+        # Set message broker if available (for distributed mode)
+        if self.message_broker is not None:
+            microgrid_agent.set_message_broker(self.message_broker)
 
         # Load dataset
         load_area = microgrid_config.get('load_area', 'AVA')
@@ -136,8 +170,8 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
         # Set network and agents
         self.net = net
         self.agent_dict.update({a.agent_id: a for a in microgrid_agents})
-        self.possible_agents = list(self.agent_dict.keys())
-        self.agents = self.possible_agents
+        # Update PettingZoo agent IDs via adapter method
+        self._set_agent_ids(list(self.agent_dict.keys()))
 
         return net
 
@@ -164,6 +198,91 @@ class MultiAgentMicrogrids(NetworkedGridEnv):
                 rewards[name] -= safety[name] * self._safety
 
         return rewards, safety
+
+    # ============================================
+    # CTDE Collective Metrics
+    # ============================================
+
+    def get_power_grid_metrics(self) -> Dict[str, Any]:
+        """Get power-grid specific metrics for CTDE evaluation.
+
+        Returns:
+            Dictionary containing:
+                - total_generation_mw: Total active power generation
+                - total_load_mw: Total load consumption
+                - power_balance_mw: Generation - Load
+                - voltage_violations: Number of buses with voltage violations
+                - line_overloads: Number of overloaded lines
+                - convergence_rate: Power flow convergence success rate
+                - collective_metrics: From parent class get_collective_metrics()
+        """
+        metrics = self.get_collective_metrics()
+
+        # Power balance metrics
+        total_gen = 0.0
+        total_load = 0.0
+
+        for agent in self.agent_dict.values():
+            if isinstance(agent, PowerGridAgent):
+                # Sum generation from all devices
+                for device in agent.sgen.values():
+                    total_gen += abs(device.electrical.P_MW) if device.electrical else 0.0
+                for device in agent.storage.values():
+                    p_mw = device.electrical.P_MW if device.electrical else 0.0
+                    if p_mw < 0:  # Discharging
+                        total_gen += abs(p_mw)
+                    else:  # Charging is load
+                        total_load += p_mw
+
+        # Get load from network
+        if self.net is not None and 'converged' in self.net and self.net['converged']:
+            total_load += float(self.net.res_load['p_mw'].sum())
+
+        # Voltage and line violations
+        voltage_violations = 0
+        line_overloads = 0
+
+        if self.net is not None and self.net.get('converged', False):
+            vm = self.net.res_bus['vm_pu'].values
+            voltage_violations = int(np.sum((vm > 1.05) | (vm < 0.95)))
+
+            loading = self.net.res_line['loading_percent'].values
+            line_overloads = int(np.sum(loading > 100))
+
+        metrics.update({
+            'total_generation_mw': float(total_gen),
+            'total_load_mw': float(total_load),
+            'power_balance_mw': float(total_gen - total_load),
+            'voltage_violations': voltage_violations,
+            'line_overloads': line_overloads,
+            'convergence': bool(self.net.get('converged', False)) if self.net else False,
+        })
+
+        return metrics
+
+    def get_ctde_training_info(self) -> Dict[str, Any]:
+        """Get information useful for CTDE training monitoring.
+
+        Returns:
+            Dictionary with training metrics suitable for logging.
+        """
+        metrics = self.get_power_grid_metrics()
+
+        # Per-agent breakdown
+        agent_costs = {}
+        agent_safety = {}
+
+        for agent_id, agent in self.agent_dict.items():
+            agent_costs[agent_id] = float(agent.cost)
+            agent_safety[agent_id] = float(agent.safety)
+
+        return {
+            **metrics,
+            'agent_costs': agent_costs,
+            'agent_safety': agent_safety,
+            'episode_step': self._episode_step,
+            'timestep': self._t,
+        }
 
 
 if __name__ == '__main__':

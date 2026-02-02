@@ -2,9 +2,13 @@
 
 FieldAgent represents the lowest level in the agent hierarchy, typically
 managing individual units, sensors, or actuators.
+
+In synchronous mode (Option A - Training), field agents:
+1. Receive observations via observe()
+2. Execute actions via act() - either from coordinator or own policy
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 from dataclasses import dataclass
 
 import numpy as np
@@ -16,6 +20,9 @@ from heron.core.state import FieldAgentState
 from heron.core.action import Action
 from heron.core.policies import Policy
 from heron.utils.typing import AgentID
+
+if TYPE_CHECKING:
+    from heron.scheduling.tick_config import TickConfig
 
 FIELD_LEVEL = 1  # Level identifier for field-level agents
 
@@ -54,13 +61,21 @@ class FieldAgent(Agent):
         protocol: Optional["Protocol"] = None,
         policy: Optional[Policy] = None,
 
-        # communication params
-        message_broker: Optional["MessageBroker"] = None,
+        # hierarchy params
         upstream_id: Optional[AgentID] = None,
         env_id: Optional[str] = None,
 
         # FieldAgent specific params
         config: Optional[Dict[str, Any]] = None,
+
+        # timing params (for event-driven scheduling)
+        tick_interval: float = 1.0,  # Field agents tick most frequently
+        obs_delay: float = 0.0,
+        act_delay: float = 0.0,
+        msg_delay: float = 0.0,
+
+        # NEW: TickConfig for full control (overrides individual timing params)
+        tick_config: Optional["TickConfig"] = None,
     ):
         """Initialize field agent.
 
@@ -68,10 +83,14 @@ class FieldAgent(Agent):
             agent_id: Agent ID (defaults to name from config)
             policy: Decision policy (optional)
             protocol: Communication protocol (optional)
-            message_broker: Optional message broker for hierarchical execution
-            upstream_id: Optional upstream agent ID for hierarchical execution
+            upstream_id: Optional upstream agent ID for hierarchy structure
             env_id: Optional environment ID for multi-environment isolation
             config: Agent configuration dict
+            tick_interval: Time between agent ticks (ignored if tick_config provided)
+            obs_delay: Observation delay (ignored if tick_config provided)
+            act_delay: Action delay (ignored if tick_config provided)
+            msg_delay: Message delay (ignored if tick_config provided)
+            tick_config: Optional TickConfig for full control including jitter
         """
         config = config or {}
 
@@ -87,18 +106,20 @@ class FieldAgent(Agent):
             owner_level=FIELD_LEVEL
         )
         self.action: Action = Action()
-        self.cost: float = 0.0
-        self.safety: float = 0.0
         self.protocol = protocol
         self.policy: Optional[Policy] = policy
 
         super().__init__(
             agent_id=agent_id or self.field_config.name,
             level=FIELD_LEVEL,
-            message_broker=message_broker,
             upstream_id=upstream_id,
             env_id=env_id,
-            subordinates={}  # Field agents have no subordinates
+            subordinates={},  # Field agents have no subordinates
+            tick_interval=tick_interval,
+            obs_delay=obs_delay,
+            act_delay=act_delay,
+            msg_delay=msg_delay,
+            tick_config=tick_config,
         )
 
         self._init_action()
@@ -108,37 +129,37 @@ class FieldAgent(Agent):
         self.observation_space = self._get_observation_space()
 
     # ============================================
-    # Initialization Methods
+    # Initialization Methods (Both Modes)
     # ============================================
 
     def _init_action(self) -> None:
-        """Initialize agent-specific action space."""
+        """Initialize agent-specific action space. [Both Modes]"""
         self.set_action()
 
     def _init_state(self) -> None:
-        """Initialize agent-specific state attributes."""
+        """Initialize agent-specific state attributes. [Both Modes]"""
         self.set_state()
 
     def set_action(self) -> None:
-        """Define/initialize the agent-specific action.
+        """Define/initialize the agent-specific action. [Both Modes]
 
         To be overridden by subclasses.
         """
         pass
 
     def set_state(self) -> None:
-        """Define/initialize agent-specific state.
+        """Define/initialize agent-specific state. [Both Modes]
 
         To be overridden by subclasses.
         """
         pass
 
     # ============================================
-    # Space Getter Methods
+    # Space Getter Methods (Both Modes)
     # ============================================
 
     def _get_action_space(self) -> Space:
-        """Get action space based on agent action.
+        """Get action space based on agent action. [Both Modes]
 
         Returns:
             Gymnasium Space object
@@ -146,7 +167,7 @@ class FieldAgent(Agent):
         return self.action.space
 
     def _get_observation_space(self) -> Space:
-        """Get observation space based on agent state.
+        """Get observation space based on agent state. [Both Modes]
 
         Returns:
             Gymnasium Space object
@@ -169,7 +190,7 @@ class FieldAgent(Agent):
                 )
 
     def _get_obs(self) -> np.ndarray:
-        """Build the current observation vector for this agent."""
+        """Build the current observation vector for this agent. [Both Modes]"""
         obs_vec = self.state.vector()
 
         # Observe other agents' states via a communication protocol
@@ -190,11 +211,11 @@ class FieldAgent(Agent):
         return obs_vec
 
     # ============================================
-    # Core Agent Lifecycle Methods
+    # Core Agent Lifecycle Methods (Both Modes)
     # ============================================
 
     def reset(self, *, seed: Optional[int] = None, **kwargs) -> None:
-        """Reset agent.
+        """Reset agent. [Both Modes]
 
         Args:
             seed: Random seed
@@ -203,8 +224,15 @@ class FieldAgent(Agent):
         super().reset(seed=seed)
         self.reset_agent(**kwargs)
 
+    # ============================================
+    # Synchronous Execution (Option A - Training)
+    # ============================================
+
     def observe(self, global_state: Optional[Dict[str, Any]] = None, *args, **kwargs) -> Observation:
-        """Extract observation from global state.
+        """Extract observation from global state. [Both Modes]
+
+        - Training (Option A): Called by coordinator to collect observations
+        - Testing (Option B): Called internally by tick()
 
         Args:
             global_state: Complete environment state (optional)
@@ -223,50 +251,50 @@ class FieldAgent(Agent):
         )
 
     def act(self, observation: Observation, upstream_action: Any = None) -> None:
-        """Compute and apply action.
+        """Compute and apply action. [Training Only - Direct Call]
 
-        Routes to centralized or decentralized action computation based on
+        Note: In Testing (Option B), tick() computes actions directly via
+        _handle_coordinator_action()/_handle_local_action() instead
+        of calling this method.
+
+        Routes to coordinator-directed or self-directed action computation based on
         whether upstream_action is provided.
 
         Args:
             observation: Structured observation
-            upstream_action: Optional action from coordinator (centralized mode)
+            upstream_action: Optional action from coordinator (coordinator-directed)
         """
         if upstream_action is not None:
-            # Centralized mode: Use coordinator's action directly
-            action = self._handle_centralized_action(upstream_action, observation)
+            # Coordinator-directed: use the action provided by upstream coordinator
+            action = self._handle_coordinator_action(upstream_action, observation)
         else:
-            # Decentralized mode: Compute own action using policy
-            action = self._handle_decentralized_action(observation)
+            # Self-directed: compute action using local policy
+            action = self._handle_local_action(observation)
 
         self.action.set_values(action)
 
     # ============================================
-    # Centralized Action Handling
+    # Action Handling (Both Modes)
     # ============================================
 
-    def _handle_centralized_action(
+    def _handle_coordinator_action(
         self,
         upstream_action: Any,
         observation: Observation
     ) -> Any:
-        """Handle centralized action from coordinator.
+        """Handle coordinator-directed action. [Both Modes]
 
         Args:
             upstream_action: Action assigned by coordinator
-            observation: Current observation (unused in pure centralized mode)
+            observation: Current observation (unused in coordinator-directed mode)
 
         Returns:
             Action to execute (passthrough of upstream_action)
         """
         return upstream_action
 
-    # ============================================
-    # Decentralized Action Handling
-    # ============================================
-
-    def _handle_decentralized_action(self, observation: Observation) -> Any:
-        """Handle decentralized action computation using local policy.
+    def _handle_local_action(self, observation: Observation) -> Any:
+        """Handle self-directed action computation using local policy. [Both Modes]
 
         Args:
             observation: Current observation including messages
@@ -275,59 +303,110 @@ class FieldAgent(Agent):
             Action computed by local policy
 
         Raises:
-            ValueError: If no policy is defined for decentralized mode
+            ValueError: If no policy is defined for self-directed mode
         """
         if self.policy is None:
             raise ValueError(
-                "No policy defined for FieldAgent in decentralized mode. "
-                "Agent requires either upstream_action (centralized) or policy (decentralized)."
+                "No policy defined for FieldAgent. "
+                "Agent requires either upstream_action (coordinator-directed) or policy (self-directed)."
             )
 
         action = self.policy.forward(observation)
         return action
 
     # ============================================
-    # Abstract Methods for Hierarchical Execution
+    # Event-Driven Execution (Option B - Testing)
     # ============================================
 
-    def _derive_local_action(self, upstream_action: Optional[Any]) -> Optional[Any]:
-        """Derive local action from upstream action.
+    def tick(
+        self,
+        scheduler: "EventScheduler",
+        current_time: float,
+        global_state: Optional[Dict[str, Any]] = None,
+        proxy: Optional["Agent"] = None,
+    ) -> None:
+        """Execute one tick in event-driven mode. [Testing Only]
 
-        If a RL policy is defined, use it to compute the local action.
-        Otherwise, pass through the upstream action.
+        In Option B, FieldAgent:
+        1. Updates timestep
+        2. Checks message broker for upstream action from coordinator
+        3. Gets observation (potentially delayed via ProxyAgent)
+        4. Computes action using upstream action or own policy
+        5. Schedules ACTION_EFFECT with act_delay
 
         Args:
-            upstream_action: Action received from upstream agent
+            scheduler: EventScheduler for scheduling future events
+            current_time: Current simulation time
+            global_state: Optional global state for observation
+            proxy: Optional ProxyAgent for delayed observations
+        """
+        self._timestep = current_time
+
+        # Check message broker for upstream action from coordinator
+        upstream_action = None
+        actions = self.receive_action_messages()
+        if actions:
+            upstream_action = actions[-1]  # Use most recent action
+
+        # Get observation (with delay if proxy provided and obs_delay > 0)
+        if proxy is not None and self.obs_delay > 0:
+            # Use proxy for delayed observations
+            delayed_time = current_time - self.obs_delay
+            proxy_state = self.request_state_from_proxy(proxy, at_time=delayed_time)
+            observation = self._build_observation_from_proxy(proxy_state)
+        else:
+            # Direct observation (no delay)
+            observation = self.observe(global_state)
+        self._last_observation = observation
+
+        # Compute action (coordinator-directed if upstream provided, else self-directed)
+        if upstream_action is not None:
+            action = self._handle_coordinator_action(upstream_action, observation)
+        elif self.policy is not None:
+            action = self._handle_local_action(observation)
+        else:
+            # No action to take - agent is passive
+            return
+
+        self.action.set_values(action)
+
+        # Schedule delayed action effect
+        if self.act_delay > 0:
+            scheduler.schedule_action_effect(
+                agent_id=self.agent_id,
+                action=self.action.vector(),
+                delay=self.act_delay,
+            )
+
+    def _build_observation_from_proxy(
+        self, proxy_state: Dict[str, Any]
+    ) -> Observation:
+        """Build observation from proxy state. [Testing Only]
+
+        Override in subclasses for custom observation building from proxy state.
+
+        Args:
+            proxy_state: Filtered state dict from ProxyAgent
 
         Returns:
-            Local action to execute
+            Observation built from proxy state
         """
-        if self.policy is not None:
-            observation = self.observe()
-            action = self.policy.forward(observation)
-        else:
-            action = upstream_action
-
-        # Store action internally
-        if action is not None:
-            self.action.set_values(action)
-
-        return action
-
-    def _execute_local_action(self, action: Optional[Any]) -> None:
-        """Execute own action and update internal state.
-
-        Args:
-            action: Action to execute
-        """
-        self.update_state()
+        return Observation(
+            timestamp=self._timestep,
+            local={
+                'state': self.state.vector(),
+                'proxy_state': proxy_state,
+            }
+        )
 
     # ============================================
-    # Agent-Specific Methods (Abstract)
+    # Agent-Specific Methods (Both Modes)
     # ============================================
 
     def reset_agent(self, *args, **kwargs) -> None:
-        """Reset agent to initial state (to be implemented by subclasses).
+        """Reset agent to initial state. [Both Modes]
+
+        To be implemented by subclasses.
 
         Args:
             *args: Positional arguments
@@ -336,40 +415,25 @@ class FieldAgent(Agent):
         pass
 
     def update_state(self, *args, **kwargs) -> None:
-        """Update agent state (to be implemented by subclasses).
+        """Update agent state. [Both Modes]
+
+        To be implemented by subclasses.
 
         Args:
             *args: Positional arguments
             **kwargs: Keyword arguments
         """
         pass
-
-    def update_cost_safety(self, *args, **kwargs) -> None:
-        """Update agent cost and safety metrics (to be implemented by subclasses).
-
-        Args:
-            *args: Positional arguments
-            **kwargs: Keyword arguments
-        """
-        pass
-
-    def get_reward(self) -> Dict[str, float]:
-        """Get reward signal from agent cost/safety.
-
-        Returns:
-            Dict with cost and safety values
-        """
-        return {"cost": self.cost, "safety": self.safety}
 
     def feasible_action(self) -> None:
-        """Clamp/adjust current action to ensure feasibility.
+        """Clamp/adjust current action to ensure feasibility. [Both Modes]
 
         Optional hook that can be overridden by subclasses.
         """
         return None
 
     # ============================================
-    # Utility Methods
+    # Utility Methods (Both Modes)
     # ============================================
 
     def __repr__(self) -> str:

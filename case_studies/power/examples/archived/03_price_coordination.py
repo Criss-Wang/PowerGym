@@ -24,7 +24,7 @@ Coordination Flow:
     1. GridAgent observes system state
     2. GridAgent computes optimal price signal
     3. PriceSignalProtocol broadcasts price to all devices
-    4. Each device receives price in mailbox
+    4. Each device receives price via message broker
     5. Devices adjust actions based on local objectives + price
 
 Runtime: ~35 seconds for 24 timesteps
@@ -311,7 +311,7 @@ def main():
     print(f"    Type: Vertical (Agent-owned)")
     print(f"    Owner: GridAgent (MG1)")
     print(f"    Mechanism: Broadcast price to subordinate devices")
-    print(f"    Communication: Via Message.mailbox")
+    print(f"    Communication: Via MessageBroker")
     print(f"    Response: Each device optimizes locally given price signal")
 
     print("\n[7] Key Insights:")

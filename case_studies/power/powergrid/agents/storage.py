@@ -10,7 +10,6 @@ from powergrid.core.features.electrical import ElectricalBasePh
 from powergrid.core.features.power_limits import PowerLimits
 from powergrid.core.features.status import StatusBlock
 from powergrid.core.features.storage import StorageBlock
-from heron.messaging.base import ChannelManager, Message, MessageType
 from heron.utils.typing import float_if_not_none
 from powergrid.utils.phase import PhaseModel, PhaseSpec, check_phase_model_consistency
 
@@ -91,10 +90,14 @@ class ESS(DeviceAgent):
         agent_id: Optional[str] = None,
         policy: Optional[Policy] = None,
         protocol: Protocol = NoProtocol(),
-        message_broker: Optional['MessageBroker'] = None,
         upstream_id: Optional[str] = None,
         env_id: Optional[str] = None,
         device_config: Dict[str, Any],
+        # timing params (for event-driven scheduling)
+        tick_interval: float = 1.0,
+        obs_delay: float = 0.0,
+        act_delay: float = 0.0,
+        msg_delay: float = 0.0,
     ):
         config = device_config.get("device_state_config", {})
 
@@ -131,10 +134,13 @@ class ESS(DeviceAgent):
             agent_id=agent_id,
             policy=policy,
             protocol=protocol,
-            message_broker=message_broker,
             upstream_id=upstream_id,
             env_id=env_id,
             device_config=device_config,
+            tick_interval=tick_interval,
+            obs_delay=obs_delay,
+            act_delay=act_delay,
+            msg_delay=msg_delay,
         )
 
     def set_device_action(self) -> None:
@@ -458,6 +464,43 @@ class ESS(DeviceAgent):
     @property
     def soc(self) -> float:
         return self.storage.soc
+
+    # ============================================
+    # Distributed Mode Overrides
+    # ============================================
+
+    def _get_pandapower_device_type(self) -> str:
+        """Get the PandaPower element type for this storage device.
+
+        Returns:
+            String identifier for PandaPower element type ('storage')
+        """
+        return 'storage'
+
+    def _get_power_output(self) -> float:
+        """Get current real power output in MW.
+
+        Returns:
+            Real power output (positive = charging, negative = discharging)
+        """
+        return float(self.electrical.P_MW) if self.electrical else 0.0
+
+    def _get_reactive_power(self) -> float:
+        """Get current reactive power output in MVAr.
+
+        Returns:
+            Reactive power output
+        """
+        return float(self.electrical.Q_MVAr or 0.0) if self.electrical else 0.0
+
+    def _is_in_service(self) -> bool:
+        """Check if storage device is currently in service.
+
+        Returns:
+            True if device is operational
+        """
+        # ESS doesn't track in_service via StatusBlock, always operational
+        return True
 
     def __repr__(self) -> str:
         name = self.agent_id

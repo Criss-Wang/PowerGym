@@ -8,7 +8,7 @@ standard coordinator-level capabilities while adding power-grid specific
 functionality.
 """
 
-from typing import Any, Dict as DictType, Iterable, List, Optional
+from typing import Any, Dict as DictType, Iterable, List, Optional, Union
 
 import gymnasium as gym
 import numpy as np
@@ -17,6 +17,7 @@ from gymnasium.spaces import Box, Dict, Discrete, MultiDiscrete
 
 from heron.agents.coordinator_agent import CoordinatorAgent, COORDINATOR_LEVEL
 from heron.agents.base import Agent, AgentID
+from heron.core.action import Action
 from heron.core.observation import Observation
 from powergrid.agents.device_agent import DeviceAgent
 from heron.core.policies import Policy
@@ -25,7 +26,6 @@ from powergrid.core.state.state import GridState
 from powergrid.agents.generator import Generator
 from powergrid.agents.storage import ESS
 from powergrid.core.features.network import BusVoltages, LineFlows, NetworkMetrics
-from heron.messaging.base import ChannelManager, MessageBroker
 
 
 GRID_LEVEL = COORDINATOR_LEVEL  # Level identifier for grid-level agents (same as coordinator)
@@ -52,8 +52,7 @@ class GridAgent(CoordinatorAgent):
         policy: Optional[Policy] = None,
         protocol: Protocol = NoProtocol(),
 
-        # communication params
-        message_broker: Optional[MessageBroker] = None,
+        # hierarchy params
         upstream_id: Optional[AgentID] = None,
         env_id: Optional[str] = None,
 
@@ -61,6 +60,12 @@ class GridAgent(CoordinatorAgent):
         devices: Optional[List[DeviceAgent]] = None,
         centralized: bool = True,
         grid_config: DictType[str, Any] = {},
+
+        # timing params (for event-driven scheduling - Option B)
+        tick_interval: float = 60.0,
+        obs_delay: float = 0.0,
+        act_delay: float = 0.0,
+        msg_delay: float = 0.0,
     ):
         """Initialize grid coordinator.
 
@@ -68,12 +73,15 @@ class GridAgent(CoordinatorAgent):
             agent_id: Unique identifier
             policy: Optional centralized policy for joint action computation
             protocol: Protocol for coordinating devices
-            message_broker: Optional message broker for hierarchical execution
-            upstream_id: Optional parent agent ID for hierarchical execution
+            upstream_id: Optional parent agent ID for hierarchy structure
             env_id: Optional environment ID for multi-environment isolation
             devices: List of device agents to manage (alternative to grid_config)
             centralized: If True, uses centralized policy; if False, devices act independently
             grid_config: Grid configuration dictionary
+            tick_interval: Time between agent ticks (default 60s for coordinators)
+            obs_delay: Observation delay
+            act_delay: Action delay
+            msg_delay: Message delay
         """
         self.centralized = centralized
         self._grid_config = grid_config
@@ -92,10 +100,13 @@ class GridAgent(CoordinatorAgent):
             agent_id=agent_id,
             policy=policy,
             protocol=protocol,
-            message_broker=message_broker,
             upstream_id=upstream_id,
             env_id=env_id,
             config=config,
+            tick_interval=tick_interval,
+            obs_delay=obs_delay,
+            act_delay=act_delay,
+            msg_delay=msg_delay,
         )
 
         # Use GridState instead of CoordinatorAgentState for power-grid domain
@@ -130,7 +141,6 @@ class GridAgent(CoordinatorAgent):
     def _build_subordinate_agents(
         self,
         agent_configs: List[DictType[str, Any]],
-        message_broker: Optional[MessageBroker] = None,
         env_id: Optional[str] = None,
         upstream_id: Optional[AgentID] = None,
     ) -> DictType[AgentID, DeviceAgent]:
@@ -140,7 +150,6 @@ class GridAgent(CoordinatorAgent):
 
         Args:
             agent_configs: List of device configuration dictionaries
-            message_broker: Optional message broker for communication
             env_id: Environment ID for multi-environment isolation
             upstream_id: Upstream agent ID (this grid agent)
 
@@ -149,7 +158,6 @@ class GridAgent(CoordinatorAgent):
         """
         return self._build_device_agents(
             agent_configs,
-            message_broker=message_broker,
             env_id=env_id,
             upstream_id=upstream_id
         )
@@ -157,7 +165,6 @@ class GridAgent(CoordinatorAgent):
     def _build_device_agents(
         self,
         device_configs: List[DictType[str, Any]],
-        message_broker: Optional[MessageBroker] = None,
         env_id: Optional[str] = None,
         upstream_id: Optional[AgentID] = None,
     ) -> DictType[AgentID, DeviceAgent]:
@@ -167,7 +174,6 @@ class GridAgent(CoordinatorAgent):
 
         Args:
             device_configs: List of device configuration dictionaries
-            message_broker: Optional message broker for communication
             env_id: Environment ID for multi-environment isolation
             upstream_id: Upstream agent ID (this grid agent)
 
@@ -213,6 +219,14 @@ class GridAgent(CoordinatorAgent):
         """Set safety value explicitly."""
         self._safety = value
 
+    def get_reward(self) -> DictType[str, float]:
+        """Get aggregated reward from devices.
+
+        Returns:
+            Dict with total cost and safety values
+        """
+        return {"cost": self.cost, "safety": self.safety}
+
     # ============================================
     # Observation Methods (Override for device terminology)
     # ============================================
@@ -246,7 +260,7 @@ class GridAgent(CoordinatorAgent):
     # Action Methods (Override for centralized flag)
     # ============================================
 
-    def act(self, observation: Observation, upstream_action: Any = None) -> Any:
+    def act(self, observation: Observation, upstream_action: Any = None) -> Optional[Action]:
         """Compute coordination action and distribute to devices.
 
         Extends CoordinatorAgent.act() with centralized mode check.
@@ -256,7 +270,7 @@ class GridAgent(CoordinatorAgent):
             upstream_action: Pre-computed action (if any)
 
         Returns:
-            Joint action array (if centralized mode with policy)
+            Action object (if centralized mode with policy)
 
         Raises:
             NotImplementedError: If decentralized mode without policy
@@ -352,36 +366,22 @@ class GridAgent(CoordinatorAgent):
     # ============================================
 
     def _consume_network_state(self) -> Optional[DictType[str, Any]]:
-        """Consume network state from ProxyAgent via message broker.
+        """Consume network state from message broker.
 
-        In distributed mode, agents retrieve network state from the ProxyAgent
-        rather than directly from the environment. The ProxyAgent acts as the
-        single source of truth for network information.
+        In Option B (event-driven mode), agents retrieve network state from
+        messages delivered via the message broker from the ProxyAgent.
 
         Returns:
             Network state payload or None if no message available
         """
-        if not self.message_broker or not self.env_id:
-            return None
-
-        # Receive network state from ProxyAgent (not directly from environment)
-        # ProxyAgent sends state via info channel: proxy_agent -> grid_agent
-        channel = ChannelManager.info_channel(
-            "proxy_agent",  # ProxyAgent is the sender
-            self.agent_id,   # This grid agent is the recipient
-            self.env_id
-        )
-        messages = self.message_broker.consume(
-            channel,
-            recipient_id=self.agent_id,
-            env_id=self.env_id,
-            clear=True
-        )
-
-        if messages:
-            # Return the most recent message
-            return messages[-1].payload
-
+        # Check message broker for network state messages from ProxyAgent
+        # ProxyAgent sends messages via info channel to each agent
+        messages = self.receive_messages(sender_id="proxy_agent", clear=True)
+        for msg in messages:
+            # The payload IS the network state directly (has 'converged', 'bus_voltages', etc.)
+            # Not wrapped in a 'network_state' key
+            if 'converged' in msg or 'bus_voltages' in msg or 'line_loading' in msg:
+                return msg
         return None
 
     def __repr__(self) -> str:
@@ -410,7 +410,6 @@ class PowerGridAgent(GridAgent):
         # Base class args
         protocol: Protocol = NoProtocol(),
         policy: Optional[Policy] = None,
-        message_broker: Optional[MessageBroker] = None,
         upstream_id: Optional[AgentID] = None,
         env_id: Optional[str] = None,
         grid_config: DictType[str, Any] = {},
@@ -421,19 +420,28 @@ class PowerGridAgent(GridAgent):
 
         # PowerGridAgent specific params
         net: Optional[pp.pandapowerNet] = None,
+
+        # timing params (for event-driven scheduling - Option B)
+        tick_interval: float = 60.0,
+        obs_delay: float = 0.0,
+        act_delay: float = 0.0,
+        msg_delay: float = 0.0,
     ):
         """Initialize power grid agent.
 
         Args:
             protocol: Coordination protocol
             policy: Optional centralized policy
-            message_broker: Optional message broker for hierarchical execution
-            upstream_id: Optional parent agent ID for hierarchical execution
+            upstream_id: Optional parent agent ID for hierarchy structure
             env_id: Optional environment ID for multi-environment isolation
             grid_config: Grid configuration dictionary
             devices: Optional list of device agents to manage
             centralized: If True, uses centralized policy for coordination
             net: PandaPower network object (required)
+            tick_interval: Time between agent ticks (default 60s for coordinators)
+            obs_delay: Observation delay
+            act_delay: Action delay
+            msg_delay: Message delay
         """
         if net is None:
             raise ValueError("PandaPower network 'net' must be provided to PowerGridAgent.")
@@ -450,18 +458,20 @@ class PowerGridAgent(GridAgent):
             agent_id=self.name,
             protocol=protocol,
             policy=policy,
-            message_broker=message_broker,
             upstream_id=upstream_id,
             env_id=env_id,
             devices=devices,
             centralized=centralized,
             grid_config=grid_config,
+            tick_interval=tick_interval,
+            obs_delay=obs_delay,
+            act_delay=act_delay,
+            msg_delay=msg_delay,
         )
 
     def _build_device_agents(
         self,
         device_configs: List[DictType[str, Any]],
-        message_broker: Optional[MessageBroker] = None,
         env_id: Optional[str] = None,
         upstream_id: Optional[AgentID] = None,
     ) -> DictType[AgentID, DeviceAgent]:
@@ -469,7 +479,6 @@ class PowerGridAgent(GridAgent):
 
         Args:
             device_configs: List of device configuration dictionaries
-            message_broker: Optional message broker for communication
             env_id: Environment ID for multi-environment isolation
             upstream_id: Upstream agent ID (this grid agent)
 
@@ -496,7 +505,6 @@ class PowerGridAgent(GridAgent):
 
             if device_type == 'Generator':
                 generator = Generator(
-                    message_broker=message_broker,
                     upstream_id=upstream_id,
                     env_id=env_id,
                     device_config=wrapped_config,
@@ -505,7 +513,6 @@ class PowerGridAgent(GridAgent):
                 generators.append(generator)
             elif device_type == 'ESS':
                 ess = ESS(
-                    message_broker=message_broker,
                     upstream_id=upstream_id,
                     env_id=env_id,
                     device_config=wrapped_config,
@@ -637,40 +644,83 @@ class PowerGridAgent(GridAgent):
             net: PandaPower network
             scale: Scaling multiplier
         """
-        local_load_ids = pp.get_element_index(net, 'load', self.name, False)
-        net.load.loc[local_load_ids, 'scaling'] *= scale
+        try:
+            local_load_ids = pp.get_element_index(net, 'load', self.name, False)
+            if len(local_load_ids) > 0:
+                net.load.loc[local_load_ids, 'scaling'] *= scale
+        except (KeyError, ValueError):
+            # No loads matching this agent's name, or names contain NaN
+            pass
 
     # ============================================
     # Observation Methods
     # ============================================
 
+    def observe(self, global_state: Optional[DictType[str, Any]] = None,
+                visibility_level: str = 'system', **kwargs) -> Observation:
+        """Collect observations with visibility-based filtering.
+
+        Supports visibility levels for observability ablation experiments:
+        - system: Full observation (all device states + network state)
+        - upper_level: Coordinator view (own devices + subordinate aggregates)
+        - owner: Local device state only
+        - public: Public/shared information only
+
+        Args:
+            global_state: Environment state
+            visibility_level: Visibility level for observation filtering
+
+        Returns:
+            Observation filtered by visibility level
+        """
+        # Get base observation from parent
+        obs = super().observe(global_state, **kwargs)
+
+        # Apply visibility-based filtering to the state vector
+        if visibility_level != 'system':
+            # Store visibility level for use in _get_obs
+            self._current_visibility_level = visibility_level
+        else:
+            self._current_visibility_level = 'system'
+
+        return obs
+
     def _build_local_observation(self, device_obs: DictType[AgentID, Observation], *args, **kwargs) -> Any:
         """Build local observation including device states and network results.
+
+        Note: Agents should NOT directly access the fused network. The environment
+        provides network state via sync_global_state() and set_load_data().
 
         Args:
             device_obs: Device observations dictionary
             *args: Additional positional arguments
-            **kwargs: Additional keyword arguments (can include 'net')
+            **kwargs: Additional keyword arguments (network_state for distributed mode)
 
         Returns:
             Local observation dictionary with device and network state
         """
-        # Use provided net or fall back to self.net
-        net = kwargs.get('net', self.net)
-
-        # Update grid state from network results (only if net provided)
-        if net is not None:
-            self._update_grid_state(net)
+        # In distributed mode, network state comes via messages (stored in _cached_network_state)
+        # In centralized mode, environment calls sync_global_state() to set cached data
+        # Either way, agents should NOT access the fused network directly
 
         local = super()._build_local_observation(device_obs)
-        local['state'] = self._get_obs(net, device_obs)
+        local['state'] = self._get_obs(None, device_obs)  # Never pass fused network
         return local
 
     def _get_obs(self, net, device_obs=None):
         """Extract numerical observation vector from network state.
 
+        Note: Agents should NOT directly access the fused network. The environment
+        provides load data via set_load_data() which is cached in _cached_load_pq.
+        This ensures proper isolation between agents and the fused network.
+
+        Observation filtering based on visibility_level:
+        - system/upper_level: Full observation (device states + load P/Q)
+        - owner: Device states only (no load P/Q)
+        - public: Minimal observation (placeholder for future extension)
+
         Args:
-            net: PandaPower network (None in distributed mode)
+            net: Deprecated - should be None. Environment provides data via set_load_data()
             device_obs: Optional device observations (computed if not provided)
 
         Returns:
@@ -687,22 +737,43 @@ class PowerGridAgent(GridAgent):
             # P, Q, UC status of generators
             obs = np.concatenate((obs, ob.local['state']))
 
-        # P, Q at all buses (only in centralized mode when net is provided)
-        if net is not None:
-            local_load_ids = pp.get_element_index(net, 'load', self.name, False)
-            load_pq = net.res_load.iloc[local_load_ids].values
-            obs = np.concatenate([obs, load_pq.ravel() / self.base_power])
+        # Get current visibility level (set by observe())
+        visibility_level = getattr(self, '_current_visibility_level', 'system')
+
+        # P, Q at all buses - only include for system/upper_level visibility
+        # (set via set_load_data() by the environment after power flow)
+        if visibility_level in ('system', 'upper_level'):
+            if hasattr(self, '_cached_load_pq') and self._cached_load_pq is not None:
+                obs = np.concatenate([obs, self._cached_load_pq.ravel() / self.base_power])
 
         return obs.astype(np.float32)
+
+    def set_load_data(self, load_pq: np.ndarray) -> None:
+        """Set cached load data from environment.
+
+        Called by the environment after power flow to provide this agent's
+        load P/Q values. This ensures agents don't directly access the fused network.
+
+        Args:
+            load_pq: Array of load P/Q values for this agent's loads
+        """
+        self._cached_load_pq = load_pq
+
+    def clear_load_data(self) -> None:
+        """Clear cached load data."""
+        self._cached_load_pq = None
 
     def _update_grid_state(self, net) -> None:
         """Update GridState features from PandaPower network results.
 
+        INTERNAL: This method is called by sync_global_state() which is invoked
+        by the environment. Agents should NOT call this directly.
+
         Args:
-            net: PandaPower network with power flow results
+            net: PandaPower network with power flow results (fused network)
         """
-        if not net.get("converged", False):
-            # If power flow didn't converge, keep previous state
+        if net is None or not net.get("converged", False):
+            # If power flow didn't converge or no network, keep previous state
             return
 
         # Extract local bus indices
@@ -813,26 +884,62 @@ class PowerGridAgent(GridAgent):
         else:  # No actionable agents
             return Discrete(1)
 
-    def get_grid_observation_space(self, net):
+    def get_grid_observation_space(self, net=None, visibility_level: str = 'system'):
         """Get observation space for this grid.
 
+        Uses the agent's local network (self.net) to determine observation shape.
+        This works because observation shape depends on number of devices and loads,
+        which is fixed per agent regardless of network fusion.
+
+        Observation space size varies with visibility_level for ablation experiments:
+        - system: Full observation (all device states + load P/Q)
+        - upper_level: Device states + load P/Q (same as system for now)
+        - owner: Device states only (no load P/Q)
+        - public: Minimal public info (placeholder)
+
         Args:
-            net: PandaPower network
+            net: Deprecated - not used. Kept for API compatibility.
+            visibility_level: Visibility level for observation filtering
 
         Returns:
             Gymnasium Box space for grid observations
         """
-        # Ensure powerflow has run to get correct observation size
+        # Use local network to determine observation size
+        # (shape is determined by number of devices + loads, which is agent-specific)
+        local_net = self.net
+
+        # Ensure powerflow has run on local network to get correct observation size
         try:
-            pp.runpp(net, algorithm='nr', init='flat', max_iteration=100)
+            pp.runpp(local_net, algorithm='nr', init='flat', max_iteration=100)
         except Exception:
-            # If powerflow fails, still create space (may need adjustment later)
+            # If powerflow fails, still create space
             pass
+
+        # Get device observation size from device state vectors
+        # Each device's observation is its state.vector() (from observe().local['state'])
+        device_obs_size = sum(
+            device.state.vector().shape[0]
+            for device in self.devices.values()
+        )
+
+        # Get load size from local network (before fusion)
+        # Only include loads for system and upper_level visibility
+        if visibility_level in ('system', 'upper_level'):
+            try:
+                local_load_ids = pp.get_element_index(local_net, 'load', self.name, False)
+                load_obs_size = len(local_load_ids) * 2  # P and Q for each load
+            except (KeyError, UserWarning):
+                load_obs_size = 0
+        else:
+            # owner and public visibility: no load info
+            load_obs_size = 0
+
+        total_obs_size = device_obs_size + load_obs_size
 
         return Box(
             low=-np.inf,
             high=np.inf,
-            shape=self._get_obs(net).shape,
+            shape=(total_obs_size,),
             dtype=np.float32
         )
 
@@ -873,6 +980,9 @@ class PowerGridAgent(GridAgent):
         In distributed mode, network state has already been synced via ProxyAgent
         in _update_from_network_state(), so we can skip this.
 
+        IMPORTANT: This method should be called by the environment, NOT by agents.
+        Agents should NEVER directly access the fused network.
+
         Args:
             net: PandaPower network with power flow results (None in distributed mode)
             t: Current timestep
@@ -882,6 +992,7 @@ class PowerGridAgent(GridAgent):
             return
 
         # Centralized mode: sync from pandapower network
+        # 1. Sync device states (sgen results)
         for name, dg in self.sgen.items():
             local_ids = pp.get_element_index(net, 'sgen', self.name + ' ' + name)
             p_mw_val = net.res_sgen.loc[local_ids, 'p_mw']
@@ -894,6 +1005,21 @@ class PowerGridAgent(GridAgent):
                 dg.electrical.P_MW = p_mw
             if not np.isnan(q_mvar):
                 dg.electrical.Q_MVAr = q_mvar
+
+        # 2. Cache load data for observations (agents should not access net directly)
+        try:
+            local_load_ids = pp.get_element_index(net, 'load', self.name, False)
+            if len(local_load_ids) > 0:
+                load_pq = net.res_load.loc[local_load_ids].values
+                self.set_load_data(load_pq)
+            else:
+                self.set_load_data(np.array([]))
+        except (KeyError, UserWarning):
+            # No loads for this agent
+            self.set_load_data(np.array([]))
+
+        # 3. Update grid state features (for safety/cost calculations)
+        self._update_grid_state(net)
 
     def _update_from_network_state(self, network_state: DictType[str, Any]) -> None:
         """Update internal features from received network state.
@@ -958,6 +1084,47 @@ class PowerGridAgent(GridAgent):
                 if not np.isnan(q_mvar):
                     device.electrical.Q_MVAr = float(q_mvar)
 
+    # ============================================
+    # Distributed Mode Configuration
+    # ============================================
+
+    def configure_for_distributed(self, message_broker=None) -> None:
+        """Configure this grid and all devices for distributed execution mode.
+
+        In distributed mode, agents communicate via message broker rather than
+        direct method calls. This enables realistic async communication with
+        configurable delays.
+
+        Args:
+            message_broker: MessageBroker instance for inter-agent communication.
+                           If None, uses the broker from parent (upstream) agent.
+        """
+        if message_broker is not None:
+            self.set_message_broker(message_broker)
+
+        # Create message channel for this grid agent (uses result channel for agent state)
+        if self.message_broker is not None:
+            from heron.messaging.base import ChannelManager
+            env_id = self.env_id or "default"
+            channel = ChannelManager.result_channel(env_id, self.agent_id)
+            self.message_broker.create_channel(channel)
+
+        # Propagate to all subordinate devices
+        for device in self.devices.values():
+            device.configure_for_distributed(self.message_broker)
+
+    def reset_all_devices(self, **kwargs) -> None:
+        """Reset all subordinate device agents.
+
+        Calls reset_agent() on all devices in this grid, ensuring proper
+        state initialization for both centralized and distributed modes.
+
+        Args:
+            **kwargs: Keyword arguments passed to each device's reset_agent() method
+        """
+        for device in self.devices.values():
+            device.reset_agent(**kwargs)
+
     def update_cost_safety(self, net):
         """Update cost and safety metrics for the grid.
 
@@ -996,16 +1163,15 @@ class PowerGridAgent(GridAgent):
 
                 self.safety += overloading + overvoltage + undervoltage
         else:
-            # Distributed mode: receive network state via ProxyAgent
-            if self.message_broker and self.env_id:
-                network_state = self._consume_network_state()
-                if network_state and network_state.get('converged', False):
-                    # Extract pre-computed safety metrics from ProxyAgent message
-                    bus_voltages = network_state.get('bus_voltages', {})
-                    line_loading = network_state.get('line_loading', {})
+            # Event-driven mode (Option B): check mailbox for network state
+            network_state = self._consume_network_state()
+            if network_state and network_state.get('converged', False):
+                # Extract pre-computed safety metrics from message
+                bus_voltages = network_state.get('bus_voltages', {})
+                line_loading = network_state.get('line_loading', {})
 
-                    overvoltage = bus_voltages.get('overvoltage', 0)
-                    undervoltage = bus_voltages.get('undervoltage', 0)
-                    overloading = line_loading.get('overloading', 0)
+                overvoltage = bus_voltages.get('overvoltage', 0)
+                undervoltage = bus_voltages.get('undervoltage', 0)
+                overloading = line_loading.get('overloading', 0)
 
-                    self.safety += overloading + overvoltage + undervoltage
+                self.safety += overloading + overvoltage + undervoltage

@@ -5,7 +5,7 @@ Tests cover:
 - Vertical protocol message passing (GridAgent → DeviceAgents)
 - Horizontal protocol coordination (GridAgent ↔ GridAgent)
 - Protocol-specific behaviors
-- Message delivery via mailbox system
+- Message delivery via message broker
 - Protocol ownership (vertical vs horizontal)
 
 Key protocols tested:
@@ -351,13 +351,15 @@ class TestMessageDelivery:
 
         return mg_agent, gen
 
-    def test_mailbox_initialization(self, agent_with_devices):
-        """Test that devices have mailbox initialized."""
+    def test_message_broker_initialization(self, agent_with_devices):
+        """Test that devices can be configured with message broker."""
         mg_agent, gen = agent_with_devices
 
-        # Device should have mailbox
-        assert hasattr(gen, "mailbox")
-        assert gen.mailbox is not None
+        # Device should be able to set message broker
+        from heron.messaging.in_memory_broker import InMemoryBroker
+        broker = InMemoryBroker()
+        gen.set_message_broker(broker)
+        assert gen.message_broker is not None
 
     def test_message_delivery_to_device(self, agent_with_devices):
         """Test that protocol generates messages for devices."""
@@ -381,13 +383,22 @@ class TestMessageDelivery:
         assert "price" in messages[gen.agent_id]
         assert messages[gen.agent_id]["price"] == 60.0
 
-    def test_mailbox_clear(self, agent_with_devices):
-        """Test mailbox clearing between timesteps."""
+    def test_message_broker_communication(self, agent_with_devices):
+        """Test message broker communication between agents."""
         mg_agent, gen = agent_with_devices
 
-        # Mailbox should be clearable
-        gen.mailbox.clear()
-        assert len(gen.mailbox) == 0
+        # Configure message broker
+        from heron.messaging.in_memory_broker import InMemoryBroker
+        broker = InMemoryBroker()
+        mg_agent.set_message_broker(broker)
+        gen.set_message_broker(broker)
+        mg_agent.env_id = "test_env"
+        gen.env_id = "test_env"
+        gen.upstream_id = mg_agent.agent_id
+
+        # Messages via broker should be receivable
+        messages = gen.receive_messages()
+        assert isinstance(messages, list)
 
 
 class TestProtocolIntegration:

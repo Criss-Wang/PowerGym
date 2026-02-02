@@ -81,7 +81,7 @@ class TestDistributedModeWithProxy:
         # Check environment-to-proxy channel exists
         env_to_proxy_channel = ChannelManager.custom_channel(
             "power_flow",
-            distributed_env._env_id,
+            distributed_env.env_id,
             "proxy_agent"
         )
         assert env_to_proxy_channel in broker.channels
@@ -91,7 +91,7 @@ class TestDistributedModeWithProxy:
             proxy_to_agent_channel = ChannelManager.info_channel(
                 "proxy_agent",
                 agent_id,
-                distributed_env._env_id
+                distributed_env.env_id
             )
             assert proxy_to_agent_channel in broker.channels
 
@@ -130,14 +130,14 @@ class TestDistributedModeWithProxy:
             channel = ChannelManager.info_channel(
                 "proxy_agent",
                 agent_id,
-                env._env_id
+                env.env_id
             )
 
             # Check that messages exist in the channel
             messages = broker.consume(
                 channel,
                 recipient_id=agent_id,
-                env_id=env._env_id,
+                env_id=env.env_id,
                 clear=False  # Don't clear so we can inspect
             )
 
@@ -291,9 +291,9 @@ class TestDistributedModeWithProxy:
         broker = env.message_broker
 
         # MG1 should see voltage_pu and line_loading
-        channel_mg1 = ChannelManager.info_channel("proxy_agent", "MG1", env._env_id)
+        channel_mg1 = ChannelManager.info_channel("proxy_agent", "MG1", env.env_id)
         messages_mg1 = broker.consume(channel_mg1, recipient_id="MG1",
-                                      env_id=env._env_id, clear=False)
+                                      env_id=env.env_id, clear=False)
         if messages_mg1:
             payload_mg1 = messages_mg1[-1].payload
             # Only allowed keys should be present
@@ -301,18 +301,18 @@ class TestDistributedModeWithProxy:
                 assert key in ['voltage_pu', 'line_loading']
 
         # MG2 should see only voltage_pu
-        channel_mg2 = ChannelManager.info_channel("proxy_agent", "MG2", env._env_id)
+        channel_mg2 = ChannelManager.info_channel("proxy_agent", "MG2", env.env_id)
         messages_mg2 = broker.consume(channel_mg2, recipient_id="MG2",
-                                      env_id=env._env_id, clear=False)
+                                      env_id=env.env_id, clear=False)
         if messages_mg2:
             payload_mg2 = messages_mg2[-1].payload
             for key in payload_mg2.keys():
                 assert key in ['voltage_pu']
 
         # MG3 should see empty state
-        channel_mg3 = ChannelManager.info_channel("proxy_agent", "MG3", env._env_id)
+        channel_mg3 = ChannelManager.info_channel("proxy_agent", "MG3", env.env_id)
         messages_mg3 = broker.consume(channel_mg3, recipient_id="MG3",
-                                      env_id=env._env_id, clear=False)
+                                      env_id=env.env_id, clear=False)
         if messages_mg3:
             payload_mg3 = messages_mg3[-1].payload
             assert len(payload_mg3) == 0
@@ -328,7 +328,7 @@ class TestDistributedModeWithProxy:
         env2 = MultiAgentMicrogrids(distributed_config)
 
         # Verify different env_ids
-        assert env1._env_id != env2._env_id
+        assert env1.env_id != env2.env_id
 
         # Verify different proxy agents
         assert env1.proxy_agent is not env2.proxy_agent
@@ -452,9 +452,14 @@ class TestDistributedModeWithProxy:
         final_total_messages = sum(len(msgs) for msgs in broker.channels.values())
 
         # Messages should be consumed (cleared), not accumulate indefinitely
-        # After 5 steps, we shouldn't have 5x the messages
+        # After 5 steps, we shouldn't have unbounded message growth
         # (exact behavior depends on clear=True in consume calls)
+        # In distributed mode with state updates, we expect more messages per step:
+        # - 3 action messages per step (one per agent)
+        # - 3 state updates from devices per step
+        # - 3 network state messages per step
         print(f"\nInitial messages: {initial_total_messages}, Final messages: {final_total_messages}")
 
         # This is a soft check - main point is messages don't grow unbounded
-        assert final_total_messages < initial_total_messages * 10
+        # With 3 agents, 5 steps, ~9 messages per step, we expect ~45 + initial messages
+        assert final_total_messages < initial_total_messages + 100

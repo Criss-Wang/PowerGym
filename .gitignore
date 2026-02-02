@@ -163,3 +163,7 @@ checkpoints/*
 # preparation docs (not for remote)
 docs/source/internal/prep/*
 docs/source/internal/design/*
+
+
+# paper related
+**/paper/**
