@@ -96,13 +96,15 @@ class Generator(DeviceAgent):
         protocol: Protocol = NoProtocol(),
         upstream_id: Optional[str] = None,
         env_id: Optional[str] = None,
-        device_config: Dict[str, Any] = {},
+        device_config: Optional[Dict[str, Any]] = None,
         # timing params (for event-driven scheduling)
         tick_interval: float = 1.0,
         obs_delay: float = 0.0,
         act_delay: float = 0.0,
         msg_delay: float = 0.0,
     ):
+        if device_config is None:
+            device_config = {}
         state_config = device_config.get("device_state_config", {})
 
         # phase model & spec

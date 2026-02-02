@@ -41,11 +41,11 @@ class MockPowerGridAgent(PowerGridAgent):
             return gym.spaces.Box(low=0, high=1, shape=(2,), dtype=np.float32)
         return gym.spaces.Discrete(1)
 
-    def get_grid_observation_space(self, net):
+    def get_grid_observation_space(self, net=None, visibility_level="system"):
         """Return mock observation space."""
         return gym.spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32)
 
-    def observe(self, net=None):
+    def observe(self, net=None, visibility_level="system"):
         """Return mock observation."""
         return Observation(
             local={"state": np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)},

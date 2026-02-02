@@ -4,11 +4,14 @@ This implementation stores all messages in memory using Python dictionaries.
 It's fast, simple, and perfect for testing, development, and single-process simulations.
 """
 
+import logging
 from collections import defaultdict
 from threading import Lock
 from typing import Callable, Dict, List
 
 from heron.messaging.base import Message, MessageBroker
+
+logger = logging.getLogger(__name__)
 
 
 class InMemoryBroker(MessageBroker):
@@ -76,7 +79,7 @@ class InMemoryBroker(MessageBroker):
                 callback(message)
             except Exception as e:
                 # Don't let subscriber errors crash the broker
-                print(f"Error in subscriber callback for channel {channel}: {e}")
+                logger.warning(f"Error in subscriber callback for channel {channel}: {e}")
 
     def consume(
         self,

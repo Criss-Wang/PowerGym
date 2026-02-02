@@ -1,1 +1,24 @@
+"""Agent classes for HERON hierarchical multi-agent systems.
 
+This module provides the agent hierarchy:
+- Agent: Abstract base class
+- FieldAgent: Field-level (L1) agents managing individual units
+- CoordinatorAgent: Coordinator-level (L2) agents managing groups
+- SystemAgent: System-level (L3) agents for system-wide coordination
+- ProxyAgent: Proxy for distributed communication
+"""
+
+from heron.agents.base import Agent
+from heron.agents.field_agent import FieldAgent, FieldConfig
+from heron.agents.coordinator_agent import CoordinatorAgent
+from heron.agents.system_agent import SystemAgent
+from heron.agents.proxy_agent import ProxyAgent
+
+__all__ = [
+    "Agent",
+    "FieldAgent",
+    "FieldConfig",
+    "CoordinatorAgent",
+    "SystemAgent",
+    "ProxyAgent",
+]

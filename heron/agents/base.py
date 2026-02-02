@@ -161,7 +161,7 @@ class Agent(ABC):
 
     def enable_jitter(
         self,
-        jitter_type: "JitterType" = None,
+        jitter_type: Optional["JitterType"] = None,
         jitter_ratio: float = 0.1,
         seed: Optional[int] = None,
     ) -> None:

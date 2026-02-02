@@ -131,6 +131,23 @@ class SetpointProtocol(VerticalProtocol):
     This protocol works in both centralized and distributed modes:
     - Centralized: Direct action application via subordinate.act()
     - Distributed: Actions sent via message broker
+
+    Example:
+        Use with a coordinator for centralized control::
+
+            from heron.agents import CoordinatorAgent
+            from heron.protocols import SetpointProtocol
+
+            # Coordinator with setpoint-based control
+            coordinator = CoordinatorAgent(
+                agent_id="grid_operator",
+                protocol=SetpointProtocol()
+            )
+
+            # Coordinator computes joint action and assigns to subordinates
+            joint_action = np.array([0.5, 0.3, 0.2])  # Power setpoints
+            coordinator.act(obs, upstream_action=joint_action)
+            # Each subordinate receives its portion of the joint action
     """
 
     def __init__(self):
@@ -202,6 +219,20 @@ class PriceSignalProtocol(VerticalProtocol):
 
     Attributes:
         price: Current price signal value
+
+    Example:
+        Use for decentralized coordination via price signals::
+
+            from heron.protocols import PriceSignalProtocol
+
+            # Initialize with starting price
+            protocol = PriceSignalProtocol(initial_price=50.0)
+
+            # Update price based on supply/demand
+            protocol.price = 75.0  # High demand -> higher price
+
+            # Subordinates receive price and decide independently
+            # e.g., generators increase output, storage discharges
     """
 
     def __init__(self, initial_price: float = 50.0):

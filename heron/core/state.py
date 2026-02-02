@@ -28,6 +28,52 @@ class State(ABC):
         owner_id: ID of the agent that owns this state
         owner_level: Hierarchy level of owning agent (1=field, 2=coordinator, 3=system)
         features: List of feature providers composing this state
+
+    Example:
+        Create a field agent state with custom features::
+
+            import numpy as np
+            from heron.core.state import FieldAgentState
+            from heron.core.feature import FeatureProvider
+
+            # Define a custom feature (feature_name auto-set to class name)
+            class BatteryFeature(FeatureProvider):
+                visibility = ["owner"]
+
+                def __init__(self):
+                    self.soc = 0.5  # State of charge
+                    self.capacity = 100.0
+
+                def vector(self):
+                    return np.array([self.soc, self.capacity], dtype=np.float32)
+
+                def names(self):
+                    return ["soc", "capacity"]
+
+                def to_dict(self):
+                    return {"soc": self.soc, "capacity": self.capacity}
+
+                @classmethod
+                def from_dict(cls, d):
+                    f = cls()
+                    f.soc = d.get("soc", 0.5)
+                    f.capacity = d.get("capacity", 100.0)
+                    return f
+
+                def set_values(self, **kwargs):
+                    for k, v in kwargs.items():
+                        if hasattr(self, k):
+                            setattr(self, k, v)
+
+            # Create state and add feature
+            state = FieldAgentState(owner_id="battery_1", owner_level=1)
+            state.features.append(BatteryFeature())
+
+            # Get full state vector
+            vec = state.vector()  # array([0.5, 100.0])
+
+            # Update specific feature
+            state.update_feature("BatteryFeature", soc=0.8)
     """
     owner_id: str
     owner_level: int
@@ -161,7 +207,8 @@ class FieldAgentState(State):
         for feature in self.features:
             if feature.feature_name in updates:
                 values = updates.get(feature.feature_name)
-                self.update_feature(feature.feature_name, **values)
+                if values is not None:
+                    self.update_feature(feature.feature_name, **values)
 
     def validate_observation_dict(self, obs_dict: Dict[str, np.ndarray]) -> None:
         """Validate that all observation vectors are 1D."""
@@ -189,6 +236,7 @@ class CoordinatorAgentState(State):
         for feature in self.features:
             if feature.feature_name in updates:
                 values = updates.get(feature.feature_name)
-                self.update_feature(feature.feature_name, **values)
+                if values is not None:
+                    self.update_feature(feature.feature_name, **values)
 
 

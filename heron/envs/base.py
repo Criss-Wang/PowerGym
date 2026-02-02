@@ -66,6 +66,42 @@ class HeronEnvCore:
         message_broker: MessageBroker for agent communication (always available)
         heron_agents: Dictionary mapping agent IDs to Agent instances
         heron_coordinators: Dictionary mapping coordinator IDs to CoordinatorAgent instances
+
+    Example:
+        Use HeronEnvCore in a custom environment::
+
+            import gymnasium as gym
+            from heron.envs.base import HeronEnvCore
+            from heron.agents import FieldAgent
+
+            class MyEnv(gym.Env, HeronEnvCore):
+                def __init__(self):
+                    super().__init__()
+                    self._init_heron_core(env_id="my_env")
+
+                    # Register agents
+                    agent = FieldAgent(agent_id="agent_1")
+                    self.register_agent(agent)
+
+                def reset(self, **kwargs):
+                    self.reset_agents()
+                    obs = self.get_observations()
+                    return obs, {}
+
+                def step(self, actions):
+                    self.apply_actions(actions)
+                    # ... physics simulation ...
+                    obs = self.get_observations()
+                    return obs, rewards, False, False, {}
+
+        Run event-driven simulation (Option B)::
+
+            env.setup_event_driven()
+            env.setup_default_handlers(
+                global_state_fn=lambda: env.get_state(),
+                on_action_effect=lambda aid, act: env.apply_action(aid, act)
+            )
+            num_events = env.run_event_driven(t_end=100.0)
     """
 
     def _init_heron_core(
@@ -336,15 +372,18 @@ class HeronEnvCore:
 
             # Publish message via message broker
             if self.message_broker is not None and sender_id is not None:
-                self.publish_action(
-                    sender_id=sender_id,
-                    recipient_id=recipient_id,
-                    action=message_content.get("action"),
-                ) if "action" in message_content else self.publish_info(
-                    sender_id=sender_id,
-                    recipient_id=recipient_id,
-                    info=message_content,
-                )
+                if "action" in message_content:
+                    self.publish_action(
+                        sender_id=sender_id,
+                        recipient_id=recipient_id,
+                        action=message_content.get("action"),
+                    )
+                else:
+                    self.publish_info(
+                        sender_id=sender_id,
+                        recipient_id=recipient_id,
+                        info=message_content,
+                    )
 
         self.scheduler.set_handler(EventType.AGENT_TICK, agent_tick_handler)
         self.scheduler.set_handler(EventType.ACTION_EFFECT, action_effect_handler)

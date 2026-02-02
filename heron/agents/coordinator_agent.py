@@ -36,6 +36,36 @@ class CoordinatorAgent(Agent):
         subordinate_agents: Dictionary mapping agent IDs to FieldAgent instances
         protocol: Coordination protocol for managing subordinate agents
         policy: Optional centralized policy for joint action computation
+
+    Example:
+        Create a coordinator managing field agents::
+
+            from heron.agents import CoordinatorAgent
+            from heron.protocols import SetpointProtocol
+
+            # Create coordinator with setpoint-based control
+            coordinator = CoordinatorAgent(
+                agent_id="grid_coordinator",
+                protocol=SetpointProtocol(),
+            )
+
+            # Subordinates can be added via config or directly
+            # coordinator.subordinate_agents = {a.agent_id: a for a in agents}
+
+        Collect observations and distribute actions::
+
+            # Coordinator aggregates subordinate observations
+            obs = coordinator.observe(global_state={"time": 0})
+
+            # Distribute joint action to subordinates
+            import numpy as np
+            joint_action = np.array([0.5, 0.3, 0.2])
+            coordinator.act(obs, upstream_action=joint_action)
+
+        Get joint action space for RL training::
+
+            joint_space = coordinator.get_joint_action_space()
+            # Returns Box, MultiDiscrete, or Dict space
     """
 
     def __init__(
@@ -441,17 +471,17 @@ class CoordinatorAgent(Agent):
         Returns:
             Gymnasium space representing joint action space
         """
-        low, high, discrete_n = [], [], []
+        low_parts, high_parts, discrete_n = [], [], []
         for sp in self.get_subordinate_action_spaces().values():
             if isinstance(sp, Box):
-                low = np.append(low, sp.low)
-                high = np.append(high, sp.high)
+                low_parts.append(sp.low)
+                high_parts.append(sp.high)
             elif isinstance(sp, Dict):
                 # Handle Dict spaces (e.g., continuous + discrete)
                 if 'continuous' in sp.spaces or 'c' in sp.spaces:
                     cont_space = sp.spaces.get('continuous', sp.spaces.get('c'))
-                    low = np.append(low, cont_space.low)
-                    high = np.append(high, cont_space.high)
+                    low_parts.append(cont_space.low)
+                    high_parts.append(cont_space.high)
                 if 'discrete' in sp.spaces or 'd' in sp.spaces:
                     disc_space = sp.spaces.get('discrete', sp.spaces.get('d'))
                     if isinstance(disc_space, Discrete):
@@ -462,6 +492,9 @@ class CoordinatorAgent(Agent):
                 discrete_n.append(sp.n)
             elif isinstance(sp, MultiDiscrete):
                 discrete_n.extend(list(sp.nvec))
+
+        low = np.concatenate(low_parts) if low_parts else np.array([])
+        high = np.concatenate(high_parts) if high_parts else np.array([])
 
         if len(low) and len(discrete_n):
             return Dict({

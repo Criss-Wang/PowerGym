@@ -51,7 +51,7 @@ class DeviceAgent(FieldAgent):
         env_id: Optional[str] = None,
 
         # DeviceAgent specific params
-        device_config: Dict[str, Any] = {},
+        device_config: Optional[Dict[str, Any]] = None,
 
         # timing params (for event-driven scheduling - Option B)
         tick_interval: float = 1.0,
@@ -74,6 +74,8 @@ class DeviceAgent(FieldAgent):
             msg_delay: Message delay
         """
         # Convert device_config to the config format expected by FieldAgent
+        if device_config is None:
+            device_config = {}
         config = {
             "name": device_config.get("name", "device_agent"),
             "state_config": device_config.get("device_state_config", {}),

@@ -164,6 +164,8 @@ checkpoints/*
 docs/source/internal/prep/*
 docs/source/internal/design/*
 
+# Claude related
+CLAUDE.md
 
 # paper related
 **/paper/**

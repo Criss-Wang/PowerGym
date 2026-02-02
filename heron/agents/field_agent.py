@@ -53,6 +53,54 @@ class FieldAgent(Agent):
         action: Agent's action container
         policy: Decision-making policy (learned or rule-based)
         protocol: Communication/action protocol
+
+    Example:
+        Create a custom field agent with state and actions::
+
+            from heron.agents import FieldAgent
+            from heron.core.feature import FeatureProvider
+            import numpy as np
+
+            # Define a feature for agent state
+            class TemperatureFeature(FeatureProvider):
+                visibility = ["owner", "upper_level"]
+                def __init__(self):
+                    self.temp = 20.0
+                def vector(self):
+                    return np.array([self.temp], dtype=np.float32)
+                def names(self):
+                    return ["temperature"]
+                def to_dict(self):
+                    return {"temp": self.temp}
+                @classmethod
+                def from_dict(cls, d):
+                    f = cls()
+                    f.temp = d.get("temp", 20.0)
+                    return f
+                def set_values(self, **kwargs):
+                    if "temp" in kwargs:
+                        self.temp = kwargs["temp"]
+
+            class ThermostatAgent(FieldAgent):
+                def set_action(self):
+                    # Continuous action: temperature setpoint [18, 26]
+                    self.action.set_specs(
+                        dim_c=1,
+                        range=(np.array([18.0]), np.array([26.0]))
+                    )
+
+                def set_state(self):
+                    # Add temperature feature to state
+                    self.state.features.append(TemperatureFeature())
+
+            agent = ThermostatAgent(agent_id="thermostat_1")
+            # agent.action_space -> Box(18.0, 26.0, (1,), float32)
+
+        Use with upstream action from coordinator::
+
+            obs = agent.observe()
+            agent.act(obs, upstream_action=np.array([22.0]))
+            # agent.action.c -> array([22.0])
     """
 
     def __init__(

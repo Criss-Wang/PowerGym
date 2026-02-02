@@ -35,6 +35,47 @@ class FeatureProvider(ABC):
         visibility: Class variable defining who can observe this feature
                    Options: "public", "owner", "system", "upper_level"
         feature_name: Auto-set to class name for registration/lookup
+
+    Example:
+        Define a custom feature for battery state::
+
+            import numpy as np
+            from heron.core.feature import FeatureProvider
+
+            class BatteryState(FeatureProvider):
+                # Visible to owner and upper-level agents
+                visibility = ["owner", "upper_level"]
+
+                def __init__(self, capacity: float = 100.0):
+                    self.soc = 0.5  # State of charge [0, 1]
+                    self.capacity = capacity
+                    self.power = 0.0
+
+                def vector(self) -> np.ndarray:
+                    return np.array([self.soc, self.power], dtype=np.float32)
+
+                def names(self):
+                    return ["soc", "power"]
+
+                def to_dict(self):
+                    return {"soc": self.soc, "capacity": self.capacity, "power": self.power}
+
+                @classmethod
+                def from_dict(cls, d):
+                    f = cls(d.get("capacity", 100.0))
+                    f.soc = d.get("soc", 0.5)
+                    f.power = d.get("power", 0.0)
+                    return f
+
+                def set_values(self, **kwargs):
+                    for k, v in kwargs.items():
+                        if hasattr(self, k):
+                            setattr(self, k, v)
+
+            # Usage
+            battery = BatteryState(capacity=200.0)
+            battery.set_values(soc=0.8, power=50.0)
+            print(battery.vector())  # [0.8, 50.0]
     """
 
     visibility: ClassVar[Sequence[str]]

@@ -59,7 +59,7 @@ class GridAgent(CoordinatorAgent):
         # GridAgent specific params
         devices: Optional[List[DeviceAgent]] = None,
         centralized: bool = True,
-        grid_config: DictType[str, Any] = {},
+        grid_config: Optional[DictType[str, Any]] = None,
 
         # timing params (for event-driven scheduling - Option B)
         tick_interval: float = 60.0,
@@ -84,6 +84,8 @@ class GridAgent(CoordinatorAgent):
             msg_delay: Message delay
         """
         self.centralized = centralized
+        if grid_config is None:
+            grid_config = {}
         self._grid_config = grid_config
 
         # Build config for CoordinatorAgent
@@ -445,6 +447,9 @@ class PowerGridAgent(GridAgent):
         """
         if net is None:
             raise ValueError("PandaPower network 'net' must be provided to PowerGridAgent.")
+
+        if grid_config is None:
+            grid_config = {}
 
         self.net = net
         self.name = net.name
@@ -852,17 +857,17 @@ class PowerGridAgent(GridAgent):
         Returns:
             Gymnasium space representing joint action space of all devices
         """
-        low, high, discrete_n = [], [], []
+        low_parts, high_parts, discrete_n = [], [], []
         for sp in self.get_device_action_spaces().values():
             if isinstance(sp, Box):
-                low = np.append(low, sp.low)
-                high = np.append(high, sp.high)
+                low_parts.append(sp.low)
+                high_parts.append(sp.high)
             elif isinstance(sp, Dict):
                 # Handle Dict spaces (e.g., Generator with continuous + discrete)
                 if 'continuous' in sp.spaces or 'c' in sp.spaces:
                     cont_space = sp.spaces.get('continuous', sp.spaces.get('c'))
-                    low = np.append(low, cont_space.low)
-                    high = np.append(high, cont_space.high)
+                    low_parts.append(cont_space.low)
+                    high_parts.append(cont_space.high)
                 if 'discrete' in sp.spaces or 'd' in sp.spaces:
                     disc_space = sp.spaces.get('discrete', sp.spaces.get('d'))
                     if isinstance(disc_space, Discrete):
@@ -873,6 +878,9 @@ class PowerGridAgent(GridAgent):
                 discrete_n.append(sp.n)
             elif isinstance(sp, MultiDiscrete):
                 discrete_n.extend(list(sp.nvec))
+
+        low = np.concatenate(low_parts) if low_parts else np.array([])
+        high = np.concatenate(high_parts) if high_parts else np.array([])
 
         if len(low) and len(discrete_n):
             return Dict({"continuous": Box(low=low, high=high, dtype=np.float32),
