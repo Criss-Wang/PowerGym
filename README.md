@@ -12,6 +12,7 @@ A **domain-agnostic Multi-Agent Reinforcement Learning (MARL) framework** with a
 - [Quick Start](#quick-start)
 - [Setting Up Your Own Project](#setting-up-your-own-project)
 - [Included Case Study](#included-case-study)
+- [Documentation](#documentation)
 - [Development](#development)
 
 ---
@@ -629,6 +630,31 @@ To contribute a new domain case study (e.g., robotics, traffic):
 3. Add optional dependencies under `[project.optional-dependencies]` if needed
 
 > 💡 **For standalone projects** (separate repository), use `make new-project` or follow [Setting Up Your Own Project](#setting-up-your-own-project).
+
+---
+
+## Documentation
+
+HERON provides comprehensive documentation for different learning paths:
+
+### Getting Started
+- **[Hello World Example](examples/00_hello_world.py)**: Minimal runnable example without domain dependencies
+- **[Getting Started Guide](docs/source/getting_started.md)**: Installation and first steps
+- **[Key Concepts](docs/source/key_concepts.md)**: Core abstractions with code examples
+
+### User Guides
+- **[Basic Concepts](docs/source/user_guide/basic_concepts.md)**: Agent hierarchy, features, protocols
+- **[Event-Driven Execution](docs/source/user_guide/event_driven_execution.md)**: Testing with realistic timing
+- **[Centralized vs Distributed](docs/source/user_guide/centralized_vs_distributed.md)**: Execution mode comparison
+
+### Developer Guides
+- **[Architecture](docs/source/developer_guide/architecture.md)**: System design and components
+- **[Extending Agents](docs/source/developer_guide/extending_agents.md)**: Creating custom agents
+- **[Custom Protocols](docs/source/developer_guide/custom_protocols.md)**: Building coordination protocols
+
+### Reference
+- **[Glossary](docs/source/glossary.md)**: Definitions of HERON terminology
+- **[Scheduling Module](heron/scheduling/README.md)**: Event-driven scheduling details
 
 ---
 

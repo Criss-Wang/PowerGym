@@ -255,3 +255,87 @@ class PriceSignalProtocol(VerticalProtocol):
     def price(self, value):
         """Set current price."""
         self.communication_protocol.price = value
+
+
+# =============================================================================
+# SYSTEM-LEVEL VERTICAL PROTOCOLS (For SystemAgent -> Coordinator coordination)
+# =============================================================================
+
+class SystemCommunicationProtocol(CommunicationProtocol):
+    """Sends system-wide signals to coordinators.
+
+    Used by SystemAgent to send directives to CoordinatorAgents.
+    Messages include system-level commands like frequency regulation signals,
+    emergency load shedding commands, or market clearing results.
+    """
+
+    def __init__(self):
+        self.neighbors = set()
+
+    def compute_coordination_messages(
+        self,
+        sender_state: Any,
+        receiver_states: Dict[AgentID, Any],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[AgentID, Dict[str, Any]]:
+        """Compute system-wide coordination messages.
+
+        Args:
+            sender_state: System agent's state
+            receiver_states: Dict of coordinator states
+            context: Context with system action and metadata
+
+        Returns:
+            Dict mapping coordinator IDs to messages
+        """
+        context = context or {}
+        system_action = context.get("coordinator_action")
+
+        return {
+            receiver_id: {
+                "type": "system_directive",
+                "directive": system_action,
+                "timestamp": context.get("timestamp"),
+            }
+            for receiver_id in receiver_states
+        }
+
+
+class SystemProtocol(VerticalProtocol):
+    """System-level coordination protocol.
+
+    Used by SystemAgent to coordinate CoordinatorAgents.
+    Default behavior sends system directives and applies centralized actions.
+
+    Example:
+        Use with a system agent for centralized control::
+
+            from heron.agents import SystemAgent
+            from heron.protocols import SystemProtocol
+
+            # System agent with system protocol
+            system = SystemAgent(
+                agent_id="grid_system",
+                protocol=SystemProtocol()
+            )
+
+            # System computes joint action and distributes to coordinators
+            joint_action = np.array([0.5, 0.3, 0.2])  # Per-coordinator signals
+            system.act(obs, upstream_action=joint_action)
+    """
+
+    def __init__(
+        self,
+        communication_protocol: Optional[CommunicationProtocol] = None,
+        action_protocol: Optional[ActionProtocol] = None
+    ):
+        """Initialize system protocol.
+
+        Args:
+            communication_protocol: Protocol for message computation
+            action_protocol: Protocol for action coordination
+        """
+        super().__init__(
+            communication_protocol=communication_protocol or SystemCommunicationProtocol(),
+            action_protocol=action_protocol or CentralizedActionProtocol()
+        )

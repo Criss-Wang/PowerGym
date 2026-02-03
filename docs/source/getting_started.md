@@ -2,6 +2,8 @@
 
 This guide helps you get up and running with HERON quickly.
 
+> **New to HERON?** Check out the [Glossary](glossary.md) for definitions of key terms.
+
 ## Installation
 
 ```bash
@@ -136,9 +138,24 @@ for _ in range(10):
     obs, rewards, terms, truncs, infos = env.step(actions)
 ```
 
+## Runnable Example
+
+For a complete, runnable example without domain-specific dependencies, see:
+
+```bash
+python examples/00_hello_world.py
+```
+
+This demonstrates:
+- Creating custom features with visibility control
+- Building field agents and coordinators
+- Running a simple hierarchical control simulation
+
 ## Next Steps
 
 - [Key Concepts](key_concepts.md) - Understand HERON's core abstractions
+- [Glossary](glossary.md) - Definitions of HERON terminology
+- [Event-Driven Execution](user_guide/event_driven_execution.md) - Testing with realistic timing
 - [User Guide](user_guide/index.rst) - Detailed usage documentation
 - [Case Studies](case_studies/index.rst) - See HERON in action with PowerGrid
 - [API Reference](api/index.rst) - Full API documentation

@@ -212,6 +212,53 @@ class MyEnv(ParallelEnv):
         pass
 ```
 
+## Timing Parameters
+
+Agents can be configured with timing parameters for event-driven execution:
+
+```python
+from heron.agents import FieldAgent
+from heron.scheduling import TickConfig, JitterType
+
+# Simple timing parameters
+sensor = FieldAgent(
+    agent_id="sensor_1",
+    tick_interval=1.0,    # Time between ticks (seconds)
+    obs_delay=0.1,        # Observation latency
+    act_delay=0.2,        # Action effect delay
+    msg_delay=0.05,       # Message delivery delay
+)
+
+# Full control with TickConfig (includes jitter for testing)
+config = TickConfig.with_jitter(
+    tick_interval=1.0,
+    obs_delay=0.1,
+    jitter_type=JitterType.GAUSSIAN,
+    jitter_ratio=0.1,     # 10% variability
+    seed=42,
+)
+sensor = FieldAgent(agent_id="sensor_1", tick_config=config)
+```
+
+**Timing parameter reference:**
+
+| Parameter | Description | Typical Range |
+|-----------|-------------|---------------|
+| `tick_interval` | Time between agent ticks | 0.1s - 60s |
+| `obs_delay` | Latency before observation is available | 0 - 1s |
+| `act_delay` | Delay before action takes effect | 0 - 1s |
+| `msg_delay` | Message delivery latency | 0 - 1s |
+
+**Hierarchical timing patterns:**
+
+| Agent Level | tick_interval | Rationale |
+|-------------|---------------|-----------|
+| FieldAgent | 0.1 - 1.0s | Fast local sensing/actuation |
+| CoordinatorAgent | 1.0 - 60s | Aggregate and coordinate |
+| SystemAgent | 60s+ | High-level decisions |
+
+See the [Event-Driven Execution Guide](user_guide/event_driven_execution.md) for details.
+
 ## Summary
 
 | Concept | Purpose |
@@ -221,3 +268,4 @@ class MyEnv(ParallelEnv):
 | **Protocols** | Coordination patterns |
 | **Execution Modes** | Training vs deployment |
 | **Message Broker** | Distributed communication |
+| **Timing Parameters** | Realistic delays for testing |

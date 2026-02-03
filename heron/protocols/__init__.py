@@ -10,6 +10,7 @@ Vertical Protocols (hierarchical coordination):
 - VerticalProtocol: Base for top-down coordination
 - SetpointProtocol: Setpoint-based control
 - PriceSignalProtocol: Price signal-based coordination
+- SystemProtocol: System-level coordination (L3 -> L2)
 
 Horizontal Protocols (peer coordination):
 - HorizontalProtocol: Base for peer-to-peer coordination
@@ -34,6 +35,8 @@ from heron.protocols.vertical import (
     CentralizedActionProtocol,
     PriceCommunicationProtocol,
     DecentralizedActionProtocol,
+    SystemProtocol,
+    SystemCommunicationProtocol,
 )
 from heron.protocols.horizontal import (
     HorizontalProtocol,
@@ -62,6 +65,8 @@ __all__ = [
     "CentralizedActionProtocol",
     "PriceCommunicationProtocol",
     "DecentralizedActionProtocol",
+    "SystemProtocol",
+    "SystemCommunicationProtocol",
     # Horizontal
     "HorizontalProtocol",
     "PeerToPeerTradingProtocol",

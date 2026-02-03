@@ -240,3 +240,64 @@ class CoordinatorAgentState(State):
                     self.update_feature(feature.feature_name, **values)
 
 
+@dataclass(slots=True)
+class SystemAgentState(State):
+    """State for system-level (L3) agents.
+
+    System agents are the top level in the hierarchy, typically
+    representing system-wide state like market conditions, grid frequency,
+    or aggregate metrics across multiple coordinators.
+
+    Example:
+        Create a system agent state with system-level features::
+
+            from heron.core.state import SystemAgentState
+            from heron.core.feature import FeatureProvider
+
+            class SystemFrequency(FeatureProvider):
+                visibility = ["system"]
+
+                def __init__(self, frequency_hz: float = 60.0):
+                    self.frequency_hz = frequency_hz
+                    self.nominal_hz = 60.0
+
+                def vector(self):
+                    deviation = self.frequency_hz - self.nominal_hz
+                    return np.array([self.frequency_hz, deviation], dtype=np.float32)
+
+                def names(self):
+                    return ["frequency_hz", "frequency_deviation"]
+
+                def to_dict(self):
+                    return {"frequency_hz": self.frequency_hz}
+
+                @classmethod
+                def from_dict(cls, d):
+                    return cls(frequency_hz=d.get("frequency_hz", 60.0))
+
+                def set_values(self, **kwargs):
+                    if "frequency_hz" in kwargs:
+                        self.frequency_hz = kwargs["frequency_hz"]
+
+            # Create state and add features
+            state = SystemAgentState(owner_id="system_1", owner_level=3)
+            state.features.append(SystemFrequency(frequency_hz=60.0))
+    """
+    def update(self, updates: Dict[str, Dict[str, Any]]) -> None:
+        """Apply batch updates to system-level features.
+
+        Args:
+            updates: Mapping of feature names to field updates:
+                {
+                    "SystemFrequency": {"frequency_hz": 59.95},
+                    "AggregateLoad": {"total_mw": 1500.0},
+                    ...
+                }
+        """
+        for feature in self.features:
+            if feature.feature_name in updates:
+                values = updates.get(feature.feature_name)
+                if values is not None:
+                    self.update_feature(feature.feature_name, **values)
+
+
