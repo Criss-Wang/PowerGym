@@ -118,7 +118,7 @@ class Action:
         if self.dim_d == 0:
             self.d = np.array([], dtype=np.int32)
         if self.dim_d == 0 and self.ncats != []:
-            raise ValueError("ncats must be >=1 when dim_d > 0.")
+            raise ValueError("ncats must be empty when dim_d == 0.")
         if self.dim_d > 0:
             if len(self.ncats) != self.dim_d:
                 raise ValueError("len(ncats) must equal dim_d.")

@@ -12,7 +12,6 @@ from heron.envs.base import HeronEnvCore, BaseEnv, MultiAgentEnv
 from heron.envs.adapters import (
     PettingZooParallelEnv,
     RLlibMultiAgentEnv,
-    get_available_interfaces,
 )
 
 __all__ = [
@@ -21,5 +20,4 @@ __all__ = [
     "MultiAgentEnv",
     "PettingZooParallelEnv",
     "RLlibMultiAgentEnv",
-    "get_available_interfaces",
 ]

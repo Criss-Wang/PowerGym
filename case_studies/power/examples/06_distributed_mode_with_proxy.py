@@ -72,8 +72,8 @@ def run_distributed_mode_example():
 
     proxy = env.proxy_agent
     print(f"ProxyAgent ID: {proxy.agent_id}")
-    print(f"Number of subordinate agents: {len(proxy.subordinate_agents)}")
-    print(f"Subordinate agents: {proxy.subordinate_agents}")
+    print(f"Number of registered agents: {len(proxy.registered_agents)}")
+    print(f"Registered agents: {proxy.registered_agents}")
     print(f"Visibility rules: {proxy.visibility_rules if proxy.visibility_rules else 'None (all agents see all state)'}")
     print()
 
@@ -86,11 +86,11 @@ def run_distributed_mode_example():
     obs, info = env.reset(seed=42)
 
     print("After reset:")
-    print(f"  - ProxyAgent cache populated: {len(proxy.network_state_cache) > 0}")
-    if proxy.network_state_cache:
-        print(f"  - Cache keys: {list(proxy.network_state_cache.keys())}")
-        if 'agents' in proxy.network_state_cache:
-            print(f"  - Agent states available: {list(proxy.network_state_cache['agents'].keys())}")
+    print(f"  - ProxyAgent cache populated: {len(proxy.state_cache) > 0}")
+    if proxy.state_cache:
+        print(f"  - Cache keys: {list(proxy.state_cache.keys())}")
+        if 'agents' in proxy.state_cache:
+            print(f"  - Agent states available: {list(proxy.state_cache['agents'].keys())}")
 
     print(f"\nObservations received by {len(obs)} agents:")
     for agent_id, observation in obs.items():
@@ -119,7 +119,7 @@ def run_distributed_mode_example():
 
         # Print step summary
         print(f"Step {step + 1}:")
-        print(f"  - ProxyAgent cache size: {len(proxy.network_state_cache)} keys")
+        print(f"  - ProxyAgent cache size: {len(proxy.state_cache)} keys")
         print(f"  - Rewards: {', '.join([f'{aid}={rewards[aid]:.2f}' for aid in env.possible_agents])}")
 
         # Inspect message broker channels

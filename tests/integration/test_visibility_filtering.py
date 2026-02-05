@@ -162,14 +162,14 @@ class DeviceWithMultipleFeatures(FieldAgent):
             PrivateSecret(secret=999.0),
         ]
 
-    def _get_obs(self):
+    def _get_obs(self, proxy=None):
         return self.state.vector()
 
 
 class ZoneCoordinatorWithVisibility(CoordinatorAgent):
     """Coordinator that respects visibility when aggregating observations."""
 
-    def _build_subordinate_agents(self, agent_configs, env_id=None, upstream_id=None):
+    def _build_subordinates(self, agent_configs, env_id=None, upstream_id=None):
         agents = {}
         for config in agent_configs:
             agent_id = config.get("id")
@@ -188,7 +188,7 @@ class GridSystemWithVisibility(SystemAgent):
         super().__init__(*args, **kwargs)
         self._env_state = {}
 
-    def _build_coordinators(self, coordinator_configs, env_id=None, upstream_id=None):
+    def _build_subordinates(self, coordinator_configs, env_id=None, upstream_id=None):
         coordinators = {}
         for config in coordinator_configs:
             coord_id = config.get("id")
@@ -317,7 +317,7 @@ class TestHierarchicalVisibilityFiltering:
             config=config,
         )
 
-        device = coordinator.subordinate_agents["device_1"]
+        device = coordinator.subordinates["device_1"]
         device_state = device.state
 
         # Get what coordinator can see
@@ -348,7 +348,7 @@ class TestHierarchicalVisibilityFiltering:
 
         system = GridSystemWithVisibility(agent_id="grid_system", config=config)
 
-        device = system.coordinators["zone_1"].subordinate_agents["device_1"]
+        device = system.coordinators["zone_1"].subordinates["device_1"]
 
         # System filters state for a coordinator
         coord_view = system.filter_state_for_agent(
@@ -390,8 +390,8 @@ class TestInformationConstraintsInCoordination:
 
         coordinator = ZoneCoordinatorWithVisibility(agent_id="coord_1", config=config)
 
-        device_1 = coordinator.subordinate_agents["device_1"]
-        device_2 = coordinator.subordinate_agents["device_2"]
+        device_1 = coordinator.subordinates["device_1"]
+        device_2 = coordinator.subordinates["device_2"]
 
         # Device 1 tries to observe Device 2's state
         device_2_view_by_1 = device_2.state.observed_by("device_1", FIELD_LEVEL)
@@ -454,7 +454,7 @@ class TestVisibilityWithMultipleAgents:
         system = GridSystemWithVisibility(agent_id="grid_system", config=config)
 
         # Get device 1's state
-        device_1_state = system.coordinators["zone_1"].subordinate_agents["device_1"].state
+        device_1_state = system.coordinators["zone_1"].subordinates["device_1"].state
 
         # Device 2 (same zone peer) view
         peer_view = device_1_state.observed_by("device_2", FIELD_LEVEL)

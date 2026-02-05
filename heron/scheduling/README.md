@@ -2,6 +2,16 @@
 
 This module provides discrete-event simulation capabilities for testing trained MARL policies under realistic timing constraints.
 
+## File Structure
+
+```
+heron/scheduling/
+├── __init__.py      # Public exports
+├── event.py         # Event dataclass with ordering
+├── scheduler.py     # EventScheduler priority queue
+└── tick_config.py   # TickConfig and JitterType
+```
+
 ## Overview
 
 HERON supports two execution modes:
@@ -86,7 +96,40 @@ config = TickConfig.with_jitter(
 
 # Use with agent registration
 scheduler.register_agent("sensor_1", tick_config=config)
+
+# Get jittered values
+next_tick = config.next_tick_interval()  # Base ± jitter
+obs_delay = config.next_obs_delay()
+act_delay = config.next_act_delay()
 ```
+
+### JitterType
+
+Controls the distribution of timing variability:
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `NONE` | No jitter (deterministic) | Training, debugging |
+| `UNIFORM` | Uniform distribution ±ratio | Simple variability |
+| `GAUSSIAN` | Normal distribution (σ=ratio) | Realistic timing |
+
+### Event
+
+Dataclass representing a scheduled event with automatic ordering by timestamp.
+
+```python
+from heron.scheduling import Event, EventType
+
+event = Event(
+    timestamp=10.5,
+    event_type=EventType.AGENT_TICK,
+    agent_id="sensor_1",
+    payload={"custom_data": 123},
+    priority=0,  # Lower = higher priority for same timestamp
+)
+```
+
+Events are ordered by: `(timestamp, priority, sequence_number)`
 
 ## Usage with Environments
 
@@ -155,9 +198,37 @@ env.run_event_driven(t_end=3600.0)  # 1 hour simulation
 
 ## API Reference
 
-See the API documentation for detailed method signatures:
-- `heron.scheduling.EventScheduler`
-- `heron.scheduling.Event`
-- `heron.scheduling.EventType`
-- `heron.scheduling.TickConfig`
-- `heron.scheduling.JitterType`
+### EventScheduler
+
+| Method | Description |
+|--------|-------------|
+| `register_agent(agent_id, tick_config=None, ...)` | Register agent with timing config |
+| `schedule_event(event)` | Add event to queue |
+| `schedule_action_effect(agent_id, action, delay)` | Schedule delayed action |
+| `schedule_message_delivery(sender, recipient, msg, delay)` | Schedule message delivery |
+| `set_handler(event_type, handler)` | Set callback for event type |
+| `process_next()` | Process next event in queue |
+| `run_until(t_end)` | Run simulation until time |
+| `peek()` | View next event without removing |
+| `clear()` | Clear all events |
+
+### TickConfig
+
+| Method | Description |
+|--------|-------------|
+| `TickConfig.deterministic(...)` | Create config with no jitter |
+| `TickConfig.with_jitter(...)` | Create config with jitter |
+| `next_tick_interval()` | Get jittered tick interval |
+| `next_obs_delay()` | Get jittered observation delay |
+| `next_act_delay()` | Get jittered action delay |
+| `next_msg_delay()` | Get jittered message delay |
+
+### Event
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp` | `float` | Event time |
+| `event_type` | `EventType` | Type of event |
+| `agent_id` | `str` | Associated agent |
+| `payload` | `Dict` | Custom event data |
+| `priority` | `int` | Ordering priority (lower = higher) |

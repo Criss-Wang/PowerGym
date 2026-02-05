@@ -15,22 +15,22 @@ In event-driven mode (Option B - Testing), the system agent:
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict as DictType, List, Optional, TYPE_CHECKING
+from typing import Any, Dict as DictType, List, Optional
 
-import gymnasium as gym
 import numpy as np
-from gymnasium.spaces import Box, Dict, Discrete, MultiDiscrete
 
-from heron.agents.base import Agent
+from heron.agents.hierarchical_agent import HierarchicalAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.core.action import Action
-from heron.core.observation import Observation
+from heron.core.observation import (
+    OBS_KEY_COORDINATOR_OBS,
+    OBS_KEY_SYSTEM_STATE,
+)
 from heron.core.state import State, SystemAgentState
 from heron.utils.typing import AgentID
-
-if TYPE_CHECKING:
-    from heron.core.policies import Policy
-    from heron.protocols.base import Protocol
+from heron.core.policies import Policy
+from heron.protocols.base import Protocol
+from heron.scheduling.tick_config import TickConfig
 
 
 SYSTEM_LEVEL = 3  # Level identifier for system-level agents
@@ -43,18 +43,16 @@ class SystemConfig:
     Attributes:
         name: System agent name
         state_config: Configuration for system state features
-        coordinator_build_strategy: How to build coordinators ("config", "manual", "none")
     """
     name: str = "system_agent"
     state_config: DictType[str, Any] = None
-    coordinator_build_strategy: str = "config"
 
     def __post_init__(self):
         if self.state_config is None:
             self.state_config = {}
 
 
-class SystemAgent(Agent):
+class SystemAgent(HierarchicalAgent):
     """System-level agent for top-level coordination and environment interface.
 
     SystemAgent serves as the interface between the environment and the agent
@@ -64,6 +62,18 @@ class SystemAgent(Agent):
     - Communication with coordinators
     - Protocol-based coordination of coordinators
     - Policy-based system-level decision making
+
+    Supports two execution modes:
+
+    **Synchronous Mode (Option A - Training)**:
+        Call observe() to aggregate coordinator observations, then act() to
+        distribute actions. Suitable for centralized RL training where all
+        agents step synchronously.
+
+    **Event-Driven Mode (Option B - Testing)**:
+        Call tick() with an EventScheduler. Schedules MESSAGE_DELIVERY events
+        to coordinators with configurable msg_delay. Operates on the slowest
+        tick schedule in the hierarchy.
 
     Attributes:
         coordinators: Dictionary mapping coordinator IDs to CoordinatorAgent instances
@@ -84,7 +94,7 @@ class SystemAgent(Agent):
                     from powergrid.core.features.system import SystemFrequency
                     self.state.features.append(SystemFrequency())
 
-                def _build_coordinators(self, configs, env_id, upstream_id):
+                def _build_subordinates(self, configs, env_id, upstream_id):
                     return {c["id"]: CoordinatorAgent(c["id"]) for c in configs}
 
             # Create system with coordinators
@@ -100,8 +110,8 @@ class SystemAgent(Agent):
         agent_id: Optional[AgentID] = None,
 
         # coordination params
-        protocol: Optional["Protocol"] = None,
-        policy: Optional["Policy"] = None,
+        protocol: Optional[Protocol] = None,
+        policy: Optional[Policy] = None,
 
         # hierarchy params
         env_id: Optional[str] = None,
@@ -109,11 +119,8 @@ class SystemAgent(Agent):
         # SystemAgent specific params
         config: Optional[DictType[str, Any]] = None,
 
-        # timing params (for event-driven scheduling)
-        tick_interval: float = 300.0,  # System agents tick least frequently
-        obs_delay: float = 0.0,
-        act_delay: float = 0.0,
-        msg_delay: float = 0.0,
+        # timing config (for event-driven scheduling)
+        tick_config: Optional[TickConfig] = None,
     ):
         """Initialize system agent.
 
@@ -123,10 +130,9 @@ class SystemAgent(Agent):
             policy: Optional policy for system-level decision making
             env_id: Optional environment ID for multi-environment isolation
             config: System agent configuration dictionary
-            tick_interval: Time between agent ticks (default 300s for system level)
-            obs_delay: Observation delay
-            act_delay: Action delay
-            msg_delay: Message delay
+            tick_config: Timing configuration. Defaults to TickConfig with
+                tick_interval=300.0 (system agents tick least frequently).
+                Use TickConfig.deterministic() or TickConfig.with_jitter().
         """
         config = config or {}
 
@@ -134,29 +140,9 @@ class SystemAgent(Agent):
         self.protocol = protocol
         self.policy = policy
 
-        # Build coordinator agents
-        coordinator_configs = config.get('coordinators', [])
-        self.coordinators = self._build_coordinators(
-            coordinator_configs,
-            env_id=env_id,
-            upstream_id=agent_id
-        )
-
-        super().__init__(
-            agent_id=agent_id or "system_agent",
-            level=SYSTEM_LEVEL,
-            upstream_id=None,  # System agent has no upstream
-            env_id=env_id,
-            subordinates=self.coordinators,
-            tick_interval=tick_interval,
-            obs_delay=obs_delay,
-            act_delay=act_delay,
-            msg_delay=msg_delay,
-        )
-
-        # Initialize state management
+        # Initialize state management (before super().__init__ for _build_subordinates)
         self.state = SystemAgentState(
-            owner_id=self.agent_id,
+            owner_id=agent_id or "system_agent",
             owner_level=SYSTEM_LEVEL
         )
 
@@ -165,6 +151,23 @@ class SystemAgent(Agent):
 
         # Cache for environment state
         self._cached_env_state: DictType[str, Any] = {}
+
+        # Build coordinator agents
+        coordinator_configs = config.get('coordinators', [])
+        coordinators = self._build_subordinates(
+            coordinator_configs,
+            env_id=env_id,
+            upstream_id=agent_id
+        )
+
+        super().__init__(
+            agent_id=agent_id or "system_agent",
+            level=SYSTEM_LEVEL,
+            subordinates=coordinators,
+            upstream_id=None,  # System agent has no upstream
+            env_id=env_id,
+            tick_config=tick_config or TickConfig.deterministic(tick_interval=300.0),
+        )
 
         # Initialize state and action via hooks (subclasses override these)
         self._init_state()
@@ -183,6 +186,60 @@ class SystemAgent(Agent):
         Calls set_action() hook for subclass customization.
         """
         self.set_action()
+
+    # ============================================
+    # Abstract Method Implementations
+    # ============================================
+
+    def _build_subordinates(
+        self,
+        configs: List[DictType[str, Any]],
+        env_id: Optional[str] = None,
+        upstream_id: Optional[AgentID] = None,
+    ) -> DictType[AgentID, CoordinatorAgent]:
+        """Build coordinator agents from configuration.
+
+        Override this in domain-specific subclasses to create appropriate
+        coordinator types based on configuration.
+
+        Args:
+            configs: List of coordinator configuration dictionaries
+            env_id: Environment ID for multi-environment isolation
+            upstream_id: This agent's ID (coordinators' upstream)
+
+        Returns:
+            Dictionary mapping coordinator IDs to CoordinatorAgent instances
+        """
+        # Default implementation - override in subclasses
+        return {}
+
+    def _get_subordinate_obs_key(self) -> str:
+        """Get the observation key for coordinator observations."""
+        return OBS_KEY_COORDINATOR_OBS
+
+    def _get_state_obs_key(self) -> str:
+        """Get the observation key for system state."""
+        return OBS_KEY_SYSTEM_STATE
+
+    def _get_subordinate_action_dim(self, subordinate: CoordinatorAgent) -> int:
+        """Get the action dimension for a coordinator agent.
+
+        Args:
+            subordinate: CoordinatorAgent instance
+
+        Returns:
+            Total action dimension from the coordinator's joint action space
+        """
+        space = subordinate.get_joint_action_space()
+        return self._get_space_dim(space)
+
+    def _get_env_state_key(self) -> str:
+        """Get the key for system state in env_state dict."""
+        return 'system'
+
+    def _get_env_subordinate_key(self) -> str:
+        """Get the key for coordinator updates in env_state dict."""
+        return 'coordinators'
 
     # ============================================
     # Extension Hooks (Override in subclasses)
@@ -228,28 +285,6 @@ class SystemAgent(Agent):
         """
         pass
 
-    def _build_coordinators(
-        self,
-        coordinator_configs: List[DictType[str, Any]],
-        env_id: Optional[str] = None,
-        upstream_id: Optional[AgentID] = None,
-    ) -> DictType[AgentID, CoordinatorAgent]:
-        """Build coordinator agents from configuration.
-
-        Override this in domain-specific subclasses to create appropriate
-        coordinator types based on configuration.
-
-        Args:
-            coordinator_configs: List of coordinator configuration dictionaries
-            env_id: Environment ID for multi-environment isolation
-            upstream_id: Upstream agent ID (this system agent)
-
-        Returns:
-            Dictionary mapping coordinator IDs to CoordinatorAgent instances
-        """
-        # Default implementation - override in subclasses
-        return {}
-
     # ============================================
     # Core Agent Lifecycle Methods (Both Modes)
     # ============================================
@@ -261,314 +296,16 @@ class SystemAgent(Agent):
             seed: Random seed
             **kwargs: Additional reset parameters
         """
-        super().reset(seed=seed)
-
-        # Reset state
-        if hasattr(self, 'state') and self.state is not None:
-            self.state.reset()
-
-        # Reset policy if present
-        if self.policy is not None and hasattr(self.policy, 'reset'):
-            self.policy.reset()
+        super().reset(seed=seed, **kwargs)
 
         # Clear cached environment state
         self._cached_env_state = {}
-
-        # Reset coordinators
-        for _, coordinator in self.coordinators.items():
-            coordinator.reset(seed=seed, **kwargs)
 
         # Call subclass reset hook
         self.reset_system(**kwargs)
 
     # ============================================
-    # Synchronous Execution (Option A - Training)
-    # ============================================
-
-    def observe(self, global_state: Optional[DictType[str, Any]] = None, *args, **kwargs) -> Observation:
-        """Collect observations from coordinators. [Both Modes]
-
-        - Training (Option A): Called by environment
-        - Testing (Option B): Called internally by tick()
-
-        Args:
-            global_state: Environment state
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments
-
-        Returns:
-            Aggregated observation from all coordinators
-        """
-        # Collect coordinator observations
-        coordinator_obs = {}
-        for coord_id, coordinator in self.coordinators.items():
-            coordinator_obs[coord_id] = coordinator.observe(global_state)
-
-        # Build local observation using hook (subclasses can customize)
-        local_observation = self._build_system_observation(
-            coordinator_obs, *args, **kwargs
-        )
-
-        return Observation(
-            timestamp=self._timestep,
-            local=local_observation,
-            global_info=global_state or {},
-        )
-
-    def _build_system_observation(
-        self,
-        coordinator_obs: DictType[AgentID, Observation],
-        *args,
-        **kwargs
-    ) -> Any:
-        """Build system-level observation from coordinator observations.
-
-        Override in subclasses for custom aggregation logic.
-
-        Args:
-            coordinator_obs: Dictionary mapping coordinator IDs to their observations
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments
-
-        Returns:
-            Aggregated system observation dictionary
-        """
-        return {
-            "coordinator_obs": coordinator_obs,
-            "system_state": self.state.vector() if hasattr(self, 'state') and self.state else None,
-        }
-
-    def act(self, observation: Observation, upstream_action: Any = None) -> Optional[Any]:
-        """Compute and distribute actions to coordinators. [Training Only - Direct Call]
-
-        Note: In Testing (Option B), tick() handles action distribution via
-        MESSAGE_DELIVERY events instead of calling this method directly.
-
-        Args:
-            observation: Aggregated observation
-            upstream_action: Pre-computed action to distribute (optional)
-
-        Returns:
-            The action that was distributed (for policy training)
-        """
-        # Determine action: from upstream, policy, or None
-        if upstream_action is not None:
-            action = upstream_action
-        elif self.policy is not None:
-            action = self.policy.forward(observation)
-        else:
-            # No action to distribute
-            return None
-
-        # Coordinate subordinates using unified method
-        self.coordinate_coordinators(observation, action)
-
-        return action
-
-    def coordinate_coordinators(
-        self,
-        observation: Observation,
-        action: Any,
-    ) -> None:
-        """Unified coordination method using protocol.
-
-        Args:
-            observation: Current observation
-            action: Computed action from system
-        """
-        coordinator_obs = observation.local.get("coordinator_obs", {})
-
-        # Use protocol if available
-        if self.protocol is not None:
-            self._apply_protocol_coordination(observation, action, coordinator_obs)
-        else:
-            # Simple action distribution
-            self._apply_simple_coordination(action, coordinator_obs)
-
-    def _apply_protocol_coordination(
-        self,
-        observation: Observation,
-        action: Any,
-        coordinator_obs: DictType[AgentID, Observation],
-    ) -> None:
-        """Apply coordination using protocol.
-
-        Args:
-            observation: Current observation
-            action: System action
-            coordinator_obs: Coordinator observations
-        """
-        # Get coordinator states from observations
-        coordinator_states = {
-            coord_id: obs.local for coord_id, obs in coordinator_obs.items()
-        }
-
-        # Build context for protocol
-        context = {
-            "subordinates": self.coordinators,
-            "system_id": self.agent_id,
-            "coordinator_action": action,
-            "timestamp": self._timestep,
-        }
-
-        # Get coordination messages and actions from protocol
-        messages, actions = self.protocol.coordinate(
-            coordinator_state=observation.local,
-            subordinate_states=coordinator_states,
-            coordinator_action=action,
-            context=context
-        )
-
-        # Apply actions to coordinators
-        for coord_id, coord_action in actions.items():
-            if coord_id in self.coordinators and coord_action is not None:
-                obs = coordinator_obs.get(coord_id)
-                if obs:
-                    self.coordinators[coord_id].act(obs, upstream_action=coord_action)
-
-    def _apply_simple_coordination(
-        self,
-        action: Any,
-        coordinator_obs: DictType[AgentID, Observation],
-    ) -> None:
-        """Apply simple action distribution without protocol.
-
-        Args:
-            action: System action
-            coordinator_obs: Coordinator observations
-        """
-        # Distribute actions to coordinators
-        actions = self._distribute_action_to_coordinators(action, coordinator_obs)
-
-        for coord_id, coord_action in actions.items():
-            if coord_id in self.coordinators and coord_action is not None:
-                obs = coordinator_obs.get(coord_id)
-                if obs:
-                    self.coordinators[coord_id].act(obs, upstream_action=coord_action)
-
-    def _distribute_action_to_coordinators(
-        self,
-        action: Any,
-        coordinator_obs: DictType[AgentID, Observation]
-    ) -> DictType[AgentID, Any]:
-        """Distribute system action to coordinators.
-
-        Override for custom distribution strategies.
-
-        Args:
-            action: System-level action
-            coordinator_obs: Coordinator observations
-
-        Returns:
-            Dict mapping coordinator IDs to their actions
-        """
-        if isinstance(action, dict):
-            return action  # Already per-coordinator
-
-        # Simple split by coordinator action dimensions
-        return self._simple_action_distribution(action, coordinator_obs)
-
-    def _simple_action_distribution(
-        self,
-        action: Any,
-        coordinator_obs: DictType[AgentID, Observation]
-    ) -> DictType[AgentID, Any]:
-        """Simple action distribution without protocol.
-
-        Args:
-            action: System action (array or scalar)
-            coordinator_obs: Coordinator observations
-
-        Returns:
-            Dict mapping coordinator IDs to their actions
-        """
-        actions = {}
-
-        if isinstance(action, dict):
-            return action
-
-        action_arr = np.asarray(action)
-        offset = 0
-
-        for coord_id, coordinator in self.coordinators.items():
-            if hasattr(coordinator, 'get_joint_action_space'):
-                space = coordinator.get_joint_action_space()
-                if hasattr(space, 'shape') and space.shape:
-                    dim = space.shape[0]
-                else:
-                    dim = 1
-                if offset + dim <= len(action_arr):
-                    actions[coord_id] = action_arr[offset:offset + dim]
-                else:
-                    actions[coord_id] = action_arr  # Broadcast
-                offset += dim
-            else:
-                actions[coord_id] = action_arr  # Broadcast same action
-
-        return actions
-
-    # ============================================
-    # Event-Driven Execution (Option B - Testing)
-    # ============================================
-
-    def tick(
-        self,
-        scheduler: "EventScheduler",
-        current_time: float,
-        global_state: Optional[DictType[str, Any]] = None,
-        proxy: Optional["Agent"] = None,
-    ) -> None:
-        """Execute one tick in event-driven mode. [Testing Only]
-
-        In Option B, SystemAgent:
-        1. Updates timestep
-        2. Gets observation from coordinators
-        3. Computes system-level action (via policy or external)
-        4. Schedules MESSAGE_DELIVERY events to coordinators with msg_delay
-
-        Args:
-            scheduler: EventScheduler for scheduling future events
-            current_time: Current simulation time
-            global_state: Optional global state for observation
-            proxy: Optional ProxyAgent for delayed observations
-        """
-        self._timestep = current_time
-
-        # Get observation from coordinators
-        observation = self.observe(global_state)
-        self._last_observation = observation
-
-        # Determine action: from message broker or policy
-        upstream_action = None
-        actions = self.receive_action_messages()
-        if actions:
-            upstream_action = actions[-1]  # Use most recent action
-
-        # Use policy if no external action
-        if upstream_action is None and self.policy is not None:
-            upstream_action = self.policy.forward(observation)
-
-        if upstream_action is None:
-            # No action to distribute
-            return
-
-        # Distribute actions to coordinators via MESSAGE_DELIVERY events
-        coordinator_obs = observation.local.get("coordinator_obs", {})
-        actions_to_distribute = self._distribute_action_to_coordinators(
-            upstream_action, coordinator_obs
-        )
-
-        for coord_id, action in actions_to_distribute.items():
-            if coord_id in self.coordinators and action is not None:
-                scheduler.schedule_message_delivery(
-                    sender_id=self.agent_id,
-                    recipient_id=coord_id,
-                    message={"action": action},
-                    delay=self.msg_delay,
-                )
-
-    # ============================================
-    # Environment Interface Methods (Both Modes)
+    # Environment Interface Overrides (Both Modes)
     # ============================================
 
     def update_from_environment(self, env_state: DictType[str, Any]) -> None:
@@ -585,18 +322,8 @@ class SystemAgent(Agent):
         # Cache environment state for subclass access
         self._cached_env_state = env_state or {}
 
-        # Update internal state with environment data
-        if hasattr(self, 'state') and self.state and env_state:
-            # Extract system-level state updates
-            system_updates = env_state.get('system', {})
-            if system_updates:
-                self.state.update(system_updates)
-
-        # Propagate to coordinators if needed
-        for coord_id, coordinator in self.coordinators.items():
-            coord_state = env_state.get('coordinators', {}).get(coord_id, {}) if env_state else {}
-            if hasattr(coordinator, 'update_from_environment'):
-                coordinator.update_from_environment(coord_state)
+        # Call parent implementation
+        super().update_from_environment(env_state)
 
     def get_state_for_environment(self) -> DictType[str, Any]:
         """Get agent actions/state for environment. [Both Modes]
@@ -610,22 +337,12 @@ class SystemAgent(Agent):
             Dict containing agent actions/state updates
         """
         result = {
-            'system_state': self.state.to_dict() if hasattr(self, 'state') and self.state else {},
+            'system_state': self.state.to_dict(),
             'coordinators': {}
         }
 
-        for coord_id, coordinator in self.coordinators.items():
-            if hasattr(coordinator, 'get_state_for_environment'):
-                result['coordinators'][coord_id] = coordinator.get_state_for_environment()
-            else:
-                # Fallback: collect device states
-                coord_result = {}
-                if hasattr(coordinator, 'subordinate_agents'):
-                    coord_result['devices'] = {
-                        dev_id: dev.state.to_dict() if hasattr(dev, 'state') else {}
-                        for dev_id, dev in coordinator.subordinate_agents.items()
-                    }
-                result['coordinators'][coord_id] = coord_result
+        for coord_id, coordinator in self.subordinates.items():
+            result['coordinators'][coord_id] = coordinator.get_state_for_environment()
 
         return result
 
@@ -663,104 +380,49 @@ class SystemAgent(Agent):
             message: Message content to broadcast
         """
         if self._message_broker is not None:
-            for coord_id in self.coordinators:
+            for coord_id in self.subordinates:
                 self.send_message(message, recipient_id=coord_id)
 
     # ============================================
-    # Space Construction Methods (Both Modes)
+    # Backward Compatibility (Alias)
     # ============================================
 
-    def get_joint_action_space(self) -> gym.Space:
-        """Construct combined action space for all coordinators.
+    @property
+    def coordinators(self) -> DictType[AgentID, CoordinatorAgent]:
+        """Alias for subordinates (backward compatibility)."""
+        return self.subordinates
 
-        Returns:
-            Gymnasium space representing joint action space
-        """
-        low_parts, high_parts, discrete_n = [], [], []
+    @coordinators.setter
+    def coordinators(self, value: DictType[AgentID, CoordinatorAgent]) -> None:
+        """Set subordinates (backward compatibility)."""
+        self.subordinates = value
 
-        for sp in self.get_coordinator_action_spaces().values():
-            if isinstance(sp, Box):
-                low_parts.append(sp.low)
-                high_parts.append(sp.high)
-            elif isinstance(sp, Dict):
-                if 'continuous' in sp.spaces or 'c' in sp.spaces:
-                    cont_space = sp.spaces.get('continuous', sp.spaces.get('c'))
-                    low_parts.append(cont_space.low)
-                    high_parts.append(cont_space.high)
-                if 'discrete' in sp.spaces or 'd' in sp.spaces:
-                    disc_space = sp.spaces.get('discrete', sp.spaces.get('d'))
-                    if isinstance(disc_space, Discrete):
-                        discrete_n.append(disc_space.n)
-                    elif isinstance(disc_space, MultiDiscrete):
-                        discrete_n.extend(list(disc_space.nvec))
-            elif isinstance(sp, Discrete):
-                discrete_n.append(sp.n)
-            elif isinstance(sp, MultiDiscrete):
-                discrete_n.extend(list(sp.nvec))
+    def _build_coordinators(
+        self,
+        coordinator_configs: List[DictType[str, Any]],
+        env_id: Optional[str] = None,
+        upstream_id: Optional[AgentID] = None,
+    ) -> DictType[AgentID, CoordinatorAgent]:
+        """Alias for _build_subordinates (backward compatibility)."""
+        return self._build_subordinates(coordinator_configs, env_id, upstream_id)
 
-        low = np.concatenate(low_parts) if low_parts else np.array([])
-        high = np.concatenate(high_parts) if high_parts else np.array([])
+    def coordinate_coordinators(
+        self,
+        observation: Any,
+        action: Any,
+    ) -> None:
+        """Alias for coordinate_subordinates (backward compatibility)."""
+        self.coordinate_subordinates(observation, action)
 
-        if len(low) and len(discrete_n):
-            return Dict({
-                "continuous": Box(low=low, high=high, dtype=np.float32),
-                'discrete': MultiDiscrete(discrete_n)
-            })
-        elif len(low):
-            return Box(low=low, high=high, dtype=np.float32)
-        elif len(discrete_n):
-            return MultiDiscrete(discrete_n)
-        else:
-            return Discrete(1)
-
-    def get_coordinator_action_spaces(self) -> DictType[str, gym.Space]:
-        """Get action spaces for all coordinators.
-
-        Returns:
-            Dictionary mapping coordinator IDs to their action spaces
-        """
-        spaces = {}
-        for coord_id, coord in self.coordinators.items():
-            if hasattr(coord, 'get_joint_action_space'):
-                spaces[coord_id] = coord.get_joint_action_space()
-            elif hasattr(coord, 'action_space'):
-                spaces[coord_id] = coord.action_space
-        return spaces
-
-    def get_joint_observation_space(self) -> gym.Space:
-        """Construct combined observation space for all coordinators.
-
-        Returns:
-            Gymnasium space representing joint observation space
-        """
-        obs_parts = []
-
-        for coord in self.coordinators.values():
-            if hasattr(coord, 'get_joint_observation_space'):
-                space = coord.get_joint_observation_space()
-                if isinstance(space, Box):
-                    obs_parts.append(space.shape[0] if space.shape else 1)
-            elif hasattr(coord, 'observation_space'):
-                space = coord.observation_space
-                if isinstance(space, Box):
-                    obs_parts.append(space.shape[0] if space.shape else 1)
-
-        # Add system state size
-        system_state_size = len(self.state.vector()) if hasattr(self, 'state') and self.state else 0
-        total_size = sum(obs_parts) + system_state_size
-
-        return Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(total_size,) if total_size > 0 else (1,),
-            dtype=np.float32
-        )
+    def get_coordinator_action_spaces(self) -> DictType[str, Any]:
+        """Alias for get_subordinate_action_spaces (backward compatibility)."""
+        return self.get_subordinate_action_spaces()
 
     # ============================================
     # Utility Methods (Both Modes)
     # ============================================
 
     def __repr__(self) -> str:
-        num_coords = len(self.coordinators)
+        num_coords = len(self.subordinates)
         protocol_name = self.protocol.__class__.__name__ if self.protocol else "None"
         return f"SystemAgent(id={self.agent_id}, coordinators={num_coords}, protocol={protocol_name})"

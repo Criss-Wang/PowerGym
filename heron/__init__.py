@@ -40,7 +40,6 @@ from heron.envs.base import HeronEnvCore, BaseEnv, MultiAgentEnv
 from heron.envs.adapters import (
     PettingZooParallelEnv,
     RLlibMultiAgentEnv,
-    get_available_interfaces,
 )
 
 # Protocols
@@ -95,7 +94,6 @@ __all__ = [
     "MultiAgentEnv",
     "PettingZooParallelEnv",
     "RLlibMultiAgentEnv",
-    "get_available_interfaces",
     # Protocols
     "Protocol",
     "NoProtocol",

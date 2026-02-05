@@ -292,11 +292,12 @@ class HeronEnvCore:
 
         # Register all agents with their timing parameters
         for agent_id, agent in self._heron_agents.items():
+            tick_config = getattr(agent, '_tick_config', None)
             scheduler.register_agent(
                 agent_id=agent_id,
-                tick_interval=getattr(agent, 'tick_interval', 1.0),
-                obs_delay=getattr(agent, 'obs_delay', 0.0),
-                act_delay=getattr(agent, 'act_delay', 0.0),
+                tick_interval=tick_config.tick_interval if tick_config else 1.0,
+                obs_delay=tick_config.obs_delay if tick_config else 0.0,
+                act_delay=tick_config.act_delay if tick_config else 0.0,
             )
 
         return scheduler
@@ -783,11 +784,12 @@ class HeronEnvCore:
             self.setup_event_driven()
 
         # Register system agent with scheduler
+        tick_config = getattr(self._system_agent, '_tick_config', None)
         self.scheduler.register_agent(
             agent_id=self._system_agent.agent_id,
-            tick_interval=self._system_agent.tick_interval,
-            obs_delay=self._system_agent.obs_delay,
-            act_delay=self._system_agent.act_delay,
+            tick_interval=tick_config.tick_interval if tick_config else 1.0,
+            obs_delay=tick_config.obs_delay if tick_config else 0.0,
+            act_delay=tick_config.act_delay if tick_config else 0.0,
         )
 
         # Setup default handlers

@@ -30,32 +30,15 @@ Usage:
             self._build_agents()
 """
 
-from abc import abstractmethod
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
+from pettingzoo import ParallelEnv
+from ray.rllib.env.multi_agent_env import MultiAgentEnv
 import gymnasium as gym
-import numpy as np
 
 from heron.envs.base import HeronEnvCore
 from heron.messaging.base import MessageBroker
 from heron.utils.typing import AgentID
-
-# Try to import optional dependencies
-try:
-    from pettingzoo import ParallelEnv
-
-    PETTINGZOO_AVAILABLE = True
-except ImportError:
-    PETTINGZOO_AVAILABLE = False
-    ParallelEnv = object  # Fallback for type hints
-
-try:
-    from ray.rllib.env.multi_agent_env import MultiAgentEnv as RLlibBaseEnv
-
-    RLLIB_AVAILABLE = True
-except ImportError:
-    RLLIB_AVAILABLE = False
-    RLlibBaseEnv = object  # Fallback for type hints
 
 
 class PettingZooParallelEnv(ParallelEnv, HeronEnvCore):
@@ -111,12 +94,6 @@ class PettingZooParallelEnv(ParallelEnv, HeronEnvCore):
             env_id: Environment identifier (auto-generated if not provided)
             message_broker: Optional MessageBroker (defaults to InMemoryBroker)
         """
-        if not PETTINGZOO_AVAILABLE:
-            raise ImportError(
-                "PettingZoo is required for PettingZooParallelEnv. "
-                "Install with: pip install pettingzoo"
-            )
-
         ParallelEnv.__init__(self)
         self._init_heron_core(
             env_id=env_id,
@@ -130,10 +107,6 @@ class PettingZooParallelEnv(ParallelEnv, HeronEnvCore):
         # These will be set after agents are built
         self._possible_agents: List[AgentID] = []
         self._agents: List[AgentID] = []
-
-        # SystemAgent integration (set via set_system_agent)
-        self._system_agent = None
-        self._proxy_agent = None
 
     @property
     def possible_agents(self) -> List[AgentID]:
@@ -199,7 +172,7 @@ class PettingZooParallelEnv(ParallelEnv, HeronEnvCore):
         self.close_heron()
 
 
-class RLlibMultiAgentEnv(RLlibBaseEnv, HeronEnvCore):
+class RLlibMultiAgentEnv(MultiAgentEnv, HeronEnvCore):
     """HERON environment with RLlib MultiAgentEnv interface.
 
     This adapter combines HeronEnvCore functionality with RLlib's
@@ -251,13 +224,7 @@ class RLlibMultiAgentEnv(RLlibBaseEnv, HeronEnvCore):
             env_id: Environment identifier (auto-generated if not provided)
             message_broker: Optional MessageBroker (defaults to InMemoryBroker)
         """
-        if not RLLIB_AVAILABLE:
-            raise ImportError(
-                "Ray RLlib is required for RLlibMultiAgentEnv. "
-                "Install with: pip install 'ray[rllib]'"
-            )
-
-        RLlibBaseEnv.__init__(self)
+        MultiAgentEnv.__init__(self)
         self._init_heron_core(
             env_id=env_id,
             message_broker=message_broker,
@@ -268,11 +235,9 @@ class RLlibMultiAgentEnv(RLlibBaseEnv, HeronEnvCore):
         self._observation_spaces: Dict[AgentID, gym.Space] = {}
         self._agent_ids: List[AgentID] = []
 
-        # SystemAgent integration (set via set_system_agent)
-        self._system_agent = None
-        self._proxy_agent = None
-
-    def observation_space_sample(self, agent_ids: Optional[List[AgentID]] = None) -> Dict[AgentID, Any]:
+    def observation_space_sample(
+        self, agent_ids: Optional[List[AgentID]] = None
+    ) -> Dict[AgentID, Any]:
         """Sample observations for given agents.
 
         Args:
@@ -285,7 +250,9 @@ class RLlibMultiAgentEnv(RLlibBaseEnv, HeronEnvCore):
             agent_ids = self._agent_ids
         return {aid: self._observation_spaces[aid].sample() for aid in agent_ids}
 
-    def action_space_sample(self, agent_ids: Optional[List[AgentID]] = None) -> Dict[AgentID, Any]:
+    def action_space_sample(
+        self, agent_ids: Optional[List[AgentID]] = None
+    ) -> Dict[AgentID, Any]:
         """Sample actions for given agents.
 
         Args:
@@ -353,16 +320,3 @@ class RLlibMultiAgentEnv(RLlibBaseEnv, HeronEnvCore):
     def close(self) -> None:
         """Clean up environment resources."""
         self.close_heron()
-
-
-# Utility function to check available interfaces
-def get_available_interfaces() -> Dict[str, bool]:
-    """Check which environment interfaces are available.
-
-    Returns:
-        Dictionary mapping interface names to availability status
-    """
-    return {
-        "pettingzoo": PETTINGZOO_AVAILABLE,
-        "rllib": RLLIB_AVAILABLE,
-    }

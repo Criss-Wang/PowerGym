@@ -4,7 +4,7 @@ Tests cover:
 1. Proxy agent initialization and setup
 2. Network state reception from environment
 3. State caching and management
-4. State distribution to subordinate agents
+4. State distribution to registered agents
 5. Visibility rule filtering
 6. Multi-environment isolation
 7. Edge cases and error handling
@@ -38,24 +38,24 @@ class TestProxyAgentInitialization:
         assert proxy.level == PROXY_LEVEL
         assert proxy.env_id == "env_0"
         assert proxy.message_broker == broker
-        assert proxy.network_state_cache == {}
-        assert proxy.subordinate_agents == []
+        assert proxy.state_cache == {}
+        assert proxy.registered_agents == []
         assert proxy.visibility_rules == {}
 
-    def test_initialization_with_subordinates(self):
+    def test_initialization_with_agents_list(self):
         """Test initialization with subordinate agents."""
         broker = InMemoryBroker()
-        subordinates = ["agent_1", "agent_2", "agent_3"]
+        agents_list = ["agent_1", "agent_2", "agent_3"]
 
         proxy = ProxyAgent(
             agent_id="proxy",
             message_broker=broker,
             env_id="env_0",
-            subordinate_agents=subordinates
+            registered_agents=agents_list
         )
 
-        assert proxy.subordinate_agents == subordinates
-        assert len(proxy.subordinate_agents) == 3
+        assert proxy.registered_agents == agents_list
+        assert len(proxy.registered_agents) == 3
 
     def test_initialization_with_visibility_rules(self):
         """Test initialization with visibility rules."""
@@ -82,13 +82,13 @@ class TestProxyAgentInitialization:
     def test_channel_setup(self):
         """Test proxy channels are created correctly."""
         broker = InMemoryBroker()
-        subordinates = ["agent_1", "agent_2"]
+        agents_list = ["agent_1", "agent_2"]
 
         proxy = ProxyAgent(
             agent_id="proxy",
             message_broker=broker,
             env_id="env_0",
-            subordinate_agents=subordinates
+            registered_agents=agents_list
         )
 
         # Check env->proxy channel exists
@@ -96,7 +96,7 @@ class TestProxyAgentInitialization:
         assert env_channel in broker.channels
 
         # Check proxy->agent channels exist
-        for agent_id in subordinates:
+        for agent_id in agents_list:
             agent_channel = ChannelManager.info_channel("proxy", agent_id, "env_0")
             assert agent_channel in broker.channels
 
@@ -107,13 +107,13 @@ class TestProxyAgentInitialization:
             agent_id="my_proxy",
             message_broker=broker,
             env_id="env_0",
-            subordinate_agents=["a1", "a2", "a3"]
+            registered_agents=["a1", "a2", "a3"]
         )
 
         repr_str = repr(proxy)
         assert "ProxyAgent" in repr_str
         assert "my_proxy" in repr_str
-        assert "subordinates=3" in repr_str
+        assert "registered_agents=3" in repr_str
 
 
 # =============================================================================
@@ -152,10 +152,10 @@ class TestNetworkStateReception:
         broker.publish(channel, msg)
 
         # Receive state
-        received_state = proxy.receive_network_state_from_environment()
+        received_state = proxy.receive_state_from_environment()
 
         assert received_state == state_payload
-        assert proxy.network_state_cache == state_payload
+        assert proxy.state_cache == state_payload
 
     def test_receive_network_state_multiple_messages_uses_latest(self):
         """Test receiving multiple messages uses the latest one."""
@@ -186,7 +186,7 @@ class TestNetworkStateReception:
             broker.publish(channel, msg)
 
         # Receive state - should get latest
-        received_state = proxy.receive_network_state_from_environment()
+        received_state = proxy.receive_state_from_environment()
 
         assert received_state["timestep"] == 2  # Latest
 
@@ -199,9 +199,9 @@ class TestNetworkStateReception:
             env_id="env_0"
         )
 
-        received_state = proxy.receive_network_state_from_environment()
+        received_state = proxy.receive_state_from_environment()
         assert received_state is None
-        assert proxy.network_state_cache == {}
+        assert proxy.state_cache == {}
 
     def test_receive_network_state_clears_messages(self):
         """Test receiving clears consumed messages."""
@@ -226,10 +226,10 @@ class TestNetworkStateReception:
         broker.publish(channel, msg)
 
         # First receive
-        proxy.receive_network_state_from_environment()
+        proxy.receive_state_from_environment()
 
         # Second receive should return None (messages cleared)
-        received_state = proxy.receive_network_state_from_environment()
+        received_state = proxy.receive_state_from_environment()
         assert received_state is None
 
 
@@ -247,11 +247,11 @@ class TestStateDistribution:
             agent_id="proxy",
             message_broker=broker,
             env_id="env_0",
-            subordinate_agents=["agent_1"]
+            registered_agents=["agent_1"]
         )
 
         # Set cached state
-        proxy.network_state_cache = {
+        proxy.state_cache = {
             "converged": True,
             "agents": {
                 "agent_1": {"voltage": 1.0, "power": 100.0}
@@ -259,7 +259,7 @@ class TestStateDistribution:
         }
 
         # Distribute state
-        proxy.distribute_network_state_to_agents()
+        proxy.distribute_state_to_agents()
 
         # Check message sent
         channel = ChannelManager.info_channel("proxy", "agent_1", "env_0")
@@ -272,17 +272,17 @@ class TestStateDistribution:
     def test_distribute_state_to_multiple_agents(self):
         """Test distributing state to multiple agents."""
         broker = InMemoryBroker()
-        subordinates = ["agent_1", "agent_2", "agent_3"]
+        agents_list = ["agent_1", "agent_2", "agent_3"]
 
         proxy = ProxyAgent(
             agent_id="proxy",
             message_broker=broker,
             env_id="env_0",
-            subordinate_agents=subordinates
+            registered_agents=agents_list
         )
 
         # Set cached state with different values for each agent
-        proxy.network_state_cache = {
+        proxy.state_cache = {
             "converged": True,
             "agents": {
                 "agent_1": {"voltage": 1.0},
@@ -292,10 +292,10 @@ class TestStateDistribution:
         }
 
         # Distribute state
-        proxy.distribute_network_state_to_agents()
+        proxy.distribute_state_to_agents()
 
         # Verify each agent received their specific state
-        for i, agent_id in enumerate(subordinates, 1):
+        for i, agent_id in enumerate(agents_list, 1):
             channel = ChannelManager.info_channel("proxy", agent_id, "env_0")
             messages = broker.consume(channel, agent_id, "env_0")
 
@@ -309,14 +309,14 @@ class TestStateDistribution:
             agent_id="proxy",
             message_broker=broker,
             env_id="env_0",
-            subordinate_agents=["agent_1"]
+            registered_agents=["agent_1"]
         )
 
         # Cache is empty
-        proxy.network_state_cache = {}
+        proxy.state_cache = {}
 
         # Distribute state - should do nothing
-        proxy.distribute_network_state_to_agents()
+        proxy.distribute_state_to_agents()
 
         # No messages should be sent
         channel = ChannelManager.info_channel("proxy", "agent_1", "env_0")
@@ -330,11 +330,11 @@ class TestStateDistribution:
             agent_id="proxy",
             message_broker=broker,
             env_id="env_0",
-            subordinate_agents=["agent_1", "agent_2"]
+            registered_agents=["agent_1", "agent_2"]
         )
 
         # Only agent_1 in state
-        proxy.network_state_cache = {
+        proxy.state_cache = {
             "converged": True,
             "agents": {
                 "agent_1": {"voltage": 1.0}
@@ -342,7 +342,7 @@ class TestStateDistribution:
         }
 
         # Distribute state
-        proxy.distribute_network_state_to_agents()
+        proxy.distribute_state_to_agents()
 
         # agent_1 should get state
         channel1 = ChannelManager.info_channel("proxy", "agent_1", "env_0")
@@ -373,7 +373,7 @@ class TestVisibilityFiltering:
         )
 
         agent_state = {"voltage": 1.0, "power": 100.0, "cost": 50.0}
-        filtered = proxy._filter_state_for_agent("agent_1", agent_state)
+        filtered = proxy._filter_state_by_keys("agent_1", agent_state)
 
         assert filtered == agent_state
 
@@ -395,12 +395,12 @@ class TestVisibilityFiltering:
         agent_state = {"voltage": 1.0, "power": 100.0, "cost": 50.0}
 
         # agent_1 should see voltage and power
-        filtered1 = proxy._filter_state_for_agent("agent_1", agent_state)
+        filtered1 = proxy._filter_state_by_keys("agent_1", agent_state)
         assert filtered1 == {"voltage": 1.0, "power": 100.0}
         assert "cost" not in filtered1
 
         # agent_2 should see only voltage
-        filtered2 = proxy._filter_state_for_agent("agent_2", agent_state)
+        filtered2 = proxy._filter_state_by_keys("agent_2", agent_state)
         assert filtered2 == {"voltage": 1.0}
         assert "power" not in filtered2
         assert "cost" not in filtered2
@@ -421,7 +421,7 @@ class TestVisibilityFiltering:
 
         agent_state = {"voltage": 1.0}  # power and nonexistent missing
 
-        filtered = proxy._filter_state_for_agent("agent_1", agent_state)
+        filtered = proxy._filter_state_by_keys("agent_1", agent_state)
 
         # Should only include keys that exist
         assert filtered == {"voltage": 1.0}
@@ -438,11 +438,11 @@ class TestVisibilityFiltering:
             agent_id="proxy",
             message_broker=broker,
             env_id="env_0",
-            subordinate_agents=["agent_1", "agent_2"],
+            registered_agents=["agent_1", "agent_2"],
             visibility_rules=visibility_rules
         )
 
-        proxy.network_state_cache = {
+        proxy.state_cache = {
             "converged": True,
             "agents": {
                 "agent_1": {"voltage": 1.0, "power": 100.0, "cost": 50.0},
@@ -450,7 +450,7 @@ class TestVisibilityFiltering:
             }
         }
 
-        proxy.distribute_network_state_to_agents()
+        proxy.distribute_state_to_agents()
 
         # Check agent_1 only sees voltage
         channel1 = ChannelManager.info_channel("proxy", "agent_1", "env_0")
@@ -479,7 +479,7 @@ class TestOnDemandStateRetrieval:
             env_id="env_0"
         )
 
-        proxy.network_state_cache = {
+        proxy.state_cache = {
             "converged": True,
             "agents": {
                 "agent_1": {"voltage": 1.0, "power": 100.0},
@@ -487,10 +487,10 @@ class TestOnDemandStateRetrieval:
             }
         }
 
-        state1 = proxy.get_latest_network_state_for_agent("agent_1")
+        state1 = proxy.get_latest_state_for_agent("agent_1")
         assert state1 == {"voltage": 1.0, "power": 100.0}
 
-        state2 = proxy.get_latest_network_state_for_agent("agent_2")
+        state2 = proxy.get_latest_state_for_agent("agent_2")
         assert state2 == {"voltage": 0.98, "power": 110.0}
 
     def test_get_latest_state_with_visibility_rules(self):
@@ -505,14 +505,14 @@ class TestOnDemandStateRetrieval:
             visibility_rules=visibility_rules
         )
 
-        proxy.network_state_cache = {
+        proxy.state_cache = {
             "converged": True,
             "agents": {
                 "agent_1": {"voltage": 1.0, "power": 100.0, "cost": 50.0}
             }
         }
 
-        state = proxy.get_latest_network_state_for_agent("agent_1")
+        state = proxy.get_latest_state_for_agent("agent_1")
         assert state == {"voltage": 1.0}
 
     def test_get_latest_state_agent_not_in_cache(self):
@@ -524,12 +524,12 @@ class TestOnDemandStateRetrieval:
             env_id="env_0"
         )
 
-        proxy.network_state_cache = {
+        proxy.state_cache = {
             "converged": True,
             "agents": {}
         }
 
-        state = proxy.get_latest_network_state_for_agent("nonexistent_agent")
+        state = proxy.get_latest_state_for_agent("nonexistent_agent")
         assert state == {}
 
 
@@ -548,14 +548,14 @@ class TestMultiEnvironmentIsolation:
             agent_id="proxy",
             message_broker=broker,
             env_id="env_0",
-            subordinate_agents=["agent_1"]
+            registered_agents=["agent_1"]
         )
 
         proxy2 = ProxyAgent(
             agent_id="proxy",
             message_broker=broker,
             env_id="env_1",
-            subordinate_agents=["agent_1"]
+            registered_agents=["agent_1"]
         )
 
         # Send state to both proxies
@@ -582,8 +582,8 @@ class TestMultiEnvironmentIsolation:
         broker.publish(channel2, msg2)
 
         # Each proxy should receive only its environment's state
-        state1 = proxy1.receive_network_state_from_environment()
-        state2 = proxy2.receive_network_state_from_environment()
+        state1 = proxy1.receive_state_from_environment()
+        state2 = proxy2.receive_state_from_environment()
 
         assert state1["env"] == 0
         assert state2["env"] == 1
@@ -596,30 +596,30 @@ class TestMultiEnvironmentIsolation:
             agent_id="proxy",
             message_broker=broker,
             env_id="env_0",
-            subordinate_agents=["agent_1"]
+            registered_agents=["agent_1"]
         )
 
         proxy2 = ProxyAgent(
             agent_id="proxy",
             message_broker=broker,
             env_id="env_1",
-            subordinate_agents=["agent_1"]
+            registered_agents=["agent_1"]
         )
 
         # Set different states
-        proxy1.network_state_cache = {
+        proxy1.state_cache = {
             "converged": True,
             "agents": {"agent_1": {"voltage": 1.0}}
         }
 
-        proxy2.network_state_cache = {
+        proxy2.state_cache = {
             "converged": True,
             "agents": {"agent_1": {"voltage": 0.95}}
         }
 
         # Distribute from both proxies
-        proxy1.distribute_network_state_to_agents()
-        proxy2.distribute_network_state_to_agents()
+        proxy1.distribute_state_to_agents()
+        proxy2.distribute_state_to_agents()
 
         # Verify isolation
         channel1 = ChannelManager.info_channel("proxy", "agent_1", "env_0")
@@ -648,7 +648,7 @@ class TestProxyAgentLifecycle:
         )
 
         # Set some cached state
-        proxy.network_state_cache = {
+        proxy.state_cache = {
             "converged": True,
             "agents": {"agent_1": {"voltage": 1.0}}
         }
@@ -657,7 +657,7 @@ class TestProxyAgentLifecycle:
         proxy.reset()
 
         # Cache should be cleared
-        assert proxy.network_state_cache == {}
+        assert proxy.state_cache == {}
 
     def test_observe_returns_empty(self):
         """Test observe returns empty observation."""
@@ -696,26 +696,26 @@ class TestProxyAgentLifecycle:
 class TestEdgeCases:
     """Test edge cases and error conditions."""
 
-    def test_empty_subordinates_list(self):
+    def test_empty_agents_list_list(self):
         """Test proxy with no subordinate agents."""
         broker = InMemoryBroker()
         proxy = ProxyAgent(
             agent_id="proxy",
             message_broker=broker,
             env_id="env_0",
-            subordinate_agents=[]
+            registered_agents=[]
         )
 
-        proxy.network_state_cache = {
+        proxy.state_cache = {
             "converged": True,
             "agents": {}
         }
 
         # Should not raise error
-        proxy.distribute_network_state_to_agents()
+        proxy.distribute_state_to_agents()
 
     def test_visibility_rules_for_nonexistent_agent(self):
-        """Test visibility rules for agent not in subordinates."""
+        """Test visibility rules for agent not in agents_list."""
         broker = InMemoryBroker()
         visibility_rules = {
             "nonexistent_agent": ["voltage"]
@@ -725,16 +725,16 @@ class TestEdgeCases:
             agent_id="proxy",
             message_broker=broker,
             env_id="env_0",
-            subordinate_agents=["agent_1"],
+            registered_agents=["agent_1"],
             visibility_rules=visibility_rules
         )
 
         # Should not raise error
-        proxy.network_state_cache = {
+        proxy.state_cache = {
             "converged": True,
             "agents": {"agent_1": {"voltage": 1.0}}
         }
-        proxy.distribute_network_state_to_agents()
+        proxy.distribute_state_to_agents()
 
     def test_complex_nested_state(self):
         """Test handling complex nested state structures."""
@@ -743,7 +743,7 @@ class TestEdgeCases:
             agent_id="proxy",
             message_broker=broker,
             env_id="env_0",
-            subordinate_agents=["agent_1"]
+            registered_agents=["agent_1"]
         )
 
         complex_state = {
@@ -760,8 +760,8 @@ class TestEdgeCases:
             }
         }
 
-        proxy.network_state_cache = complex_state
-        proxy.distribute_network_state_to_agents()
+        proxy.state_cache = complex_state
+        proxy.distribute_state_to_agents()
 
         # Should handle nested structures
         channel = ChannelManager.info_channel("proxy", "agent_1", "env_0")
@@ -786,7 +786,7 @@ class TestEdgeCases:
         )
 
         original_state = {"voltage": 1.0, "power": 100.0, "cost": 50.0}
-        filtered_state = proxy._filter_state_for_agent("agent_1", original_state)
+        filtered_state = proxy._filter_state_by_keys("agent_1", original_state)
 
         # Original should be unchanged
         assert "power" in original_state

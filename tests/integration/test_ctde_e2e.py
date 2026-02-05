@@ -34,6 +34,7 @@ from heron.core.state import FieldAgentState
 from heron.core.policies import Policy, RandomPolicy
 from heron.scheduling.scheduler import EventScheduler
 from heron.scheduling.event import EventType
+from heron.scheduling.tick_config import TickConfig
 from heron.messaging.in_memory_broker import InMemoryBroker
 
 
@@ -221,6 +222,7 @@ class BatteryAgent(FieldAgent):
         capacity: float = 100.0,
         max_power: float = 20.0,
         efficiency: float = 0.95,
+        tick_config: Optional[TickConfig] = None,
         **kwargs
     ):
         self.capacity = capacity
@@ -228,13 +230,16 @@ class BatteryAgent(FieldAgent):
         self.efficiency = efficiency
         self.charge_level = capacity * 0.5  # Start at 50%
 
-        # Set timing parameters with defaults appropriate for field level
-        kwargs.setdefault("tick_interval", 1.0)  # Fast: 1 second
-        kwargs.setdefault("obs_delay", 0.1)  # Small observation delay
-        kwargs.setdefault("act_delay", 0.2)  # Small action delay
-        kwargs.setdefault("msg_delay", 0.05)  # Fast message delivery
+        # Set timing config with defaults appropriate for field level
+        if tick_config is None:
+            tick_config = TickConfig.deterministic(
+                tick_interval=1.0,  # Fast: 1 second
+                obs_delay=0.1,  # Small observation delay
+                act_delay=0.2,  # Small action delay
+                msg_delay=0.05,  # Fast message delivery
+            )
 
-        super().__init__(agent_id=agent_id, **kwargs)
+        super().__init__(agent_id=agent_id, tick_config=tick_config, **kwargs)
 
     def set_action(self):
         """Mixed continuous (power) + discrete (mode) action."""
@@ -252,7 +257,7 @@ class BatteryAgent(FieldAgent):
             BatteryInternalFeature(temperature=25.0, cycles=0),
         ]
 
-    def _get_obs(self) -> np.ndarray:
+    def _get_obs(self, proxy=None) -> np.ndarray:
         """Build observation vector."""
         state_vec = self.state.vector()
         # Add normalized charge level
@@ -309,19 +314,22 @@ class BatteryAgent(FieldAgent):
 class ZoneCoordinator(CoordinatorAgent):
     """Zone coordinator managing multiple batteries."""
 
-    def __init__(self, agent_id: str, **kwargs):
-        # Set timing parameters appropriate for coordinator level
-        kwargs.setdefault("tick_interval", 5.0)  # Medium: 5 seconds
-        kwargs.setdefault("obs_delay", 0.5)  # Moderate delay
-        kwargs.setdefault("act_delay", 1.0)  # Action takes longer
-        kwargs.setdefault("msg_delay", 0.2)  # Moderate message delay
+    def __init__(self, agent_id: str, tick_config: Optional[TickConfig] = None, **kwargs):
+        # Set timing config appropriate for coordinator level
+        if tick_config is None:
+            tick_config = TickConfig.deterministic(
+                tick_interval=5.0,  # Medium: 5 seconds
+                obs_delay=0.5,  # Moderate delay
+                act_delay=1.0,  # Action takes longer
+                msg_delay=0.2,  # Moderate message delay
+            )
 
-        super().__init__(agent_id=agent_id, **kwargs)
+        super().__init__(agent_id=agent_id, tick_config=tick_config, **kwargs)
 
         # Add grid signal feature to coordinator state
         self.state.features = [GridSignalFeature(price=0.1, frequency=60.0)]
 
-    def _build_subordinate_agents(
+    def _build_subordinates(
         self,
         agent_configs: List[Dict[str, Any]],
         env_id: Optional[str] = None,
@@ -344,15 +352,15 @@ class ZoneCoordinator(CoordinatorAgent):
 
     def get_zone_metrics(self) -> Dict[str, float]:
         """Get aggregated zone metrics."""
-        total_capacity = sum(a.capacity for a in self.subordinate_agents.values())
-        total_charge = sum(a.charge_level for a in self.subordinate_agents.values())
+        total_capacity = sum(a.capacity for a in self.subordinates.values())
+        total_charge = sum(a.charge_level for a in self.subordinates.values())
         avg_soc = total_charge / total_capacity if total_capacity > 0 else 0
 
         return {
             "total_capacity": total_capacity,
             "total_charge": total_charge,
             "avg_soc": avg_soc,
-            "num_batteries": len(self.subordinate_agents),
+            "num_batteries": len(self.subordinates),
         }
 
 
@@ -363,21 +371,24 @@ class ZoneCoordinator(CoordinatorAgent):
 class GridSystemAgent(SystemAgent):
     """Grid system agent managing multiple zones."""
 
-    def __init__(self, agent_id: str, **kwargs):
-        # Set timing parameters appropriate for system level
-        kwargs.setdefault("tick_interval", 15.0)  # Slow: 15 seconds
-        kwargs.setdefault("obs_delay", 1.0)  # Higher delay
-        kwargs.setdefault("act_delay", 2.0)  # Actions take effect slowly
-        kwargs.setdefault("msg_delay", 0.5)  # Slower communication
+    def __init__(self, agent_id: str, tick_config: Optional[TickConfig] = None, **kwargs):
+        # Set timing config appropriate for system level
+        if tick_config is None:
+            tick_config = TickConfig.deterministic(
+                tick_interval=15.0,  # Slow: 15 seconds
+                obs_delay=1.0,  # Higher delay
+                act_delay=2.0,  # Actions take effect slowly
+                msg_delay=0.5,  # Slower communication
+            )
 
-        super().__init__(agent_id=agent_id, **kwargs)
+        super().__init__(agent_id=agent_id, tick_config=tick_config, **kwargs)
 
         # System-level state tracking
         self._env_state = {}
         self._grid_load = 0.0
         self._grid_price = 0.1
 
-    def _build_coordinators(
+    def _build_subordinates(
         self,
         coordinator_configs: List[Dict[str, Any]],
         env_id: Optional[str] = None,
@@ -414,7 +425,7 @@ class GridSystemAgent(SystemAgent):
 
         for coord_id, coord in self.coordinators.items():
             zone_metrics[coord_id] = coord.get_zone_metrics()
-            for agent_id, agent in coord.subordinate_agents.items():
+            for agent_id, agent in coord.subordinates.items():
                 all_battery_states[agent_id] = {
                     "charge": agent.charge_level,
                     "soc": agent.charge_level / agent.capacity,
@@ -500,7 +511,7 @@ class GridMicrogridEnv(MultiAgentEnv):
         self.register_agent(self._grid_system)
         for coord_id, coord in self._grid_system.coordinators.items():
             self.register_agent(coord)
-            for agent_id, agent in coord.subordinate_agents.items():
+            for agent_id, agent in coord.subordinates.items():
                 self.register_agent(agent)
 
     def _setup_proxy_agent(self):
@@ -509,7 +520,7 @@ class GridMicrogridEnv(MultiAgentEnv):
         self._proxy_agent = ProxyAgent(
             agent_id="proxy",
             env_id=self.env_id,
-            subordinate_agents=all_agent_ids,
+            registered_agents=all_agent_ids,
             history_length=50,
         )
         self.register_agent(self._proxy_agent)
@@ -518,7 +529,7 @@ class GridMicrogridEnv(MultiAgentEnv):
         """Get list of controllable agent IDs (field level only)."""
         agents = []
         for coord in self._grid_system.coordinators.values():
-            agents.extend(coord.subordinate_agents.keys())
+            agents.extend(coord.subordinates.keys())
         return agents
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[Dict] = None) -> Tuple[Dict, Dict]:
@@ -575,7 +586,7 @@ class GridMicrogridEnv(MultiAgentEnv):
                 "agents": {
                     agent_id: {"charge": agent.charge_level, "soc": agent.charge_level / agent.capacity}
                     for coord in self._grid_system.coordinators.values()
-                    for agent_id, agent in coord.subordinate_agents.items()
+                    for agent_id, agent in coord.subordinates.items()
                 },
                 "grid": {"load": self._grid_load, "price": self._price},
             })
@@ -620,7 +631,7 @@ class GridMicrogridEnv(MultiAgentEnv):
         action_dict = {}
         for coord_id, coord in self._grid_system.coordinators.items():
             coord_actions = {}
-            for agent_id in coord.subordinate_agents:
+            for agent_id in coord.subordinates:
                 if agent_id in actions:
                     coord_actions[agent_id] = actions[agent_id]
             action_dict[coord_id] = coord_actions
@@ -631,7 +642,7 @@ class GridMicrogridEnv(MultiAgentEnv):
         """Step physics for all batteries."""
         results = {}
         for coord in self._grid_system.coordinators.values():
-            for agent_id, agent in coord.subordinate_agents.items():
+            for agent_id, agent in coord.subordinates.items():
                 results[agent_id] = agent.step_physics()
         return results
 
@@ -661,7 +672,7 @@ class GridMicrogridEnv(MultiAgentEnv):
         global_state = {"grid_load": self._grid_load, "price": self._price}
 
         for coord in self._grid_system.coordinators.values():
-            for agent_id, agent in coord.subordinate_agents.items():
+            for agent_id, agent in coord.subordinates.items():
                 agent_obs = agent.observe(global_state)
                 obs[agent_id] = agent_obs.vector()
 
@@ -680,7 +691,7 @@ class GridMicrogridEnv(MultiAgentEnv):
         """Get joint observation space."""
         spaces = {}
         for coord in self._grid_system.coordinators.values():
-            for agent_id, agent in coord.subordinate_agents.items():
+            for agent_id, agent in coord.subordinates.items():
                 obs_dim = agent.observe().vector().shape[0]
                 spaces[agent_id] = Box(low=-np.inf, high=np.inf, shape=(obs_dim,))
         return DictSpace(spaces)
@@ -689,7 +700,7 @@ class GridMicrogridEnv(MultiAgentEnv):
         """Get joint action space."""
         spaces = {}
         for coord in self._grid_system.coordinators.values():
-            for agent_id, agent in coord.subordinate_agents.items():
+            for agent_id, agent in coord.subordinates.items():
                 spaces[agent_id] = agent.action_space
         return DictSpace(spaces)
 
@@ -714,10 +725,10 @@ class TestCTDETrainingMode:
         zone_north = env.grid_system.coordinators.get("zone_north")
         assert zone_north is not None
         assert zone_north.level == COORDINATOR_LEVEL
-        assert len(zone_north.subordinate_agents) == 2
+        assert len(zone_north.subordinates) == 2
 
         # Verify field agents
-        battery_n1 = zone_north.subordinate_agents.get("battery_n1")
+        battery_n1 = zone_north.subordinates.get("battery_n1")
         assert battery_n1 is not None
         assert battery_n1.level == FIELD_LEVEL
 
@@ -726,22 +737,22 @@ class TestCTDETrainingMode:
         env = GridMicrogridEnv()
 
         # System agent - slowest
-        assert env.grid_system.tick_interval == 15.0
-        assert env.grid_system.obs_delay == 1.0
-        assert env.grid_system.act_delay == 2.0
+        assert env.grid_system._tick_config.tick_interval == 15.0
+        assert env.grid_system._tick_config.obs_delay == 1.0
+        assert env.grid_system._tick_config.act_delay == 2.0
 
         # Coordinator - medium
         for coord in env.grid_system.coordinators.values():
-            assert coord.tick_interval == 5.0
-            assert coord.obs_delay == 0.5
-            assert coord.act_delay == 1.0
+            assert coord._tick_config.tick_interval == 5.0
+            assert coord._tick_config.obs_delay == 0.5
+            assert coord._tick_config.act_delay == 1.0
 
         # Field agents - fastest
         for coord in env.grid_system.coordinators.values():
-            for agent in coord.subordinate_agents.values():
-                assert agent.tick_interval == 1.0
-                assert agent.obs_delay == 0.1
-                assert agent.act_delay == 0.2
+            for agent in coord.subordinates.values():
+                assert agent._tick_config.tick_interval == 1.0
+                assert agent._tick_config.obs_delay == 0.1
+                assert agent._tick_config.act_delay == 0.2
 
     def test_mixed_action_space(self):
         """Test mixed continuous/discrete action handling."""
@@ -750,7 +761,7 @@ class TestCTDETrainingMode:
 
         # Get a battery agent
         coord = list(env.grid_system.coordinators.values())[0]
-        battery = list(coord.subordinate_agents.values())[0]
+        battery = list(coord.subordinates.values())[0]
 
         # Verify mixed action space
         assert battery.action.dim_c == 1  # Continuous power
@@ -769,7 +780,7 @@ class TestCTDETrainingMode:
 
         # Get a battery
         coord = env.grid_system.coordinators["zone_north"]
-        battery = coord.subordinate_agents["battery_n1"]
+        battery = coord.subordinates["battery_n1"]
 
         # Battery should see its own internal state (owner visibility)
         own_state = battery.state.observed_by(battery.agent_id, battery.level)
@@ -777,7 +788,7 @@ class TestCTDETrainingMode:
         assert len(own_state) > 0
 
         # Other battery should only see public state
-        other_battery = coord.subordinate_agents["battery_n2"]
+        other_battery = coord.subordinates["battery_n2"]
         visible_state = battery.state.observed_by(other_battery.agent_id, other_battery.level)
         # Should only include public features
         feature_names = list(visible_state.keys())
@@ -822,7 +833,7 @@ class TestCTDETrainingMode:
         # Create policies for each agent
         policies = {}
         for coord in env.grid_system.coordinators.values():
-            for agent_id, agent in coord.subordinate_agents.items():
+            for agent_id, agent in coord.subordinates.items():
                 obs_dim = agent.observe().vector().shape[0]
                 action_dim = agent.action.dim_c
                 policies[agent_id] = CTDEPolicy(obs_dim, action_dim, hidden_dim=16)
@@ -893,9 +904,9 @@ class TestEventDrivenTestingMode:
             if agent_id != "proxy":  # Skip proxy
                 scheduler.register_agent(
                     agent_id=agent_id,
-                    tick_interval=agent.tick_interval,
-                    obs_delay=agent.obs_delay,
-                    act_delay=agent.act_delay,
+                    tick_interval=agent._tick_config.tick_interval,
+                    obs_delay=agent._tick_config.obs_delay,
+                    act_delay=agent._tick_config.act_delay,
                 )
 
         # Track ticks per agent
@@ -982,7 +993,7 @@ class TestEventDrivenTestingMode:
         # Register coordinator and subordinates
         coord = env.grid_system.coordinators["zone_north"]
         scheduler.register_agent("zone_north", tick_interval=5.0)
-        for aid in coord.subordinate_agents:
+        for aid in coord.subordinates:
             scheduler.register_agent(aid, tick_interval=1.0)
 
         messages_sent = []
@@ -991,13 +1002,13 @@ class TestEventDrivenTestingMode:
         def coord_tick_handler(event, sched):
             if event.agent_id == "zone_north":
                 # Coordinator sends action to subordinates
-                for sub_id in coord.subordinate_agents:
+                for sub_id in coord.subordinates:
                     coord.send_action_to_subordinate(sub_id, {"power": 5.0})
                     messages_sent.append((event.timestamp, sub_id))
 
         def agent_tick_handler(event, sched):
-            if event.agent_id in coord.subordinate_agents:
-                agent = coord.subordinate_agents[event.agent_id]
+            if event.agent_id in coord.subordinates:
+                agent = coord.subordinates[event.agent_id]
                 msgs = agent.receive_action_messages()
                 if msgs:
                     messages_received.append((event.timestamp, event.agent_id, msgs[-1]))
@@ -1055,7 +1066,7 @@ class TestDualModeCompatibility:
 
         # Get a battery agent
         coord = env.grid_system.coordinators["zone_north"]
-        battery = coord.subordinate_agents["battery_n1"]
+        battery = coord.subordinates["battery_n1"]
 
         # === Mode A: Synchronous ===
         # Directly call observe/act
@@ -1076,9 +1087,9 @@ class TestDualModeCompatibility:
         scheduler = EventScheduler(start_time=0.0)
         scheduler.register_agent(
             battery.agent_id,
-            tick_interval=battery.tick_interval,
-            obs_delay=battery.obs_delay,
-            act_delay=battery.act_delay,
+            tick_interval=battery._tick_config.tick_interval,
+            obs_delay=battery._tick_config.obs_delay,
+            act_delay=battery._tick_config.act_delay,
         )
 
         tick_results = []
@@ -1105,7 +1116,7 @@ class TestDualModeCompatibility:
 
         # Create a simple policy
         coord = env.grid_system.coordinators["zone_north"]
-        battery = coord.subordinate_agents["battery_n1"]
+        battery = coord.subordinates["battery_n1"]
         obs_dim = battery.observe().vector().shape[0]
         policy = CTDEPolicy(obs_dim, 1, hidden_dim=16)
 
@@ -1155,7 +1166,7 @@ class TestEndToEndFlow:
         # Create policies
         policies = {}
         for coord in env.grid_system.coordinators.values():
-            for agent_id, agent in coord.subordinate_agents.items():
+            for agent_id, agent in coord.subordinates.items():
                 obs_dim = agent.observe().vector().shape[0]
                 policies[agent_id] = CTDEPolicy(obs_dim, 1, hidden_dim=16, seed=42)
 
@@ -1197,12 +1208,12 @@ class TestEndToEndFlow:
 
         # Register all field agents
         for coord in env.grid_system.coordinators.values():
-            for agent_id, agent in coord.subordinate_agents.items():
+            for agent_id, agent in coord.subordinates.items():
                 scheduler.register_agent(
                     agent_id,
-                    tick_interval=agent.tick_interval,
-                    obs_delay=agent.obs_delay,
-                    act_delay=agent.act_delay,
+                    tick_interval=agent._tick_config.tick_interval,
+                    obs_delay=agent._tick_config.obs_delay,
+                    act_delay=agent._tick_config.act_delay,
                 )
 
         test_actions = []
@@ -1211,8 +1222,8 @@ class TestEndToEndFlow:
         def tick_handler(event, sched):
             agent_id = event.agent_id
             for coord in env.grid_system.coordinators.values():
-                if agent_id in coord.subordinate_agents:
-                    agent = coord.subordinate_agents[agent_id]
+                if agent_id in coord.subordinates:
+                    agent = coord.subordinates[agent_id]
                     agent._timestep = event.timestamp
 
                     # Use trained policy
@@ -1245,7 +1256,7 @@ class TestEndToEndFlow:
         # Create policies
         policies = {}
         for coord in env.grid_system.coordinators.values():
-            for agent_id, agent in coord.subordinate_agents.items():
+            for agent_id, agent in coord.subordinates.items():
                 obs_dim = agent.observe().vector().shape[0]
                 policies[agent_id] = CTDEPolicy(obs_dim, 1, hidden_dim=32, seed=42)
 
@@ -1320,15 +1331,18 @@ class TestComprehensiveAgentProperties:
 
     def test_all_field_agent_properties(self):
         """Test all FieldAgent properties."""
+        tick_cfg = TickConfig.deterministic(
+            tick_interval=1.5,
+            obs_delay=0.2,
+            act_delay=0.3,
+            msg_delay=0.1,
+        )
         agent = BatteryAgent(
             agent_id="test_battery",
             capacity=100.0,
             max_power=20.0,
             efficiency=0.95,
-            tick_interval=1.5,
-            obs_delay=0.2,
-            act_delay=0.3,
-            msg_delay=0.1,
+            tick_config=tick_cfg,
             upstream_id="test_coord",
             env_id="test_env",
         )
@@ -1340,10 +1354,10 @@ class TestComprehensiveAgentProperties:
         assert agent.env_id == "test_env"
 
         # Timing properties
-        assert agent.tick_interval == 1.5
-        assert agent.obs_delay == 0.2
-        assert agent.act_delay == 0.3
-        assert agent.msg_delay == 0.1
+        assert agent._tick_config.tick_interval == 1.5
+        assert agent._tick_config.obs_delay == 0.2
+        assert agent._tick_config.act_delay == 0.3
+        assert agent._tick_config.msg_delay == 0.1
 
         # Agent-specific properties
         assert agent.capacity == 100.0
@@ -1373,13 +1387,16 @@ class TestComprehensiveAgentProperties:
             ]
         }
 
-        coord = ZoneCoordinator(
-            agent_id="test_zone",
-            config=config,
+        tick_cfg = TickConfig.deterministic(
             tick_interval=10.0,
             obs_delay=0.5,
             act_delay=1.0,
             msg_delay=0.2,
+        )
+        coord = ZoneCoordinator(
+            agent_id="test_zone",
+            config=config,
+            tick_config=tick_cfg,
             upstream_id="test_system",
             env_id="test_env",
         )
@@ -1390,17 +1407,17 @@ class TestComprehensiveAgentProperties:
         assert coord.upstream_id == "test_system"
 
         # Timing
-        assert coord.tick_interval == 10.0
-        assert coord.obs_delay == 0.5
-        assert coord.act_delay == 1.0
+        assert coord._tick_config.tick_interval == 10.0
+        assert coord._tick_config.obs_delay == 0.5
+        assert coord._tick_config.act_delay == 1.0
 
         # Subordinates
-        assert len(coord.subordinate_agents) == 2
-        assert "battery_1" in coord.subordinate_agents
-        assert "battery_2" in coord.subordinate_agents
+        assert len(coord.subordinates) == 2
+        assert "battery_1" in coord.subordinates
+        assert "battery_2" in coord.subordinates
 
         # Subordinates have correct upstream
-        for agent in coord.subordinate_agents.values():
+        for agent in coord.subordinates.values():
             assert agent.upstream_id == "test_zone"
 
     def test_all_system_agent_properties(self):
@@ -1414,13 +1431,16 @@ class TestComprehensiveAgentProperties:
             ]
         }
 
-        system = GridSystemAgent(
-            agent_id="test_system",
-            config=config,
+        tick_cfg = TickConfig.deterministic(
             tick_interval=30.0,
             obs_delay=1.5,
             act_delay=2.5,
             msg_delay=0.5,
+        )
+        system = GridSystemAgent(
+            agent_id="test_system",
+            config=config,
+            tick_config=tick_cfg,
             env_id="test_env",
         )
 
@@ -1430,9 +1450,9 @@ class TestComprehensiveAgentProperties:
         assert system.upstream_id is None  # Top level
 
         # Timing
-        assert system.tick_interval == 30.0
-        assert system.obs_delay == 1.5
-        assert system.act_delay == 2.5
+        assert system._tick_config.tick_interval == 30.0
+        assert system._tick_config.obs_delay == 1.5
+        assert system._tick_config.act_delay == 2.5
 
         # Coordinators
         assert len(system.coordinators) == 1
@@ -1447,18 +1467,18 @@ class TestComprehensiveAgentProperties:
         proxy = ProxyAgent(
             agent_id="test_proxy",
             env_id="test_env",
-            subordinate_agents=["agent_1", "agent_2"],
+            registered_agents=["agent_1", "agent_2"],
             visibility_rules={"agent_1": ["feature_a"], "agent_2": ["feature_a", "feature_b"]},
             history_length=50,
         )
 
         # Core properties
         assert proxy.agent_id == "test_proxy"
-        assert proxy.level == 3  # PROXY_LEVEL
+        assert proxy.level == 0  # PROXY_LEVEL (not part of L1-L3 hierarchy)
 
-        # Subordinate tracking
-        assert len(proxy.subordinate_agents) == 2
-        assert "agent_1" in proxy.subordinate_agents
+        # Registered agent tracking
+        assert len(proxy.registered_agents) == 2
+        assert "agent_1" in proxy.registered_agents
 
         # Visibility rules
         assert "agent_1" in proxy.visibility_rules

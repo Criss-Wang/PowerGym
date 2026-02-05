@@ -12,14 +12,17 @@ Execution Modes:
        - All operations are synchronous within env.step()
 
     2. Event-Driven (Option B - Testing): EventScheduler with independent agent ticks
-       - Each agent ticks at its own interval (tick_interval)
+       - Each agent ticks independently at its own interval (tick_interval)
+       - Different hierarchy levels can have different tick rates
        - Observations/actions have configurable delays (obs_delay, act_delay)
-       - Messages between agents have delays (msg_delay)
-       - No hierarchical waiting - agents act on potentially stale information
+       - Hierarchical communication via async messages with msg_delay:
+         * Subordinates send info to coordinators (may arrive at different times)
+         * Coordinators send actions to subordinates (arrive after msg_delay)
+       - Coordinators act on whatever info has arrived - no waiting for all subordinates
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional
 
 import gymnasium as gym
 
@@ -28,9 +31,9 @@ from heron.core.observation import Observation
 from heron.messaging.base import ChannelManager, Message as BrokerMessage, MessageType
 from heron.utils.typing import AgentID
 
-if TYPE_CHECKING:
-    from heron.messaging.base import MessageBroker
-    from heron.scheduling.tick_config import TickConfig, JitterType
+from heron.messaging.base import MessageBroker
+from heron.scheduling.tick_config import TickConfig, JitterType
+from heron.scheduling.scheduler import EventScheduler
 
 
 class Agent(ABC):
@@ -49,10 +52,8 @@ class Agent(ABC):
         upstream_id: Optional upstream agent ID for hierarchy structure
         subordinates: Dict of subordinate agents for hierarchy structure
         env_id: Environment ID for multi-environment isolation
-        tick_interval: Time between agent steps (for event-driven scheduling)
-        obs_delay: Observation delay - agent sees state from t - obs_delay
-        act_delay: Action delay - action takes effect at t + act_delay
-        msg_delay: Message delay - messages arrive after msg_delay
+        tick_config: Timing configuration for event-driven scheduling (tick_interval,
+            obs_delay, act_delay, msg_delay, jitter settings)
     """
 
     def __init__(
@@ -61,20 +62,12 @@ class Agent(ABC):
         level: int = 1,
         observation_space: Optional[gym.Space] = None,
         action_space: Optional[gym.Space] = None,
-
         # hierarchy params
         upstream_id: Optional[AgentID] = None,
         subordinates: Optional[Dict[AgentID, "Agent"]] = None,
         env_id: Optional[str] = None,
-
-        # timing/latency params (for event-driven scheduling)
-        tick_interval: float = 1.0,
-        obs_delay: float = 0.0,
-        act_delay: float = 0.0,
-        msg_delay: float = 0.0,
-
-        # NEW: TickConfig for full control (overrides individual timing params)
-        tick_config: Optional["TickConfig"] = None,
+        # timing config (for event-driven scheduling)
+        tick_config: Optional[TickConfig] = None,
     ):
         """Initialize agent.
 
@@ -86,11 +79,9 @@ class Agent(ABC):
             upstream_id: Optional upstream agent ID for hierarchy structure
             subordinates: Optional dict of subordinate agents
             env_id: Optional environment ID for multi-environment isolation
-            tick_interval: Time between agent steps (ignored if tick_config provided)
-            obs_delay: Observation delay (ignored if tick_config provided)
-            act_delay: Action delay (ignored if tick_config provided)
-            msg_delay: Message delay (ignored if tick_config provided)
-            tick_config: Optional TickConfig for full control including jitter
+            tick_config: Timing configuration (defaults to deterministic with
+                tick_interval=1.0, no delays). Use TickConfig.deterministic() or
+                TickConfig.with_jitter() to create custom configs.
         """
         self.agent_id = agent_id
         self.level = level
@@ -102,21 +93,10 @@ class Agent(ABC):
         self._last_observation: Optional[Observation] = None  # Cached obs for tick()
 
         # Message broker reference (set by environment in distributed mode)
-        self._message_broker: Optional["MessageBroker"] = None
+        self._message_broker: Optional[MessageBroker] = None
 
         # Timing configuration (via TickConfig)
-        if tick_config is not None:
-            self._tick_config = tick_config
-        else:
-            # Create deterministic config from legacy params
-            from heron.scheduling.tick_config import TickConfig as TC
-
-            self._tick_config = TC.deterministic(
-                tick_interval=tick_interval,
-                obs_delay=obs_delay,
-                act_delay=act_delay,
-                msg_delay=msg_delay,
-            )
+        self._tick_config = tick_config or TickConfig.deterministic()
 
         # Hierarchy structure (used by coordinators)
         self.upstream_id = upstream_id
@@ -129,39 +109,18 @@ class Agent(ABC):
     # ============================================
 
     @property
-    def tick_config(self) -> "TickConfig":
+    def tick_config(self) -> TickConfig:
         """Get the tick configuration for this agent."""
         return self._tick_config
 
     @tick_config.setter
-    def tick_config(self, config: "TickConfig") -> None:
+    def tick_config(self, config: TickConfig) -> None:
         """Set the tick configuration for this agent."""
         self._tick_config = config
 
-    # Backward-compatible properties (read base values from config)
-    @property
-    def tick_interval(self) -> float:
-        """Base tick interval (use tick_config.get_tick_interval() for jittered)."""
-        return self._tick_config.tick_interval
-
-    @property
-    def obs_delay(self) -> float:
-        """Base observation delay (use tick_config.get_obs_delay() for jittered)."""
-        return self._tick_config.obs_delay
-
-    @property
-    def act_delay(self) -> float:
-        """Base action delay (use tick_config.get_act_delay() for jittered)."""
-        return self._tick_config.act_delay
-
-    @property
-    def msg_delay(self) -> float:
-        """Base message delay (use tick_config.get_msg_delay() for jittered)."""
-        return self._tick_config.msg_delay
-
     def enable_jitter(
         self,
-        jitter_type: Optional["JitterType"] = None,
+        jitter_type: Optional[JitterType] = None,
         jitter_ratio: float = 0.1,
         seed: Optional[int] = None,
     ) -> None:
@@ -174,12 +133,10 @@ class Agent(ABC):
             jitter_ratio: Jitter magnitude as fraction of base
             seed: Optional RNG seed for reproducibility
         """
-        from heron.scheduling.tick_config import TickConfig as TC, JitterType
-
         if jitter_type is None:
             jitter_type = JitterType.GAUSSIAN
 
-        self._tick_config = TC.with_jitter(
+        self._tick_config = TickConfig.with_jitter(
             tick_interval=self._tick_config.tick_interval,
             obs_delay=self._tick_config.obs_delay,
             act_delay=self._tick_config.act_delay,
@@ -191,9 +148,7 @@ class Agent(ABC):
 
     def disable_jitter(self) -> None:
         """Disable jitter (switch to deterministic mode)."""
-        from heron.scheduling.tick_config import TickConfig as TC
-
-        self._tick_config = TC.deterministic(
+        self._tick_config = TickConfig.deterministic(
             tick_interval=self._tick_config.tick_interval,
             obs_delay=self._tick_config.obs_delay,
             act_delay=self._tick_config.act_delay,
@@ -254,7 +209,7 @@ class Agent(ABC):
 
     def tick(
         self,
-        scheduler: "EventScheduler",
+        scheduler: EventScheduler,
         current_time: float,
         global_state: Optional[Dict[str, Any]] = None,
         proxy: Optional["Agent"] = None,
@@ -287,18 +242,18 @@ class Agent(ABC):
         self.act(observation)
 
         # Schedule delayed action effect if act_delay > 0
-        if self.act_delay > 0 and hasattr(self, 'action'):
+        if self._tick_config.act_delay > 0 and hasattr(self, 'action'):
             scheduler.schedule_action_effect(
                 agent_id=self.agent_id,
                 action=getattr(self, 'action', None),
-                delay=self.act_delay,
+                delay=self._tick_config.act_delay,
             )
 
     # ============================================
     # Messaging via Message Broker (Both Modes)
     # ============================================
 
-    def set_message_broker(self, broker: "MessageBroker") -> None:
+    def set_message_broker(self, broker: MessageBroker) -> None:
         """Set the message broker for this agent. [Both Modes]
 
         Called by the environment to configure distributed messaging.
@@ -309,7 +264,7 @@ class Agent(ABC):
         self._message_broker = broker
 
     @property
-    def message_broker(self) -> Optional["MessageBroker"]:
+    def message_broker(self) -> Optional[MessageBroker]:
         """Get the message broker for this agent. [Both Modes]"""
         return self._message_broker
 
@@ -452,7 +407,7 @@ class Agent(ABC):
 
         In Option B (Testing), use at_time to get delayed observations:
             state = self.request_state_from_proxy(
-                proxy, at_time=current_time - self.obs_delay
+                proxy, at_time=current_time - self.tick_config.obs_delay
             )
 
         Args:
@@ -469,7 +424,7 @@ class Agent(ABC):
 
             # With observation delay (Option B):
             state = self.request_state_from_proxy(
-                self.proxy_agent, at_time=current_time - self.obs_delay
+                self.proxy_agent, at_time=current_time - self.tick_config.obs_delay
             )
         """
         # Import here to avoid circular dependency
@@ -494,7 +449,7 @@ class Agent(ABC):
 
     def publish_to_broker(
         self,
-        broker: "MessageBroker",
+        broker: MessageBroker,
         channel: str,
         payload: Dict[str, Any],
         recipient_id: str = "broadcast",
@@ -521,10 +476,10 @@ class Agent(ABC):
 
     def consume_from_broker(
         self,
-        broker: "MessageBroker",
+        broker: MessageBroker,
         channel: str,
         clear: bool = True,
-    ) -> List["BrokerMessage"]:
+    ) -> List[BrokerMessage]:
         """Consume messages from the message broker. [Distributed Mode]
 
         Args:
@@ -544,7 +499,7 @@ class Agent(ABC):
 
     def send_action_via_broker(
         self,
-        broker: "MessageBroker",
+        broker: MessageBroker,
         recipient_id: str,
         action: Any,
     ) -> None:
@@ -568,7 +523,7 @@ class Agent(ABC):
 
     def send_info_via_broker(
         self,
-        broker: "MessageBroker",
+        broker: MessageBroker,
         recipient_id: str,
         info: Dict[str, Any],
     ) -> None:
@@ -592,7 +547,7 @@ class Agent(ABC):
 
     def receive_actions_from_broker(
         self,
-        broker: "MessageBroker",
+        broker: MessageBroker,
         upstream_id: Optional[str] = None,
         clear: bool = True,
     ) -> List[Any]:
@@ -619,7 +574,7 @@ class Agent(ABC):
 
     def receive_info_from_broker(
         self,
-        broker: "MessageBroker",
+        broker: MessageBroker,
         subordinate_ids: Optional[List[str]] = None,
     ) -> Dict[str, List[Dict[str, Any]]]:
         """Receive info from subordinates via the message broker. [Distributed Mode]

@@ -87,7 +87,9 @@ class TickConfig:
         if self.jitter_type == JitterType.NONE or base_value == 0.0:
             return base_value
 
-        rng = self.rng if self.rng is not None else np.random.default_rng()
+        if self.rng is None:
+            self.rng = np.random.default_rng()
+        rng = self.rng
         jitter_magnitude = base_value * self.jitter_ratio
 
         if self.jitter_type == JitterType.UNIFORM:

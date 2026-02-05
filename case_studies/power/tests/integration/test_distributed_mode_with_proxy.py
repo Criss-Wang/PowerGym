@@ -68,10 +68,10 @@ class TestDistributedModeWithProxy:
         """Test that ProxyAgent has all environment agents as subordinates."""
         proxy = distributed_env.proxy_agent
         expected_agents = set(distributed_env.possible_agents)
-        actual_agents = set(proxy.subordinate_agents)
+        actual_agents = set(proxy.registered_agents)
 
         assert actual_agents == expected_agents
-        assert len(proxy.subordinate_agents) == 3  # MG1, MG2, MG3
+        assert len(proxy.registered_agents) == 3  # MG1, MG2, MG3
 
     def test_message_broker_channels_created(self, distributed_env):
         """Test that message broker channels are created for proxy communication."""
@@ -108,11 +108,11 @@ class TestDistributedModeWithProxy:
         obs, info = env.reset(seed=42)
 
         # After reset, proxy should have cached network state
-        assert len(proxy.network_state_cache) > 0
-        assert 'agents' in proxy.network_state_cache
+        assert len(proxy.state_cache) > 0
+        assert 'agents' in proxy.state_cache
 
         # Check that state contains information for all agents
-        agents_state = proxy.network_state_cache['agents']
+        agents_state = proxy.state_cache['agents']
         for agent_id in env.possible_agents:
             assert agent_id in agents_state
 
@@ -180,7 +180,7 @@ class TestDistributedModeWithProxy:
         obs, info = env.reset(seed=42)
 
         # Check cache structure
-        state = proxy.network_state_cache
+        state = proxy.state_cache
         assert 'agents' in state
 
         agents_state = state['agents']
@@ -285,7 +285,7 @@ class TestDistributedModeWithProxy:
         obs, info = env.reset(seed=42)
 
         # Manually trigger distribution to apply visibility rules
-        proxy.distribute_network_state_to_agents()
+        proxy.distribute_state_to_agents()
 
         # Check that agents receive only allowed keys
         broker = env.message_broker
@@ -342,7 +342,7 @@ class TestDistributedModeWithProxy:
         proxy2 = env2.proxy_agent
 
         # Caches should be different (different seeds lead to different states)
-        assert proxy1.network_state_cache != proxy2.network_state_cache
+        assert proxy1.state_cache != proxy2.state_cache
 
         # Take steps in env1 only
         actions1 = {aid: env1.action_spaces[aid].sample() for aid in env1.possible_agents}
@@ -350,8 +350,8 @@ class TestDistributedModeWithProxy:
 
         # Verify env2 is not affected
         # Env2's proxy cache should not change
-        proxy2_cache_before = proxy2.network_state_cache.copy()
-        assert proxy2.network_state_cache == proxy2_cache_before
+        proxy2_cache_before = proxy2.state_cache.copy()
+        assert proxy2.state_cache == proxy2_cache_before
 
     # =====================================
     # Test 6: Edge Cases
@@ -363,10 +363,10 @@ class TestDistributedModeWithProxy:
         proxy = env.proxy_agent
 
         # Manually clear cache
-        proxy.network_state_cache = {}
+        proxy.state_cache = {}
 
         # Try to distribute (should not crash)
-        proxy.distribute_network_state_to_agents()
+        proxy.distribute_state_to_agents()
 
         # Should still work
         assert True
@@ -380,13 +380,13 @@ class TestDistributedModeWithProxy:
         obs, info = env.reset(seed=42)
 
         # Manually remove one agent from cache
-        if 'agents' in proxy.network_state_cache:
-            agents_state = proxy.network_state_cache['agents']
+        if 'agents' in proxy.state_cache:
+            agents_state = proxy.state_cache['agents']
             if 'MG1' in agents_state:
                 del agents_state['MG1']
 
         # Distribution should still work for remaining agents
-        proxy.distribute_network_state_to_agents()
+        proxy.distribute_state_to_agents()
 
         # Should complete without error
         assert True
@@ -398,13 +398,13 @@ class TestDistributedModeWithProxy:
 
         # Reset environment to populate cache
         obs, info = env.reset(seed=42)
-        assert len(proxy.network_state_cache) > 0
+        assert len(proxy.state_cache) > 0
 
         # Reset proxy
         proxy.reset(seed=42)
 
         # Cache should be cleared
-        assert len(proxy.network_state_cache) == 0
+        assert len(proxy.state_cache) == 0
 
     # =====================================
     # Test 7: Performance and Scalability

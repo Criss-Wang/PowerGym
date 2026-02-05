@@ -70,20 +70,20 @@ class TestProxyAgentInitialization:
 
         assert proxy.agent_id == "proxy_agent"
         assert proxy.level == PROXY_LEVEL
-        assert proxy.subordinate_agents == []
+        assert proxy.registered_agents == []
         assert proxy.visibility_rules == {}
         assert proxy.state_cache == {}
         assert proxy.state_history == []
 
-    def test_initialization_with_subordinates(self):
-        """Test initialization with subordinate agents."""
+    def test_initialization_with_registered_agents(self):
+        """Test initialization with registered agents."""
         proxy = ProxyAgent(
             agent_id="proxy_1",
-            subordinate_agents=["agent_1", "agent_2", "agent_3"],
+            registered_agents=["agent_1", "agent_2", "agent_3"],
         )
 
-        assert len(proxy.subordinate_agents) == 3
-        assert "agent_1" in proxy.subordinate_agents
+        assert len(proxy.registered_agents) == 3
+        assert "agent_1" in proxy.registered_agents
 
     def test_initialization_with_visibility_rules(self):
         """Test initialization with visibility rules."""
@@ -199,7 +199,7 @@ class TestProxyAgentStateFiltering:
         proxy = ProxyAgent()
         agent_state = {"power": 100, "voltage": 1.0}
 
-        filtered = proxy._filter_state_for_agent("agent_1", agent_state)
+        filtered = proxy._filter_state_by_keys("agent_1", agent_state)
 
         assert filtered == agent_state
 
@@ -210,7 +210,7 @@ class TestProxyAgentStateFiltering:
         )
         agent_state = {"power": 100, "voltage": 1.0, "current": 50}
 
-        filtered = proxy._filter_state_for_agent("agent_1", agent_state)
+        filtered = proxy._filter_state_by_keys("agent_1", agent_state)
 
         assert filtered == {"power": 100}
         assert "voltage" not in filtered
@@ -222,7 +222,7 @@ class TestProxyAgentStateFiltering:
         )
         agent_state = {"power": 100}
 
-        filtered = proxy._filter_state_for_agent("agent_1", agent_state)
+        filtered = proxy._filter_state_by_keys("agent_1", agent_state)
 
         assert filtered == {}
 
@@ -292,21 +292,21 @@ class TestProxyAgentGetStateForAgent:
 class TestProxyAgentRegistration:
     """Test agent registration functionality."""
 
-    def test_register_subordinate(self):
-        """Test registering a subordinate."""
+    def test_register_agent(self):
+        """Test registering an agent."""
         proxy = ProxyAgent()
 
-        proxy.register_subordinate("new_agent")
+        proxy.register_agent("new_agent")
 
-        assert "new_agent" in proxy.subordinate_agents
+        assert "new_agent" in proxy.registered_agents
 
     def test_register_subordinate_duplicate(self):
         """Test registering duplicate subordinate."""
-        proxy = ProxyAgent(subordinate_agents=["agent_1"])
+        proxy = ProxyAgent(registered_agents=["agent_1"])
 
-        proxy.register_subordinate("agent_1")
+        proxy.register_agent("agent_1")
 
-        assert proxy.subordinate_agents.count("agent_1") == 1
+        assert proxy.registered_agents.count("agent_1") == 1
 
     def test_set_visibility_rules(self):
         """Test setting visibility rules."""
@@ -357,14 +357,14 @@ class TestProxyAgentRepr:
         """Test __repr__."""
         proxy = ProxyAgent(
             agent_id="proxy_1",
-            subordinate_agents=["a1", "a2"],
+            registered_agents=["a1", "a2"],
         )
 
         repr_str = repr(proxy)
 
         assert "ProxyAgent" in repr_str
         assert "proxy_1" in repr_str
-        assert "subordinates=2" in repr_str
+        assert "registered_agents=2" in repr_str
 
 
 if __name__ == "__main__":

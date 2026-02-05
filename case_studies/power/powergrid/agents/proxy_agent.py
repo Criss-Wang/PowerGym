@@ -11,7 +11,7 @@ from heron.messaging.base import ChannelManager, Message, MessageBroker, Message
 from heron.utils.typing import AgentID
 
 
-# Re-export PROXY_LEVEL for backwards compatibility
+# Re-export PROXY_LEVEL
 __all__ = ["ProxyAgent", "PROXY_LEVEL", "POWER_FLOW_CHANNEL_TYPE"]
 
 # Power grid uses "power_flow" as the channel type for power flow results
@@ -24,7 +24,7 @@ class ProxyAgent(BaseProxyAgent):
     This is a thin wrapper around the generic ProxyAgent that adds
     power-grid specific message broker integration for receiving
     power flow results from the environment and distributing state
-    to subordinate agents.
+    to registered agents.
 
     Example:
         broker = InMemoryBroker()
@@ -32,7 +32,7 @@ class ProxyAgent(BaseProxyAgent):
             agent_id="proxy",
             message_broker=broker,
             env_id="env_0",
-            subordinate_agents=["grid_1", "grid_2"],
+            registered_agents=["grid_1", "grid_2"],
         )
     """
 
@@ -41,7 +41,7 @@ class ProxyAgent(BaseProxyAgent):
         agent_id: AgentID = "proxy_agent",
         message_broker: Optional[MessageBroker] = None,
         env_id: Optional[str] = None,
-        subordinate_agents: Optional[List[AgentID]] = None,
+        registered_agents: Optional[List[AgentID]] = None,
         visibility_rules: Optional[Dict[AgentID, List[str]]] = None,
         history_length: int = 100,
     ):
@@ -51,9 +51,9 @@ class ProxyAgent(BaseProxyAgent):
             agent_id: Unique identifier for this proxy agent
             message_broker: Message broker for communication (required)
             env_id: Environment ID for multi-environment isolation
-            subordinate_agents: List of agent IDs that can request state
+            registered_agents: List of agent IDs that can request state
             visibility_rules: Dict mapping agent IDs to allowed state keys.
-                            If None, all agents see all state by default.
+                If None, all agents see all state by default.
             history_length: Number of timesteps of history to maintain
 
         Raises:
@@ -68,7 +68,7 @@ class ProxyAgent(BaseProxyAgent):
         super().__init__(
             agent_id=agent_id,
             env_id=env_id,
-            subordinate_agents=subordinate_agents,
+            registered_agents=registered_agents,
             visibility_rules=visibility_rules,
             history_length=history_length,
         )
@@ -96,7 +96,7 @@ class ProxyAgent(BaseProxyAgent):
         self._message_broker.create_channel(env_channel)
 
         # Create proxy->agent channels for distributing state
-        for agent_id in self.subordinate_agents:
+        for agent_id in self.registered_agents:
             agent_channel = ChannelManager.info_channel(
                 self.agent_id, agent_id, env_id
             )
@@ -139,9 +139,9 @@ class ProxyAgent(BaseProxyAgent):
         return latest_msg.payload
 
     def distribute_state_to_agents(self) -> None:
-        """Distribute cached state to subordinate agents via message broker.
+        """Distribute cached state to registered agents via message broker.
 
-        Sends filtered state to each subordinate agent based on visibility rules.
+        Sends filtered state to each registered agent based on visibility rules.
         """
         if self._message_broker is None:
             return
@@ -152,12 +152,12 @@ class ProxyAgent(BaseProxyAgent):
         env_id = self.env_id or "default"
         agents_state = self.state_cache.get("agents", {})
 
-        for agent_id in self.subordinate_agents:
+        for agent_id in self.registered_agents:
             # Get agent-specific state from aggregated state
             agent_state = agents_state.get(agent_id, {})
 
             # Apply visibility filtering
-            filtered_state = self._filter_state_for_agent(agent_id, agent_state)
+            filtered_state = self._filter_state_by_keys(agent_id, agent_state)
 
             # Send to agent via info channel
             channel = ChannelManager.info_channel(self.agent_id, agent_id, env_id)
@@ -170,26 +170,3 @@ class ProxyAgent(BaseProxyAgent):
                 payload=filtered_state,
             )
             self._message_broker.publish(channel, msg)
-
-    # Backwards-compatible aliases for power grid specific naming
-    @property
-    def network_state_cache(self) -> Dict:
-        """Alias for state_cache (backwards compatibility)."""
-        return self.state_cache
-
-    @network_state_cache.setter
-    def network_state_cache(self, value: Dict) -> None:
-        """Alias setter for state_cache (backwards compatibility)."""
-        self.state_cache = value
-
-    def receive_network_state_from_environment(self):
-        """Alias for receive_state_from_environment (backwards compatibility)."""
-        return self.receive_state_from_environment()
-
-    def distribute_network_state_to_agents(self):
-        """Alias for distribute_state_to_agents (backwards compatibility)."""
-        return self.distribute_state_to_agents()
-
-    def get_latest_network_state_for_agent(self, agent_id: AgentID):
-        """Alias for get_latest_state_for_agent (backwards compatibility)."""
-        return self.get_latest_state_for_agent(agent_id)

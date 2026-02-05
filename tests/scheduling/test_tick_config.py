@@ -387,39 +387,41 @@ class TestTickConfigIntegrationWithAgent:
 
         agent = self._make_test_agent(tick_config=tick_cfg)
 
-        assert agent.tick_config is tick_cfg
-        assert agent.tick_interval == 2.0
-        assert agent.obs_delay == 0.1
+        assert agent._tick_config is tick_cfg
+        assert agent._tick_config.tick_interval == 2.0
+        assert agent._tick_config.obs_delay == 0.1
 
-    def test_agent_backward_compatible(self):
-        """Test agent creation with legacy timing params."""
-        agent = self._make_test_agent(
+    def test_agent_with_deterministic_config(self):
+        """Test agent creation with deterministic tick config."""
+        tick_cfg = TickConfig.deterministic(
             tick_interval=3.0,
             obs_delay=0.2,
         )
+        agent = self._make_test_agent(tick_config=tick_cfg)
 
-        assert agent.tick_interval == 3.0
-        assert agent.obs_delay == 0.2
-        assert agent.tick_config.jitter_type == JitterType.NONE
+        assert agent._tick_config.tick_interval == 3.0
+        assert agent._tick_config.obs_delay == 0.2
+        assert agent._tick_config.jitter_type == JitterType.NONE
 
     def test_enable_jitter(self):
         """Test enable_jitter method."""
-        agent = self._make_test_agent(
+        tick_cfg = TickConfig.deterministic(
             tick_interval=1.0,
             obs_delay=0.5,
         )
+        agent = self._make_test_agent(tick_config=tick_cfg)
 
         # Initially deterministic
-        assert agent.tick_config.jitter_type == JitterType.NONE
+        assert agent._tick_config.jitter_type == JitterType.NONE
 
         # Enable jitter
         agent.enable_jitter(jitter_ratio=0.1, seed=42)
 
-        assert agent.tick_config.jitter_type == JitterType.GAUSSIAN
-        assert agent.tick_config.jitter_ratio == 0.1
+        assert agent._tick_config.jitter_type == JitterType.GAUSSIAN
+        assert agent._tick_config.jitter_ratio == 0.1
         # Base values preserved
-        assert agent.tick_interval == 1.0
-        assert agent.obs_delay == 0.5
+        assert agent._tick_config.tick_interval == 1.0
+        assert agent._tick_config.obs_delay == 0.5
 
     def test_disable_jitter(self):
         """Test disable_jitter method."""
@@ -433,11 +435,11 @@ class TestTickConfigIntegrationWithAgent:
         agent = self._make_test_agent(tick_config=tick_cfg)
 
         # Initially jittered
-        assert agent.tick_config.jitter_type == JitterType.GAUSSIAN
+        assert agent._tick_config.jitter_type == JitterType.GAUSSIAN
 
         # Disable jitter
         agent.disable_jitter()
 
-        assert agent.tick_config.jitter_type == JitterType.NONE
+        assert agent._tick_config.jitter_type == JitterType.NONE
         # Base value preserved
-        assert agent.tick_interval == 1.0
+        assert agent._tick_config.tick_interval == 1.0

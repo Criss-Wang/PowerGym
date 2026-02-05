@@ -68,16 +68,16 @@ class DeviceAgent(FieldAgent):
     def set_state(self):
         self.state.features = [DeviceFeature(power=0.0, status=1.0)]
 
-    def _get_obs(self):
+    def _get_obs(self, proxy=None):
         return self.state.vector()
 
 
 class ZoneCoordinator(CoordinatorAgent):
     """Coordinator managing a zone of devices."""
 
-    def _build_subordinate_agents(self, agent_configs, env_id=None, upstream_id=None):
+    def _build_subordinates(self, configs, env_id=None, upstream_id=None):
         agents = {}
-        for config in agent_configs:
+        for config in configs:
             agent_id = config.get("id")
             device_type = config.get("device_type", "generic")
             max_power = config.get("max_power", 100.0)
@@ -99,9 +99,9 @@ class GridSystemAgent(SystemAgent):
         self._env_state = {}
         self._actions_collected = {}
 
-    def _build_coordinators(self, coordinator_configs, env_id=None, upstream_id=None):
+    def _build_subordinates(self, configs, env_id=None, upstream_id=None):
         coordinators = {}
-        for config in coordinator_configs:
+        for config in configs:
             coord_id = config.get("id")
             agent_configs = config.get("agents", [])
             coordinators[coord_id] = ZoneCoordinator(
@@ -114,9 +114,12 @@ class GridSystemAgent(SystemAgent):
 
     def update_from_environment(self, env_state):
         self._env_state = env_state
+        super().update_from_environment(env_state)
 
     def get_state_for_environment(self):
-        return {"actions": self._actions_collected}
+        result = super().get_state_for_environment()
+        result["actions"] = self._actions_collected
+        return result
 
 
 # =============================================================================
@@ -155,13 +158,13 @@ class TestAgentHierarchyStructure:
         # Check coordinators
         zone_north = system.coordinators["zone_north"]
         assert zone_north.level == COORDINATOR_LEVEL
-        assert len(zone_north.subordinate_agents) == 2
+        assert len(zone_north.subordinates) == 2
 
         zone_south = system.coordinators["zone_south"]
-        assert len(zone_south.subordinate_agents) == 1
+        assert len(zone_south.subordinates) == 1
 
         # Check field agents
-        battery_1 = zone_north.subordinate_agents["battery_1"]
+        battery_1 = zone_north.subordinates["battery_1"]
         assert battery_1.level == FIELD_LEVEL
         assert battery_1.device_type == "battery"
 
@@ -186,7 +189,7 @@ class TestAgentHierarchyStructure:
         assert coordinator.upstream_id == "grid_system"
 
         # Field agent's upstream is coordinator
-        device = coordinator.subordinate_agents["device_1"]
+        device = coordinator.subordinates["device_1"]
         assert device.upstream_id == "zone_1"
 
 
@@ -211,8 +214,8 @@ class TestHierarchicalObservations:
 
         # Set some state on field agents
         coordinator = system.coordinators["zone_1"]
-        coordinator.subordinate_agents["device_1"].state.features[0].power = 50.0
-        coordinator.subordinate_agents["device_2"].state.features[0].power = 75.0
+        coordinator.subordinates["device_1"].state.features[0].power = 50.0
+        coordinator.subordinates["device_2"].state.features[0].power = 75.0
 
         # Get system-level observation
         system_obs = system.observe()
@@ -281,8 +284,8 @@ class TestHierarchicalActions:
 
         # Verify actions reached field agents
         coordinator = system.coordinators["zone_1"]
-        device_1 = coordinator.subordinate_agents["device_1"]
-        device_2 = coordinator.subordinate_agents["device_2"]
+        device_1 = coordinator.subordinates["device_1"]
+        device_2 = coordinator.subordinates["device_2"]
 
         np.testing.assert_array_almost_equal(device_1.action.c, [0.5])
         np.testing.assert_array_almost_equal(device_2.action.c, [-0.3])
@@ -309,10 +312,10 @@ class TestHierarchicalActions:
 
         # Verify each device got its portion
         np.testing.assert_array_almost_equal(
-            coordinator.subordinate_agents["device_1"].action.c, [0.7]
+            coordinator.subordinates["device_1"].action.c, [0.7]
         )
         np.testing.assert_array_almost_equal(
-            coordinator.subordinate_agents["device_2"].action.c, [-0.4]
+            coordinator.subordinates["device_2"].action.c, [-0.4]
         )
 
 
@@ -338,7 +341,7 @@ class TestHierarchicalReset:
         # Modify timesteps at all levels
         system._timestep = 100.0
         system.coordinators["zone_1"]._timestep = 100.0
-        system.coordinators["zone_1"].subordinate_agents["device_1"]._timestep = 100.0
+        system.coordinators["zone_1"].subordinates["device_1"]._timestep = 100.0
 
         # Reset from top
         system.reset()
@@ -346,7 +349,7 @@ class TestHierarchicalReset:
         # Verify all levels are reset
         assert system._timestep == 0.0
         assert system.coordinators["zone_1"]._timestep == 0.0
-        assert system.coordinators["zone_1"].subordinate_agents["device_1"]._timestep == 0.0
+        assert system.coordinators["zone_1"].subordinates["device_1"]._timestep == 0.0
 
 
 class TestHierarchicalSpaces:
@@ -396,7 +399,7 @@ class TestScalability:
         assert len(system.coordinators) == 4
 
         total_devices = sum(
-            len(coord.subordinate_agents)
+            len(coord.subordinates)
             for coord in system.coordinators.values()
         )
         assert total_devices == 20  # 4 zones x 5 devices

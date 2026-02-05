@@ -16,8 +16,6 @@ from heron.protocols.base import (
     Protocol,
     CommunicationProtocol,
     ActionProtocol,
-    NoCommunication,
-    NoActionCoordination,
 )
 from heron.utils.typing import AgentID
 

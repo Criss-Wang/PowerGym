@@ -35,7 +35,7 @@ class MockCoordinator(CoordinatorAgent):
     def __init__(self, agent_id, **kwargs):
         super().__init__(agent_id=agent_id, config={}, **kwargs)
 
-    def _build_subordinate_agents(self, agent_configs, env_id=None, upstream_id=None):
+    def _build_subordinates(self, agent_configs, env_id=None, upstream_id=None):
         return {}
 
 

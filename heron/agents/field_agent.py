@@ -1,28 +1,45 @@
 """Field-level agents (L1) for the HERON framework.
 
 FieldAgent represents the lowest level in the agent hierarchy, typically
-managing individual units, sensors, or actuators.
+managing individual units, sensors, or actuators. It provides local state
+management, action handling, policy-based decision making, and protocol-based
+coordination with upstream CoordinatorAgents.
 
-In synchronous mode (Option A - Training), field agents:
-1. Receive observations via observe()
-2. Execute actions via act() - either from coordinator or own policy
+Supports two execution modes:
+
+**Synchronous Mode (Option A - Training)**:
+    - Receive observations via observe()
+    - Execute actions via act() - either from coordinator or own policy
+    - Suitable for RL training loops where timing is not critical
+
+**Event-Driven Mode (Option B - Testing)**:
+    - Execute via tick() with EventScheduler integration
+    - Supports configurable timing (tick_interval, obs_delay, act_delay, msg_delay)
+    - Receives upstream actions via message broker
+    - Optional ProxyAgent support for delayed observations
+    - TickConfig for full control including jitter
 """
 
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional
 from dataclasses import dataclass
 
 import numpy as np
 from gymnasium.spaces import Box, Space
 
 from heron.agents.base import Agent
-from heron.core.observation import Observation
+from heron.core.observation import (
+    Observation,
+    OBS_KEY_STATE,
+    OBS_KEY_OBSERVATION,
+    OBS_KEY_PROXY_STATE,
+)
 from heron.core.state import FieldAgentState
 from heron.core.action import Action
 from heron.core.policies import Policy
 from heron.utils.typing import AgentID
-
-if TYPE_CHECKING:
-    from heron.scheduling.tick_config import TickConfig
+from heron.protocols.base import Protocol
+from heron.scheduling.tick_config import TickConfig
+from heron.scheduling.scheduler import EventScheduler
 
 FIELD_LEVEL = 1  # Level identifier for field-level agents
 
@@ -42,17 +59,31 @@ class FieldAgent(Agent):
     FieldAgent manages individual units and provides:
     - Local state management via FieldAgentState
     - Action handling via Action
-    - Policy-based decision making
-    - Protocol-based coordination
+    - Policy-based decision making (learned or rule-based)
+    - Protocol-based coordination with upstream CoordinatorAgents
 
     FieldAgent only observes its local state. Global information should
     be provided by parent CoordinatorAgent through coordination protocols.
 
+    Supports two execution modes:
+
+    **Synchronous Mode (Option A - Training)**:
+        Call observe() to get observations, then act() to execute actions.
+        Actions can be coordinator-directed (upstream_action) or self-directed (policy).
+
+    **Event-Driven Mode (Option B - Testing)**:
+        Call tick() with an EventScheduler. Supports configurable timing delays
+        (obs_delay, act_delay), message broker integration for upstream actions,
+        and optional ProxyAgent for delayed observations.
+
     Attributes:
         state: Agent's local state (FieldAgentState)
         action: Agent's action container
-        policy: Decision-making policy (learned or rule-based)
-        protocol: Communication/action protocol
+        policy: Decision-making policy (learned or rule-based), optional
+        protocol: Communication/action protocol, optional
+        field_config: FieldConfig with agent-specific settings
+        action_space: Gymnasium Space for actions
+        observation_space: Gymnasium Space for observations
 
     Example:
         Create a custom field agent with state and actions::
@@ -106,7 +137,7 @@ class FieldAgent(Agent):
     def __init__(
         self,
         agent_id: Optional[AgentID] = None,
-        protocol: Optional["Protocol"] = None,
+        protocol: Optional[Protocol] = None,
         policy: Optional[Policy] = None,
 
         # hierarchy params
@@ -116,14 +147,8 @@ class FieldAgent(Agent):
         # FieldAgent specific params
         config: Optional[Dict[str, Any]] = None,
 
-        # timing params (for event-driven scheduling)
-        tick_interval: float = 1.0,  # Field agents tick most frequently
-        obs_delay: float = 0.0,
-        act_delay: float = 0.0,
-        msg_delay: float = 0.0,
-
-        # NEW: TickConfig for full control (overrides individual timing params)
-        tick_config: Optional["TickConfig"] = None,
+        # timing config (for event-driven scheduling)
+        tick_config: Optional[TickConfig] = None,
     ):
         """Initialize field agent.
 
@@ -134,11 +159,9 @@ class FieldAgent(Agent):
             upstream_id: Optional upstream agent ID for hierarchy structure
             env_id: Optional environment ID for multi-environment isolation
             config: Agent configuration dict
-            tick_interval: Time between agent ticks (ignored if tick_config provided)
-            obs_delay: Observation delay (ignored if tick_config provided)
-            act_delay: Action delay (ignored if tick_config provided)
-            msg_delay: Message delay (ignored if tick_config provided)
-            tick_config: Optional TickConfig for full control including jitter
+            tick_config: Timing configuration. Defaults to TickConfig with
+                tick_interval=1.0 (field agents tick most frequently).
+                Use TickConfig.deterministic() or TickConfig.with_jitter().
         """
         config = config or {}
 
@@ -163,11 +186,7 @@ class FieldAgent(Agent):
             upstream_id=upstream_id,
             env_id=env_id,
             subordinates={},  # Field agents have no subordinates
-            tick_interval=tick_interval,
-            obs_delay=obs_delay,
-            act_delay=act_delay,
-            msg_delay=msg_delay,
-            tick_config=tick_config,
+            tick_config=tick_config or TickConfig.deterministic(tick_interval=1.0),
         )
 
         self._init_action()
@@ -237,21 +256,36 @@ class FieldAgent(Agent):
                     "or structured observations."
                 )
 
-    def _get_obs(self) -> np.ndarray:
-        """Build the current observation vector for this agent. [Both Modes]"""
+    def _get_obs(self, proxy: Optional[Agent] = None) -> np.ndarray:
+        """Build the current observation vector for this agent. [Both Modes]
+
+        Args:
+            proxy: Optional ProxyAgent for retrieving neighbor states.
+                   If None, neighbor observations are skipped.
+
+        Returns:
+            Observation vector as numpy array
+        """
         obs_vec = self.state.vector()
 
-        # Observe other agents' states via a communication protocol
-        if (self.protocol is not None and
-            hasattr(self.protocol, 'communication_protocol') and
+        # Observe other agents' states via communication protocol + proxy
+        if (
+            self.protocol and
             self.protocol.communication_protocol and
-            hasattr(self.protocol.communication_protocol, 'neighbors')):
-            for other_agent in self.protocol.communication_protocol.neighbors:
-                other_obs_dict = other_agent.state.observed_by(self.agent_id, self.level)
-                other_obs = np.concatenate(
-                    list(other_obs_dict.values()), dtype=np.float32
+            self.protocol.communication_protocol.neighbors and
+            proxy is not None
+        ):
+            for other_agent_id in self.protocol.communication_protocol.neighbors:
+                # Request neighbor's state through proxy (applies visibility rules)
+                other_obs_dict = self.request_state_from_proxy(
+                    proxy, owner_id=other_agent_id
                 )
-                obs_vec = np.concatenate([obs_vec, other_obs], dtype=np.float32)
+                if other_obs_dict:
+                    other_obs = np.concatenate(
+                        [np.atleast_1d(v) for v in other_obs_dict.values()],
+                        dtype=np.float32
+                    )
+                    obs_vec = np.concatenate([obs_vec, other_obs], dtype=np.float32)
 
         if obs_vec.size == 0:
             raise ValueError("No observations available for the agent.")
@@ -276,7 +310,12 @@ class FieldAgent(Agent):
     # Synchronous Execution (Option A - Training)
     # ============================================
 
-    def observe(self, global_state: Optional[Dict[str, Any]] = None, *args, **kwargs) -> Observation:
+    def observe(
+        self,
+        global_state: Optional[Dict[str, Any]] = None,
+        proxy: Optional[Agent] = None,
+        **kwargs
+    ) -> Observation:
         """Extract observation from global state. [Both Modes]
 
         - Training (Option A): Called by coordinator to collect observations
@@ -284,7 +323,7 @@ class FieldAgent(Agent):
 
         Args:
             global_state: Complete environment state (optional)
-            *args: Additional positional arguments
+            proxy: Optional ProxyAgent for retrieving neighbor states
             **kwargs: Additional keyword arguments
 
         Returns:
@@ -293,8 +332,8 @@ class FieldAgent(Agent):
         return Observation(
             timestamp=self._timestep,
             local={
-                'state': self.state.vector(),
-                'observation': self._get_obs()
+                OBS_KEY_STATE: self.state.vector(),
+                OBS_KEY_OBSERVATION: self._get_obs(proxy=proxy)
             }
         )
 
@@ -329,7 +368,7 @@ class FieldAgent(Agent):
         self,
         upstream_action: Any,
         observation: Observation
-    ) -> Any:
+    ) -> Action | None:
         """Handle coordinator-directed action. [Both Modes]
 
         Args:
@@ -341,14 +380,14 @@ class FieldAgent(Agent):
         """
         return upstream_action
 
-    def _handle_local_action(self, observation: Observation) -> Any:
+    def _handle_local_action(self, observation: Observation) -> Action | None:
         """Handle self-directed action computation using local policy. [Both Modes]
 
         Args:
             observation: Current observation including messages
 
         Returns:
-            Action computed by local policy
+            Action computed by local policy or None if no action
 
         Raises:
             ValueError: If no policy is defined for self-directed mode
@@ -368,10 +407,10 @@ class FieldAgent(Agent):
 
     def tick(
         self,
-        scheduler: "EventScheduler",
+        scheduler: EventScheduler,
         current_time: float,
         global_state: Optional[Dict[str, Any]] = None,
-        proxy: Optional["Agent"] = None,
+        proxy: Optional[Agent] = None,
     ) -> None:
         """Execute one tick in event-driven mode. [Testing Only]
 
@@ -397,14 +436,14 @@ class FieldAgent(Agent):
             upstream_action = actions[-1]  # Use most recent action
 
         # Get observation (with delay if proxy provided and obs_delay > 0)
-        if proxy is not None and self.obs_delay > 0:
+        if proxy is not None and self._tick_config.obs_delay > 0:
             # Use proxy for delayed observations
-            delayed_time = current_time - self.obs_delay
+            delayed_time = current_time - self._tick_config.obs_delay
             proxy_state = self.request_state_from_proxy(proxy, at_time=delayed_time)
             observation = self._build_observation_from_proxy(proxy_state)
         else:
-            # Direct observation (no delay)
-            observation = self.observe(global_state)
+            # Direct observation (proxy used for neighbor states if available)
+            observation = self.observe(global_state, proxy=proxy)
         self._last_observation = observation
 
         # Compute action (coordinator-directed if upstream provided, else self-directed)
@@ -419,11 +458,11 @@ class FieldAgent(Agent):
         self.action.set_values(action)
 
         # Schedule delayed action effect
-        if self.act_delay > 0:
+        if self._tick_config.act_delay > 0:
             scheduler.schedule_action_effect(
                 agent_id=self.agent_id,
                 action=self.action.vector(),
-                delay=self.act_delay,
+                delay=self._tick_config.act_delay,
             )
 
     def _build_observation_from_proxy(
@@ -442,10 +481,51 @@ class FieldAgent(Agent):
         return Observation(
             timestamp=self._timestep,
             local={
-                'state': self.state.vector(),
-                'proxy_state': proxy_state,
+                OBS_KEY_STATE: self.state.vector(),
+                OBS_KEY_PROXY_STATE: proxy_state,
             }
         )
+
+    # ============================================
+    # Environment Interface Methods (Both Modes)
+    # ============================================
+
+    def update_from_environment(self, env_state: Dict[str, Any]) -> None:
+        """Receive state updates from environment. [Both Modes]
+
+        Called by the environment (or parent CoordinatorAgent) after processing
+        action effects. Updates the agent's state based on simulated results.
+
+        Args:
+            env_state: State updates for this agent.
+                Expected structure varies by domain, e.g.:
+                {
+                    'voltage': 1.02,
+                    'power': 100.0,
+                    ...
+                }
+        """
+        if not env_state:
+            return
+
+        # Update state with environment data
+        self.state.update(env_state)
+
+        # Call subclass hook for additional processing
+        self.update_state(**env_state)
+
+    def get_state_for_environment(self) -> Dict[str, Any]:
+        """Provide current state to environment. [Both Modes]
+
+        Called by the environment to collect agent state and action.
+
+        Returns:
+            Dict containing agent state and pending action
+        """
+        return {
+            'state': self.state.to_dict(),
+            'action': self.action.vector().tolist() if self.action else None
+        }
 
     # ============================================
     # Agent-Specific Methods (Both Modes)
@@ -463,9 +543,10 @@ class FieldAgent(Agent):
         pass
 
     def update_state(self, *args, **kwargs) -> None:
-        """Update agent state. [Both Modes]
+        """Update agent state based on environment feedback. [Both Modes]
 
-        To be implemented by subclasses.
+        Hook for subclasses to implement domain-specific state updates.
+        Called by update_from_environment() after base state update.
 
         Args:
             *args: Positional arguments

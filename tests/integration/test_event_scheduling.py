@@ -57,7 +57,7 @@ class SensorAgent(FieldAgent):
     def set_state(self):
         self.state.features = [MockFeature(value=0.0)]
 
-    def _get_obs(self):
+    def _get_obs(self, proxy=None):
         return self.state.vector()
 
     def tick(self, scheduler, current_time, global_state=None, proxy=None):
@@ -80,7 +80,7 @@ class ControllerAgent(FieldAgent):
     def set_state(self):
         self.state.features = [MockFeature(value=0.0)]
 
-    def _get_obs(self):
+    def _get_obs(self, proxy=None):
         return self.state.vector()
 
     def tick(self, scheduler, current_time, global_state=None, proxy=None):

@@ -11,6 +11,7 @@ from heron.core.state import State, FieldAgentState, SystemAgentState
 from heron.core.feature import FeatureProvider
 from heron.core.policies import Policy
 from heron.protocols.vertical import SetpointProtocol, SystemProtocol
+from heron.scheduling.tick_config import TickConfig
 
 
 class MockFeature(FeatureProvider):
@@ -57,10 +58,10 @@ class MockCoordinator(CoordinatorAgent):
     """Mock coordinator for testing."""
 
     def __init__(self, agent_id, **kwargs):
-        # Skip parent's _build_subordinate_agents by not passing config
+        # Skip parent's _build_subordinates by not passing config
         super().__init__(agent_id=agent_id, config={}, **kwargs)
 
-    def _build_subordinate_agents(self, agent_configs, env_id=None, upstream_id=None):
+    def _build_subordinates(self, configs, env_id=None, upstream_id=None):
         return {}
 
     def get_joint_action_space(self):
@@ -73,9 +74,9 @@ class ConcreteSystemAgent(SystemAgent):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def _build_coordinators(self, coordinator_configs, env_id=None, upstream_id=None):
+    def _build_subordinates(self, configs, env_id=None, upstream_id=None):
         coordinators = {}
-        for config in coordinator_configs:
+        for config in configs:
             coord_id = config.get("id", f"coord_{len(coordinators)}")
             coordinators[coord_id] = MockCoordinator(
                 agent_id=coord_id,
@@ -91,7 +92,7 @@ class SystemAgentWithState(SystemAgent):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def _build_coordinators(self, coordinator_configs, env_id=None, upstream_id=None):
+    def _build_subordinates(self, configs, env_id=None, upstream_id=None):
         return {}
 
     def set_state(self):
@@ -136,18 +137,21 @@ class TestSystemAgentInitialization:
 
     def test_initialization_with_timing_params(self):
         """Test initialization with timing parameters."""
-        system = ConcreteSystemAgent(
-            agent_id="system_1",
+        tick_config = TickConfig(
             tick_interval=600.0,
             obs_delay=5.0,
             act_delay=10.0,
             msg_delay=2.0,
         )
+        system = ConcreteSystemAgent(
+            agent_id="system_1",
+            tick_config=tick_config,
+        )
 
-        assert system.tick_interval == 600.0
-        assert system.obs_delay == 5.0
-        assert system.act_delay == 10.0
-        assert system.msg_delay == 2.0
+        assert system._tick_config.tick_interval == 600.0
+        assert system._tick_config.obs_delay == 5.0
+        assert system._tick_config.act_delay == 10.0
+        assert system._tick_config.msg_delay == 2.0
 
     def test_coordinators_have_correct_upstream(self):
         """Test that coordinators have system as upstream."""
@@ -553,10 +557,9 @@ class TestSystemAgentActionDistribution:
         """Test distribution with dict action passes through."""
         config = {"coordinators": [{"id": "coord_1"}]}
         system = ConcreteSystemAgent(agent_id="system_1", config=config)
-        obs = system.observe()
 
         action = {"coord_1": np.array([0.5])}
-        result = system._distribute_action_to_coordinators(action, obs.local.get("coordinator_obs", {}))
+        result = system._simple_action_distribution(action)
 
         assert result == action
 
@@ -564,10 +567,9 @@ class TestSystemAgentActionDistribution:
         """Test distribution splits array action."""
         config = {"coordinators": [{"id": "coord_1"}, {"id": "coord_2"}]}
         system = ConcreteSystemAgent(agent_id="system_1", config=config)
-        obs = system.observe()
 
         action = np.array([0.1, 0.2, 0.3, 0.4])
-        result = system._distribute_action_to_coordinators(action, obs.local.get("coordinator_obs", {}))
+        result = system._simple_action_distribution(action)
 
         assert "coord_1" in result
         assert "coord_2" in result
@@ -582,19 +584,16 @@ class TestSystemConfig:
 
         assert config.name == "system_agent"
         assert config.state_config == {}
-        assert config.coordinator_build_strategy == "config"
 
     def test_custom_config(self):
         """Test custom SystemConfig values."""
         config = SystemConfig(
             name="my_system",
             state_config={"key": "value"},
-            coordinator_build_strategy="manual"
         )
 
         assert config.name == "my_system"
         assert config.state_config == {"key": "value"}
-        assert config.coordinator_build_strategy == "manual"
 
 
 class TestSystemProtocol:

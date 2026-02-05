@@ -10,7 +10,7 @@ This module provides the fundamental building blocks:
 
 from heron.core.action import Action
 from heron.core.observation import Observation
-from heron.core.state import State, FieldAgentState, CoordinatorAgentState
+from heron.core.state import State, FieldAgentState, CoordinatorAgentState, SystemAgentState
 from heron.core.feature import FeatureProvider
 from heron.core.policies import Policy, RandomPolicy
 
@@ -20,6 +20,7 @@ __all__ = [
     "State",
     "FieldAgentState",
     "CoordinatorAgentState",
+    "SystemAgentState",
     "FeatureProvider",
     "Policy",
     "RandomPolicy",

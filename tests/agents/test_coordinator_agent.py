@@ -9,6 +9,7 @@ from heron.agents.field_agent import FieldAgent
 from heron.core.observation import Observation
 from heron.core.policies import Policy, RandomPolicy
 from heron.core.action import Action
+from heron.scheduling.tick_config import TickConfig
 
 
 class MockFieldAgent(FieldAgent):
@@ -24,7 +25,7 @@ class MockFieldAgent(FieldAgent):
     def set_state(self):
         pass
 
-    def _get_obs(self):
+    def _get_obs(self, proxy=None):
         """Return mock observation vector."""
         return np.array([0.5, 0.5], dtype=np.float32)
 
@@ -49,9 +50,9 @@ class MockPolicy(Policy):
 class ConcreteCoordinatorAgent(CoordinatorAgent):
     """Concrete implementation for testing."""
 
-    def _build_subordinate_agents(self, agent_configs, env_id=None, upstream_id=None):
+    def _build_subordinates(self, configs, env_id=None, upstream_id=None):
         agents = {}
-        for config in agent_configs:
+        for config in configs:
             agent_id = config.get("id", f"agent_{len(agents)}")
             agents[agent_id] = MockFieldAgent(
                 agent_id=agent_id,
@@ -70,7 +71,7 @@ class TestCoordinatorAgentInitialization:
 
         assert coord.agent_id == "coord_1"
         assert coord.level == COORDINATOR_LEVEL
-        assert coord.subordinate_agents == {}
+        assert coord.subordinates == {}
         assert coord.protocol is None
         assert coord.policy is None
 
@@ -88,9 +89,9 @@ class TestCoordinatorAgentInitialization:
             env_id="test_env",
         )
 
-        assert len(coord.subordinate_agents) == 2
-        assert "field_1" in coord.subordinate_agents
-        assert "field_2" in coord.subordinate_agents
+        assert len(coord.subordinates) == 2
+        assert "field_1" in coord.subordinates
+        assert "field_2" in coord.subordinates
 
     def test_initialization_with_policy(self):
         """Test initialization with policy."""
@@ -104,18 +105,21 @@ class TestCoordinatorAgentInitialization:
 
     def test_initialization_with_timing_params(self):
         """Test initialization with timing parameters."""
-        coord = ConcreteCoordinatorAgent(
-            agent_id="coord_1",
+        tick_config = TickConfig(
             tick_interval=120.0,
             obs_delay=1.0,
             act_delay=2.0,
             msg_delay=0.5,
         )
+        coord = ConcreteCoordinatorAgent(
+            agent_id="coord_1",
+            tick_config=tick_config,
+        )
 
-        assert coord.tick_interval == 120.0
-        assert coord.obs_delay == 1.0
-        assert coord.act_delay == 2.0
-        assert coord.msg_delay == 0.5
+        assert coord._tick_config.tick_interval == 120.0
+        assert coord._tick_config.obs_delay == 1.0
+        assert coord._tick_config.act_delay == 2.0
+        assert coord._tick_config.msg_delay == 0.5
 
 
 class TestCoordinatorAgentReset:
@@ -137,12 +141,12 @@ class TestCoordinatorAgentReset:
         coord = ConcreteCoordinatorAgent(agent_id="coord_1", config=config)
 
         # Set timesteps on subordinates
-        for agent in coord.subordinate_agents.values():
+        for agent in coord.subordinates.values():
             agent._timestep = 50.0
 
         coord.reset()
 
-        for agent in coord.subordinate_agents.values():
+        for agent in coord.subordinates.values():
             assert agent._timestep == 0.0
 
     def test_reset_resets_policy(self):
@@ -217,14 +221,14 @@ class TestCoordinatorAgentAct:
         obs = coord.observe()
         coord.act(obs)  # Should use policy
 
-    def test_act_without_action_or_policy_raises(self):
-        """Test that act raises error without action or policy."""
+    def test_act_without_action_or_policy_returns_none(self):
+        """Test that act returns None without action or policy."""
         coord = ConcreteCoordinatorAgent(agent_id="coord_1")
 
         obs = coord.observe()
 
-        with pytest.raises(RuntimeError, match="No action or policy"):
-            coord.act(obs)
+        result = coord.act(obs)
+        assert result is None
 
 
 class TestCoordinatorAgentActionDistribution:
@@ -235,10 +239,9 @@ class TestCoordinatorAgentActionDistribution:
         config = {"agents": [{"id": "field_1"}, {"id": "field_2"}]}
         coord = ConcreteCoordinatorAgent(agent_id="coord_1", config=config)
 
-        obs = coord.observe()
         action = {"field_1": np.array([0.5, 0.5]), "field_2": np.array([0.3, 0.3])}
 
-        result = coord._simple_action_distribution(action, obs.local.get("subordinate_obs", {}))
+        result = coord._simple_action_distribution(action)
 
         assert result == action
 
@@ -247,10 +250,9 @@ class TestCoordinatorAgentActionDistribution:
         config = {"agents": [{"id": "field_1"}, {"id": "field_2"}]}
         coord = ConcreteCoordinatorAgent(agent_id="coord_1", config=config)
 
-        obs = coord.observe()
         action = np.array([0.1, 0.2, 0.3, 0.4])
 
-        result = coord._simple_action_distribution(action, obs.local.get("subordinate_obs", {}))
+        result = coord._simple_action_distribution(action)
 
         assert len(result) == 2
 
@@ -300,7 +302,7 @@ class TestCoordinatorAgentRepr:
 
         repr_str = repr(coord)
 
-        assert "CoordinatorAgent" in repr_str
+        assert "CoordinatorAgent" in repr_str or "ConcreteCoordinatorAgent" in repr_str
         assert "coord_1" in repr_str
         assert "subordinates=1" in repr_str
 

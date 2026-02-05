@@ -39,10 +39,32 @@ class HorizontalProtocol(Protocol):
 # =============================================================================
 
 class TradingCommunicationProtocol(CommunicationProtocol):
-    """P2P market coordination messages."""
+    """P2P market coordination messages.
 
-    def __init__(self, trading_fee: float = 0.01):
+    Attributes:
+        trading_fee: Transaction fee as fraction of trade price
+        demand_field: State field name for net demand (positive=buy, negative=sell)
+        cost_field: State field name for marginal cost
+        default_cost: Default marginal cost when field is missing
+        buy_price_multiplier: Multiplier applied to cost for max buy price
+        sell_price_multiplier: Multiplier applied to cost for min sell price
+    """
+
+    def __init__(
+        self,
+        trading_fee: float = 0.01,
+        demand_field: str = "net_demand",
+        cost_field: str = "marginal_cost",
+        default_cost: float = 50.0,
+        buy_price_multiplier: float = 1.2,
+        sell_price_multiplier: float = 0.8,
+    ):
         self.trading_fee = trading_fee
+        self.demand_field = demand_field
+        self.cost_field = cost_field
+        self.default_cost = default_cost
+        self.buy_price_multiplier = buy_price_multiplier
+        self.sell_price_multiplier = sell_price_multiplier
         self.neighbors = set()
 
     def compute_coordination_messages(
@@ -66,18 +88,18 @@ class TradingCommunicationProtocol(CommunicationProtocol):
                 local = state
             else:
                 local = {}
-            net_demand = local.get('net_demand', 0)
-            marginal_cost = local.get('marginal_cost', 50)
+            net_demand = local.get(self.demand_field, 0)
+            marginal_cost = local.get(self.cost_field, self.default_cost)
 
             if net_demand > 0:  # Need to buy
                 bids[agent_id] = {
                     'quantity': net_demand,
-                    'max_price': marginal_cost * 1.2
+                    'max_price': marginal_cost * self.buy_price_multiplier
                 }
             elif net_demand < 0:  # Can sell
                 offers[agent_id] = {
                     'quantity': -net_demand,
-                    'min_price': marginal_cost * 0.8
+                    'min_price': marginal_cost * self.sell_price_multiplier
                 }
 
         # Step 2: Clear market
@@ -187,16 +209,41 @@ class PeerToPeerTradingProtocol(HorizontalProtocol):
 
     Attributes:
         trading_fee: Transaction fee as fraction of trade price
+        demand_field: State field name for net demand
+        cost_field: State field name for marginal cost
+        default_cost: Default marginal cost when field is missing
+        buy_price_multiplier: Multiplier for max buy price
+        sell_price_multiplier: Multiplier for min sell price
     """
 
-    def __init__(self, trading_fee: float = 0.01):
+    def __init__(
+        self,
+        trading_fee: float = 0.01,
+        demand_field: str = "net_demand",
+        cost_field: str = "marginal_cost",
+        default_cost: float = 50.0,
+        buy_price_multiplier: float = 1.2,
+        sell_price_multiplier: float = 0.8,
+    ):
         """Initialize P2P trading protocol.
 
         Args:
             trading_fee: Transaction fee as fraction of trade price
+            demand_field: State field name for net demand (positive=buy, negative=sell)
+            cost_field: State field name for marginal cost
+            default_cost: Default marginal cost when field is missing
+            buy_price_multiplier: Multiplier applied to cost for max buy price
+            sell_price_multiplier: Multiplier applied to cost for min sell price
         """
         super().__init__(
-            communication_protocol=TradingCommunicationProtocol(trading_fee),
+            communication_protocol=TradingCommunicationProtocol(
+                trading_fee=trading_fee,
+                demand_field=demand_field,
+                cost_field=cost_field,
+                default_cost=default_cost,
+                buy_price_multiplier=buy_price_multiplier,
+                sell_price_multiplier=sell_price_multiplier,
+            ),
             action_protocol=TradingActionProtocol()
         )
 
@@ -210,17 +257,52 @@ class PeerToPeerTradingProtocol(HorizontalProtocol):
         """Set trading fee."""
         self.communication_protocol.trading_fee = value
 
+    @property
+    def demand_field(self):
+        """Get demand field name."""
+        return self.communication_protocol.demand_field
+
+    @demand_field.setter
+    def demand_field(self, value):
+        """Set demand field name."""
+        self.communication_protocol.demand_field = value
+
+    @property
+    def cost_field(self):
+        """Get cost field name."""
+        return self.communication_protocol.cost_field
+
+    @cost_field.setter
+    def cost_field(self, value):
+        """Set cost field name."""
+        self.communication_protocol.cost_field = value
+
 
 # =============================================================================
 # CONSENSUS PROTOCOL
 # =============================================================================
 
 class ConsensusCommunicationProtocol(CommunicationProtocol):
-    """Distributed consensus via gossip algorithm."""
+    """Distributed consensus via gossip algorithm.
 
-    def __init__(self, max_iterations: int = 10, tolerance: float = 0.01):
+    Attributes:
+        max_iterations: Maximum gossip iterations
+        tolerance: Convergence threshold
+        value_field: State field name for the value to reach consensus on
+        default_value: Default value when field is missing
+    """
+
+    def __init__(
+        self,
+        max_iterations: int = 10,
+        tolerance: float = 0.01,
+        value_field: str = "control_value",
+        default_value: float = 0.0,
+    ):
         self.max_iterations = max_iterations
         self.tolerance = tolerance
+        self.value_field = value_field
+        self.default_value = default_value
         self.neighbors = set()
 
     def compute_coordination_messages(
@@ -234,15 +316,15 @@ class ConsensusCommunicationProtocol(CommunicationProtocol):
         topology = context.get("topology")
 
         # Initialize with local values
-        def get_control_value(state):
+        def get_value(state):
             if hasattr(state, 'local'):
-                return state.local.get('control_value', 0)
+                return state.local.get(self.value_field, self.default_value)
             elif hasattr(state, 'get'):
-                return state.get('control_value', 0)
-            return 0
+                return state.get(self.value_field, self.default_value)
+            return self.default_value
 
         values = {
-            agent_id: get_control_value(state)
+            agent_id: get_value(state)
             for agent_id, state in receiver_states.items()
         }
 
@@ -318,17 +400,32 @@ class ConsensusProtocol(HorizontalProtocol):
     Attributes:
         max_iterations: Maximum gossip iterations
         tolerance: Convergence threshold
+        value_field: State field name for the value to reach consensus on
+        default_value: Default value when field is missing
     """
 
-    def __init__(self, max_iterations: int = 10, tolerance: float = 0.01):
+    def __init__(
+        self,
+        max_iterations: int = 10,
+        tolerance: float = 0.01,
+        value_field: str = "control_value",
+        default_value: float = 0.0,
+    ):
         """Initialize consensus protocol.
 
         Args:
             max_iterations: Maximum gossip iterations
             tolerance: Convergence threshold
+            value_field: State field name for the value to reach consensus on
+            default_value: Default value when field is missing
         """
         super().__init__(
-            communication_protocol=ConsensusCommunicationProtocol(max_iterations, tolerance),
+            communication_protocol=ConsensusCommunicationProtocol(
+                max_iterations=max_iterations,
+                tolerance=tolerance,
+                value_field=value_field,
+                default_value=default_value,
+            ),
             action_protocol=ConsensusActionProtocol()
         )
 
@@ -351,6 +448,16 @@ class ConsensusProtocol(HorizontalProtocol):
     def tolerance(self, value):
         """Set tolerance."""
         self.communication_protocol.tolerance = value
+
+    @property
+    def value_field(self):
+        """Get value field name."""
+        return self.communication_protocol.value_field
+
+    @value_field.setter
+    def value_field(self, value):
+        """Set value field name."""
+        self.communication_protocol.value_field = value
 
 
 class NoHorizontalProtocol(HorizontalProtocol):

@@ -10,6 +10,24 @@ from typing import Any, Dict
 import numpy as np
 
 
+# =============================================================================
+# Observation.local key constants
+# =============================================================================
+
+# FieldAgent local keys
+OBS_KEY_STATE = "state"  # Agent's state vector
+OBS_KEY_OBSERVATION = "observation"  # Agent's observation vector
+OBS_KEY_PROXY_STATE = "proxy_state"  # State from proxy (delayed observations)
+
+# CoordinatorAgent local keys
+OBS_KEY_SUBORDINATE_OBS = "subordinate_obs"  # Dict of subordinate observations
+OBS_KEY_COORDINATOR_STATE = "coordinator_state"  # Coordinator's state vector
+
+# SystemAgent local keys
+OBS_KEY_COORDINATOR_OBS = "coordinator_obs"  # Dict of coordinator observations
+OBS_KEY_SYSTEM_STATE = "system_state"  # System agent's state vector
+
+
 @dataclass
 class Observation:
     """Structured observation for an agent.

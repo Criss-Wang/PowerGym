@@ -54,14 +54,14 @@ class SimpleFieldAgent(FieldAgent):
     def set_state(self):
         self.state.features = [SimpleFeature(value=0.0)]
 
-    def _get_obs(self):
+    def _get_obs(self, proxy=None):
         return self.state.vector()
 
 
 class SimpleCoordinator(CoordinatorAgent):
     """Simple coordinator for communication testing."""
 
-    def _build_subordinate_agents(self, agent_configs, env_id=None, upstream_id=None):
+    def _build_subordinates(self, agent_configs, env_id=None, upstream_id=None):
         agents = {}
         for config in agent_configs:
             agent_id = config.get("id")
@@ -132,7 +132,7 @@ class TestHierarchicalCommunication:
 
         # Set up broker for all agents
         coordinator.set_message_broker(broker)
-        for agent in coordinator.subordinate_agents.values():
+        for agent in coordinator.subordinates.values():
             agent.set_message_broker(broker)
 
         # Setup channels
@@ -145,8 +145,8 @@ class TestHierarchicalCommunication:
         coordinator.send_message({"action": -0.3}, recipient_id="device_2")
 
         # Subordinates receive messages
-        msg_1 = coordinator.subordinate_agents["device_1"].receive_messages()
-        msg_2 = coordinator.subordinate_agents["device_2"].receive_messages()
+        msg_1 = coordinator.subordinates["device_1"].receive_messages()
+        msg_2 = coordinator.subordinates["device_2"].receive_messages()
 
         assert len(msg_1) == 1
         assert msg_1[0]["action"] == 0.5

@@ -73,7 +73,7 @@ class BatteryAgent(FieldAgent):
     def set_state(self):
         self.state.features = [DeviceFeature(power=0.0, capacity=self.capacity)]
 
-    def _get_obs(self):
+    def _get_obs(self, proxy=None):
         return np.array([self.charge_level / self.capacity], dtype=np.float32)
 
     def step_physics(self, dt: float = 1.0):
@@ -91,7 +91,7 @@ class BatteryAgent(FieldAgent):
 class MicrogridCoordinator(CoordinatorAgent):
     """Microgrid zone coordinator."""
 
-    def _build_subordinate_agents(self, agent_configs, env_id=None, upstream_id=None):
+    def _build_subordinates(self, agent_configs, env_id=None, upstream_id=None):
         agents = {}
         for config in agent_configs:
             agent_id = config.get("id")
@@ -113,7 +113,7 @@ class GridSystem(SystemAgent):
         self._env_state = {}
         self._total_power = 0.0
 
-    def _build_coordinators(self, coordinator_configs, env_id=None, upstream_id=None):
+    def _build_subordinates(self, coordinator_configs, env_id=None, upstream_id=None):
         coordinators = {}
         for config in coordinator_configs:
             coord_id = config.get("id")
@@ -133,7 +133,7 @@ class GridSystem(SystemAgent):
         # Collect all battery states
         actions = {}
         for coord_id, coord in self.coordinators.items():
-            for agent_id, agent in coord.subordinate_agents.items():
+            for agent_id, agent in coord.subordinates.items():
                 actions[agent_id] = {
                     "power": float(agent.state.features[0].power),
                     "charge": agent.charge_level,
@@ -184,7 +184,7 @@ class MicrogridEnv(MultiAgentEnv):
 
         for coord_id, coordinator in self._grid_system.coordinators.items():
             self.register_agent(coordinator)
-            for agent_id, agent in coordinator.subordinate_agents.items():
+            for agent_id, agent in coordinator.subordinates.items():
                 self.register_agent(agent)
 
     def reset(self, *, seed=None, options=None) -> Tuple[Dict, Dict]:
@@ -246,7 +246,7 @@ class MicrogridEnv(MultiAgentEnv):
 
         # Extract field agent observations
         for coord_id, coord in self.grid_system.coordinators.items():
-            for agent_id, agent in coord.subordinate_agents.items():
+            for agent_id, agent in coord.subordinates.items():
                 agent_obs = agent.observe()
                 obs[agent_id] = agent_obs.vector()
 
@@ -260,7 +260,7 @@ class MicrogridEnv(MultiAgentEnv):
         action_dict = {}
         for coord_id, coord in self.grid_system.coordinators.items():
             coord_actions = {}
-            for agent_id in coord.subordinate_agents:
+            for agent_id in coord.subordinates:
                 if agent_id in actions:
                     coord_actions[agent_id] = actions[agent_id]
             action_dict[coord_id] = coord_actions
@@ -270,7 +270,7 @@ class MicrogridEnv(MultiAgentEnv):
     def _step_physics(self):
         """Step physics for all devices."""
         for coord in self.grid_system.coordinators.values():
-            for agent in coord.subordinate_agents.values():
+            for agent in coord.subordinates.values():
                 if hasattr(agent, 'step_physics'):
                     agent.step_physics()
 
@@ -284,7 +284,7 @@ class MicrogridEnv(MultiAgentEnv):
         base_reward = -power_deficit / 100.0  # Normalize
 
         for coord in self.grid_system.coordinators.values():
-            for agent_id in coord.subordinate_agents:
+            for agent_id in coord.subordinates:
                 rewards[agent_id] = base_reward
 
         return rewards
@@ -293,7 +293,7 @@ class MicrogridEnv(MultiAgentEnv):
         """Get total power from all devices."""
         total = 0.0
         for coord in self.grid_system.coordinators.values():
-            for agent in coord.subordinate_agents.values():
+            for agent in coord.subordinates.values():
                 total += agent.state.features[0].power
         return total
 
@@ -301,7 +301,7 @@ class MicrogridEnv(MultiAgentEnv):
         """Get joint observation space."""
         spaces = {}
         for coord in self.grid_system.coordinators.values():
-            for agent_id, agent in coord.subordinate_agents.items():
+            for agent_id, agent in coord.subordinates.items():
                 spaces[agent_id] = Box(low=-np.inf, high=np.inf, shape=(1,))
         return DictSpace(spaces)
 
@@ -309,7 +309,7 @@ class MicrogridEnv(MultiAgentEnv):
         """Get joint action space."""
         spaces = {}
         for coord in self.grid_system.coordinators.values():
-            for agent_id, agent in coord.subordinate_agents.items():
+            for agent_id, agent in coord.subordinates.items():
                 spaces[agent_id] = agent.action_space
         return DictSpace(spaces)
 
@@ -388,8 +388,8 @@ class TestSynchronousTrainingMode:
         env.step(actions)
 
         # Verify actions reached field agents
-        battery_1 = env.grid_system.coordinators["zone_1"].subordinate_agents["battery_1"]
-        battery_2 = env.grid_system.coordinators["zone_1"].subordinate_agents["battery_2"]
+        battery_1 = env.grid_system.coordinators["zone_1"].subordinates["battery_1"]
+        battery_2 = env.grid_system.coordinators["zone_1"].subordinates["battery_2"]
 
         np.testing.assert_array_almost_equal(battery_1.action.c, [0.8])
         np.testing.assert_array_almost_equal(battery_2.action.c, [-0.5])
@@ -427,8 +427,8 @@ class TestMultipleEnvironments:
         env2.step(actions_2)
 
         # States should be different
-        b1_env1 = env1.grid_system.coordinators["zone_1"].subordinate_agents["battery_1"]
-        b1_env2 = env2.grid_system.coordinators["zone_1"].subordinate_agents["battery_1"]
+        b1_env1 = env1.grid_system.coordinators["zone_1"].subordinates["battery_1"]
+        b1_env2 = env2.grid_system.coordinators["zone_1"].subordinates["battery_1"]
 
         assert b1_env1.charge_level != b1_env2.charge_level
 
@@ -550,7 +550,7 @@ class TestDualModeCompatibility:
             env.step(actions)
 
         # Check state changed
-        battery_1 = env.grid_system.coordinators["zone_1"].subordinate_agents["battery_1"]
+        battery_1 = env.grid_system.coordinators["zone_1"].subordinates["battery_1"]
         assert battery_1.charge_level != 50.0  # Initial was 50
 
     def test_same_hierarchy_in_event_mode(self):
@@ -579,7 +579,7 @@ class TestDualModeCompatibility:
 
         def handler(event, sched):
             if event.agent_id == "battery_1":
-                agent = system.coordinators["zone_1"].subordinate_agents["battery_1"]
+                agent = system.coordinators["zone_1"].subordinates["battery_1"]
                 agent._timestep = event.timestamp
                 obs = agent.observe()
                 observations_made.append({

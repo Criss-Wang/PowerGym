@@ -19,7 +19,7 @@ class CommunicationProtocol(ABC):
     agents exchange coordination signals (prices, bids, consensus values, etc.).
     This is the "coordination signal computation" layer.
     """
-    neighbors: Set["Agent"]  # Neighboring agents that are reachable
+    neighbors: Set[AgentID]  # Neighboring agents that are reachable
 
     @abstractmethod
     def compute_coordination_messages(
@@ -43,11 +43,11 @@ class CommunicationProtocol(ABC):
         """
         pass
 
-    def add_neighbor(self, agent: "Agent") -> None:
+    def add_neighbor(self, agent: AgentID) -> None:
         """Add a neighbor agent."""
         self.neighbors.add(agent)
 
-    def init_neighbors(self, neighbors: List["Agent"]) -> None:
+    def init_neighbors(self, neighbors: List[AgentID]) -> None:
         """Initialize neighbor set."""
         self.neighbors = set(neighbors)
 

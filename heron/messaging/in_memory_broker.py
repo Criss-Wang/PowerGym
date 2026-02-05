@@ -38,7 +38,7 @@ class InMemoryBroker(MessageBroker):
     def __init__(self):
         """Initialize in-memory broker."""
         self.channels: Dict[str, List[Message]] = defaultdict(list)
-        self.subscribers: Dict[str, List[Callable]] = defaultdict(list)
+        self.subscribers: Dict[str, List[Callable[[Message], None]]] = defaultdict(list)
         self.lock = Lock()
 
     def create_channel(self, channel_name: str) -> None:

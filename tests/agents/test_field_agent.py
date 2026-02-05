@@ -10,6 +10,7 @@ from heron.core.action import Action
 from heron.core.policies import Policy
 from heron.core.state import FieldAgentState
 from heron.core.feature import FeatureProvider
+from heron.scheduling.tick_config import TickConfig
 
 
 class MockFeature(FeatureProvider):
@@ -116,18 +117,21 @@ class TestFieldAgentInitialization:
 
     def test_initialization_with_timing_params(self):
         """Test initialization with timing parameters."""
-        agent = ConcreteFieldAgent(
-            agent_id="field_1",
+        tick_config = TickConfig(
             tick_interval=5.0,
             obs_delay=0.5,
             act_delay=1.0,
             msg_delay=0.2,
         )
+        agent = ConcreteFieldAgent(
+            agent_id="field_1",
+            tick_config=tick_config,
+        )
 
-        assert agent.tick_interval == 5.0
-        assert agent.obs_delay == 0.5
-        assert agent.act_delay == 1.0
-        assert agent.msg_delay == 0.2
+        assert agent._tick_config.tick_interval == 5.0
+        assert agent._tick_config.obs_delay == 0.5
+        assert agent._tick_config.act_delay == 1.0
+        assert agent._tick_config.msg_delay == 0.2
 
     def test_initialization_sets_spaces(self):
         """Test that action and observation spaces are set."""
