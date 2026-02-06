@@ -22,6 +22,7 @@ from gymnasium.spaces import Box, Dict, Discrete, MultiDiscrete
 from heron.agents.base import Agent
 from heron.core.observation import Observation
 from heron.core.policies import Policy
+from heron.core.state import State
 from heron.utils.typing import AgentID
 from heron.protocols.base import Protocol
 from heron.scheduling.tick_config import TickConfig
@@ -55,7 +56,7 @@ class HierarchicalAgent(Agent):
 
     # Subclass should set these
     subordinates: DictType[AgentID, Agent]
-    state: Any  # FieldAgentState, CoordinatorAgentState, or SystemAgentState
+    state: State
     protocol: Optional[Protocol]
     policy: Optional[Policy]
 
@@ -252,13 +253,16 @@ class HierarchicalAgent(Agent):
             # No action to distribute
             return None
 
+        # Phase 1: Update action-dependent features for this hierarchical agent
+        self._update_action_features(action, observation)
+
         # Coordinate subordinates using unified method
         self.coordinate_subordinates(observation, action)
 
         return action
 
     # ============================================
-    # Coordination Methods (Training Only)
+    # Coordination Methods
     # ============================================
 
     def coordinate_subordinates(
@@ -406,30 +410,29 @@ class HierarchicalAgent(Agent):
         scheduler: EventScheduler,
         current_time: float,
         global_state: Optional[DictType[str, Any]] = None,
-        proxy: Optional[Agent] = None,
+        proxy: Optional[Agent] = None,  # Unused, kept for API consistency
     ) -> None:
         """Execute one tick in event-driven mode. [Testing Only]
 
-        In Option B, HierarchicalAgent:
-        1. Updates timestep
-        2. Checks message broker for upstream action (if not top-level)
-        3. Gets observation from subordinates
-        4. Computes action using upstream action or policy
-        5. Schedules MESSAGE_DELIVERY events to subordinates with msg_delay
+        Workflow:
+        1. Check message broker for upstream action (if not top-level)
+        2. Get observations from message broker (async, handles partial/stale)
+        3. Compute action using upstream action or policy
+        4. Schedule MESSAGE_DELIVERY events to subordinates with msg_delay
 
         Args:
             scheduler: EventScheduler for scheduling future events
             current_time: Current simulation time
             global_state: Optional global state for observation
-            proxy: Optional ProxyAgent for delayed observations
+            proxy: Unused, kept for API consistency with base class
         """
         self._timestep = current_time
 
         # Check message broker for upstream action (non-top-level agents)
         upstream_action = self._get_upstream_action()
 
-        # Get observation from subordinates (pass proxy for neighbor observations)
-        observation = self.observe(global_state, proxy=proxy)
+        # Get observations from message broker (async mode)
+        observation = self._observe_async(global_state)
         self._last_observation = observation
 
         # Compute action
@@ -440,6 +443,9 @@ class HierarchicalAgent(Agent):
         else:
             # No action to take
             return
+
+        # Phase 1: Update action-dependent features for this hierarchical agent
+        self._update_action_features(action, observation)
 
         # Distribute actions to subordinates via MESSAGE_DELIVERY events
         self._distribute_actions_async(scheduler, observation, action, current_time)
@@ -460,6 +466,51 @@ class HierarchicalAgent(Agent):
         if actions:
             return actions[-1]  # Use most recent action
         return None
+
+    def _observe_async(
+        self,
+        global_state: Optional[DictType[str, Any]] = None,
+    ) -> Observation:
+        """Collect observations from message broker. [Testing Only - Async Mode]
+
+        Reads observations that have arrived from subordinates via the message
+        broker. Missing subordinates use cached observations or empty Observation.
+
+        Args:
+            global_state: Optional global state
+
+        Returns:
+            Aggregated observation (may have partial/stale subordinate data)
+        """
+        # Read observations from broker (whatever has arrived)
+        received_obs = self.receive_observations_from_subordinates()
+
+        # Build subordinate observations dict (fill missing with cached or empty)
+        subordinate_obs = {}
+        for sub_id in self.subordinates:
+            if sub_id in received_obs:
+                # Use newly received observation
+                subordinate_obs[sub_id] = received_obs[sub_id]
+            elif sub_id in self.subordinates_info and 'last_obs' in self.subordinates_info[sub_id]:
+                # Use cached observation (stale)
+                subordinate_obs[sub_id] = self.subordinates_info[sub_id]['last_obs']
+            else:
+                # No observation available - use empty
+                subordinate_obs[sub_id] = Observation(timestamp=self._timestep)
+
+            # Cache for next time
+            if sub_id not in self.subordinates_info:
+                self.subordinates_info[sub_id] = {}
+            self.subordinates_info[sub_id]['last_obs'] = subordinate_obs[sub_id]
+
+        # Build local observation using the standard hook
+        local_observation = self._build_local_observation(subordinate_obs)
+
+        return Observation(
+            timestamp=self._timestep,
+            local=local_observation,
+            global_info=global_state or {},
+        )
 
     def _distribute_actions_async(
         self,

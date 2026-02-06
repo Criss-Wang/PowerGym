@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 from gymnasium.spaces import Box, Discrete
 
-from heron.agents.system_agent import SystemAgent, SYSTEM_LEVEL, SystemConfig
+from heron.agents.system_agent import SystemAgent, SYSTEM_LEVEL
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.core.observation import Observation
 from heron.core.state import State, FieldAgentState, SystemAgentState
@@ -539,12 +539,12 @@ class TestSystemAgentJointActionSpace:
         assert isinstance(space, Box)
         assert space.shape == (4,)
 
-    def test_get_coordinator_action_spaces(self):
+    def test_get_subordinate_action_spaces(self):
         """Test getting individual coordinator action spaces."""
         config = {"coordinators": [{"id": "coord_1"}]}
         system = ConcreteSystemAgent(agent_id="system_1", config=config)
 
-        spaces = system.get_coordinator_action_spaces()
+        spaces = system.get_subordinate_action_spaces()
 
         assert "coord_1" in spaces
         assert isinstance(spaces["coord_1"], Box)
@@ -573,27 +573,6 @@ class TestSystemAgentActionDistribution:
 
         assert "coord_1" in result
         assert "coord_2" in result
-
-
-class TestSystemConfig:
-    """Test SystemConfig dataclass."""
-
-    def test_default_config(self):
-        """Test default SystemConfig values."""
-        config = SystemConfig()
-
-        assert config.name == "system_agent"
-        assert config.state_config == {}
-
-    def test_custom_config(self):
-        """Test custom SystemConfig values."""
-        config = SystemConfig(
-            name="my_system",
-            state_config={"key": "value"},
-        )
-
-        assert config.name == "my_system"
-        assert config.state_config == {"key": "value"}
 
 
 class TestSystemProtocol:

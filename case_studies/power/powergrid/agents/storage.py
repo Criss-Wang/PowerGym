@@ -6,6 +6,7 @@ import numpy as np
 from powergrid.agents.device_agent import DeviceAgent
 from heron.core.policies import Policy
 from heron.protocols.base import NoProtocol, Protocol
+from heron.scheduling.tick_config import TickConfig
 from powergrid.core.features.electrical import ElectricalBasePh
 from powergrid.core.features.power_limits import PowerLimits
 from powergrid.core.features.status import StatusBlock
@@ -93,11 +94,8 @@ class ESS(DeviceAgent):
         upstream_id: Optional[str] = None,
         env_id: Optional[str] = None,
         device_config: Dict[str, Any],
-        # timing params (for event-driven scheduling)
-        tick_interval: float = 1.0,
-        obs_delay: float = 0.0,
-        act_delay: float = 0.0,
-        msg_delay: float = 0.0,
+        # timing config (for event-driven scheduling)
+        tick_config: Optional[TickConfig] = None,
     ):
         config = device_config.get("device_state_config", {})
 
@@ -137,13 +135,10 @@ class ESS(DeviceAgent):
             upstream_id=upstream_id,
             env_id=env_id,
             device_config=device_config,
-            tick_interval=tick_interval,
-            obs_delay=obs_delay,
-            act_delay=act_delay,
-            msg_delay=msg_delay,
+            tick_config=tick_config,
         )
 
-    def set_device_action(self) -> None:
+    def set_action(self) -> None:
         """
         Define Action:
             - c[0]: P_MW in [p_min_MW, p_max_MW]
@@ -172,11 +167,11 @@ class ESS(DeviceAgent):
             ),
         )
 
-    def set_device_state(self) -> None:
+    def set_state(self) -> None:
         cfg = self._storage_config
 
         # Electrical telemetry
-        eletrical_telemetry = ElectricalBasePh(
+        electrical_telemetry = ElectricalBasePh(
             phase_model=self.phase_model,
             phase_spec=self.phase_spec,
             P_MW=0.0,
@@ -202,7 +197,7 @@ class ESS(DeviceAgent):
             visibility=["owner"],
         )
 
-        self.state.features = [eletrical_telemetry, storage_block]
+        self.state.features = [electrical_telemetry, storage_block]
         self.state.owner_id = self.agent_id
         self.state.owner_level = self.level
 
@@ -221,7 +216,7 @@ class ESS(DeviceAgent):
             )
             self.state.features.append(power_limits)
 
-    def reset_device(self, **kwargs) -> None:
+    def reset_agent(self, **kwargs) -> None:
         """Reset ESS to a neutral operating point.
 
         Args:

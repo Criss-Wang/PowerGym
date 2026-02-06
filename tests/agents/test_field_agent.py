@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 from gymnasium.spaces import Box
 
-from heron.agents.field_agent import FieldAgent, FieldConfig, FIELD_LEVEL
+from heron.agents.field_agent import FieldAgent, FIELD_LEVEL
 from heron.core.observation import Observation
 from heron.core.action import Action
 from heron.core.policies import Policy
@@ -65,24 +65,6 @@ class ConcreteFieldAgent(FieldAgent):
         self.state.features = [MockFeature(value=1.0)]
 
 
-class TestFieldConfig:
-    """Test FieldConfig dataclass."""
-
-    def test_field_config_creation(self):
-        """Test FieldConfig creation."""
-        config = FieldConfig(
-            name="test_agent",
-            state_config={"key": "value"},
-            discrete_action=False,
-            discrete_action_cats=2,
-        )
-
-        assert config.name == "test_agent"
-        assert config.state_config == {"key": "value"}
-        assert config.discrete_action is False
-        assert config.discrete_action_cats == 2
-
-
 class TestFieldAgentInitialization:
     """Test FieldAgent initialization."""
 
@@ -95,18 +77,12 @@ class TestFieldAgentInitialization:
         assert isinstance(agent.state, FieldAgentState)
         assert isinstance(agent.action, Action)
 
-    def test_initialization_with_config(self):
-        """Test initialization with config."""
-        config = {
-            "name": "battery",
-            "state_config": {"capacity": 100},
-            "discrete_action": False,
-            "discrete_action_cats": 3,
-        }
-        agent = ConcreteFieldAgent(agent_id="field_1", config=config)
+    def test_initialization_with_config_name_fallback(self):
+        """Test agent_id falls back to config name when not provided."""
+        config = {"name": "battery"}
+        agent = ConcreteFieldAgent(config=config)
 
-        assert agent.field_config.name == "battery"
-        assert agent.field_config.discrete_action is False
+        assert agent.agent_id == "battery"
 
     def test_initialization_with_policy(self):
         """Test initialization with policy."""
@@ -289,6 +265,128 @@ class TestFieldAgentRepr:
 
         assert "FieldAgent" in repr_str
         assert "field_1" in repr_str
+
+
+# =============================================================================
+# Observation Tests for tick() in event-driven mode
+# =============================================================================
+
+class TestFieldAgentAsyncTick:
+    """Test FieldAgent tick() observation behavior.
+
+    These tests verify that subordinates push their observations to the
+    upstream coordinator via message broker when upstream_id is set.
+    """
+
+    def test_tick_sends_observation_when_has_upstream(self):
+        """Test tick sends observation to upstream when upstream_id is set."""
+        from heron.messaging.in_memory_broker import InMemoryBroker
+        from heron.scheduling import EventScheduler
+        from heron.messaging.base import ChannelManager
+
+        broker = InMemoryBroker()
+        scheduler = EventScheduler(start_time=0.0)
+        policy = MockPolicy(action_value=np.array([0.5, 0.5]))
+
+        agent = ConcreteFieldAgent(
+            agent_id="field_1",
+            env_id="test_env",
+            upstream_id="coord_1",
+            policy=policy
+        )
+        agent.set_message_broker(broker)
+
+        # Execute tick
+        agent.tick(scheduler, current_time=1.0)
+
+        # Check observation message was sent
+        obs_channel = ChannelManager.observation_channel(
+            node_id="field_1",
+            upstream_id="coord_1",
+            env_id="test_env"
+        )
+        messages = broker.consume(obs_channel, "coord_1", "test_env", clear=False)
+        assert len(messages) == 1
+
+        # Verify observation content
+        msg = messages[0]
+        assert "observation" in msg.payload
+        obs_data = msg.payload["observation"]
+        assert "timestamp" in obs_data
+        assert "local" in obs_data
+
+    def test_tick_no_upstream_no_observation_sent(self):
+        """Test tick without upstream doesn't send observation."""
+        from heron.messaging.in_memory_broker import InMemoryBroker
+        from heron.scheduling import EventScheduler
+
+        broker = InMemoryBroker()
+        scheduler = EventScheduler(start_time=0.0)
+        policy = MockPolicy(action_value=np.array([0.5, 0.5]))
+
+        agent = ConcreteFieldAgent(
+            agent_id="field_1",
+            env_id="test_env",
+            policy=policy
+            # No upstream_id
+        )
+        agent.set_message_broker(broker)
+
+        # Should not raise
+        agent.tick(scheduler, current_time=1.0)
+
+    def test_tick_no_broker_no_error(self):
+        """Test tick without broker doesn't raise."""
+        from heron.scheduling import EventScheduler
+
+        scheduler = EventScheduler(start_time=0.0)
+        policy = MockPolicy(action_value=np.array([0.5, 0.5]))
+
+        agent = ConcreteFieldAgent(
+            agent_id="field_1",
+            env_id="test_env",
+            upstream_id="coord_1",
+            policy=policy
+        )
+        # No broker set
+
+        # Should not raise
+        agent.tick(scheduler, current_time=1.0)
+
+    def test_tick_observation_has_state(self):
+        """Test that observation sent contains state data."""
+        from heron.messaging.in_memory_broker import InMemoryBroker
+        from heron.scheduling import EventScheduler
+        from heron.messaging.base import ChannelManager
+        from heron.core.observation import Observation
+
+        broker = InMemoryBroker()
+        scheduler = EventScheduler(start_time=0.0)
+        policy = MockPolicy(action_value=np.array([0.5, 0.5]))
+
+        agent = ConcreteFieldAgent(
+            agent_id="field_1",
+            env_id="test_env",
+            upstream_id="coord_1",
+            policy=policy
+        )
+        agent.set_message_broker(broker)
+
+        # Execute tick
+        agent.tick(scheduler, current_time=5.0)
+
+        # Consume and reconstruct observation
+        obs_channel = ChannelManager.observation_channel(
+            node_id="field_1",
+            upstream_id="coord_1",
+            env_id="test_env"
+        )
+        messages = broker.consume(obs_channel, "coord_1", "test_env")
+        obs = Observation.from_dict(messages[0].payload["observation"])
+
+        # Verify observation has expected fields
+        assert obs.timestamp == 5.0
+        assert "state" in obs.local or "observation" in obs.local
 
 
 if __name__ == "__main__":

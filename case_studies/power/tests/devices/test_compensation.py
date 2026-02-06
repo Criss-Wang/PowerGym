@@ -109,7 +109,7 @@ class TestShunt:
         )
 
         # Initialize
-        shunt.reset_device()
+        shunt.reset_agent()
         shunt.action.d = np.array([0], dtype=np.int32)
         shunt.update_state()
         shunt.update_cost_safety()
@@ -127,7 +127,7 @@ class TestShunt:
         )
 
         # Initialize at step 0
-        shunt.reset_device()
+        shunt.reset_agent()
         shunt._last_step = 0
 
         # Change to step 1
@@ -153,7 +153,7 @@ class TestShunt:
         shunt.cost = 100.0
 
         # Reset
-        shunt.reset_device()
+        shunt.reset_agent()
 
         # Check reset state
         step_state = shunt._get_step_state()
@@ -214,7 +214,7 @@ class TestShunt:
             device_config=make_shunt_config(max_step=3, switching_cost=10.0)
         )
 
-        shunt.reset_device()
+        shunt.reset_agent()
 
         # Step 0 -> 1: should cost
         shunt.action.d = np.array([1])

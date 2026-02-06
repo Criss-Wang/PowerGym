@@ -12,7 +12,7 @@ from typing import Dict, Any, Tuple
 import gymnasium as gym
 from gymnasium.spaces import Box, Dict as DictSpace
 
-from heron.envs.base import MultiAgentEnv, HeronEnvCore
+from heron.envs.base import MultiAgentEnv, EnvCore
 from heron.agents.field_agent import FieldAgent, FIELD_LEVEL
 from heron.agents.coordinator_agent import CoordinatorAgent, COORDINATOR_LEVEL
 from heron.agents.system_agent import SystemAgent, SYSTEM_LEVEL
@@ -445,7 +445,7 @@ class TestMessageBrokerIntegration:
         env.configure_agents_for_distributed()
 
         # All agents should have broker
-        for agent in env.heron_agents.values():
+        for agent in env.registered_agents.values():
             assert agent.message_broker is not None
             assert agent.message_broker is env.message_broker
 

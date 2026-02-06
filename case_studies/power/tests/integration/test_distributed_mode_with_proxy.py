@@ -17,7 +17,7 @@ import pandapower as pp
 from powergrid.envs.multi_agent_microgrids import MultiAgentMicrogrids
 from powergrid.setups.loader import load_setup
 from heron.messaging.base import ChannelManager
-from powergrid.agents.proxy_agent import ProxyAgent
+from heron.agents.proxy_agent import ProxyAgent
 
 
 class TestDistributedModeWithProxy:

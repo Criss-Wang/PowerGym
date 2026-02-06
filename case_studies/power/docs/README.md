@@ -36,13 +36,23 @@ This case study demonstrates HERON applied to power systems with multi-agent mic
 
 This case study fully integrates with the HERON multi-agent framework:
 
-### 3-Level Agent Hierarchy
+### Agent Hierarchy
+
+HERON provides a 4-level agent hierarchy with the `ProxyAgent` for state distribution:
 
 ```
+ProxyAgent (Level 0) - State distribution and visibility filtering
+    ↓ provides filtered state
 SystemAgent (Level 3) - DSO / System Coordinator
     └── CoordinatorAgent / PowerGridAgent (Level 2) - Microgrid Controllers
             └── FieldAgent / DeviceAgent (Level 1) - Generators, ESS, etc.
 ```
+
+**Key Inheritance:**
+- `Agent` (ABC) → `FieldAgent` (L1) → `DeviceAgent` → `Generator`, `ESS`, `Transformer`
+- `Agent` (ABC) → `HierarchicalAgent` → `CoordinatorAgent` (L2) → `GridAgent` → `PowerGridAgent`
+- `Agent` (ABC) → `HierarchicalAgent` → `SystemAgent` (L3) → DSO Agent
+- `ProxyAgent` (L0) - Standalone for state distribution
 
 ### Execution Modes
 
@@ -51,14 +61,32 @@ SystemAgent (Level 3) - DSO / System Coordinator
 | **Option A (Synchronous)** | ✓ Used for CTDE training | - |
 | **Option B (Event-Driven)** | - | ✓ Used for robustness testing |
 
-### Timing Parameters
+### Timing via TickConfig
 
-All agents support configurable timing for realistic simulation:
+All agents support configurable timing via `TickConfig` for realistic simulation:
 
-- `tick_interval`: How often an agent steps (e.g., 1s for devices, 60s for grid)
-- `obs_delay`: Observation latency (agent sees state from t - obs_delay)
-- `act_delay`: Action effect delay (action takes effect at t + act_delay)
-- `msg_delay`: Communication latency (messages arrive after msg_delay)
+```python
+from heron.scheduling import TickConfig, JitterType
+
+# Deterministic timing (training)
+config = TickConfig.deterministic(
+    tick_interval=1.0,   # How often agent steps
+    obs_delay=0.0,       # Observation latency
+    act_delay=0.0,       # Action effect delay
+    msg_delay=0.0        # Communication latency
+)
+
+# Realistic timing with jitter (testing)
+config = TickConfig.with_jitter(
+    tick_interval=60.0,
+    obs_delay=1.0,
+    act_delay=2.0,
+    msg_delay=0.5,
+    jitter_type=JitterType.GAUSSIAN,
+    jitter_ratio=0.2,  # 20% variance
+    seed=42
+)
+```
 
 ---
 
@@ -68,28 +96,28 @@ All agents support configurable timing for realistic simulation:
 case_studies/power/
 ├── powergrid/                  # Python package
 │   ├── agents/                 # Power-specific agents (extends HERON)
-│   │   ├── power_grid_agent.py # CoordinatorAgent with PandaPower integration
 │   │   ├── device_agent.py     # FieldAgent base for power devices
-│   │   ├── generator.py        # Dispatchable generator device
-│   │   ├── storage.py          # Energy storage system (ESS)
-│   │   └── proxy_agent.py      # ProxyAgent for distributed mode
+│   │   ├── generator.py        # Dispatchable generator (extends DeviceAgent)
+│   │   ├── storage.py          # Energy storage system (extends DeviceAgent)
+│   │   ├── grid_agent.py       # CoordinatorAgent base for grid control
+│   │   └── power_grid_agent.py # GridAgent with PandaPower integration
 │   │
 │   ├── core/                   # Extensions to heron.core
-│   │   ├── features/           # Power-specific features
+│   │   ├── features/           # Power-specific FeatureProviders
 │   │   │   ├── electrical.py   # P, Q, voltage features
 │   │   │   ├── network.py      # Bus voltages, line flows
 │   │   │   ├── storage.py      # SOC, energy capacity
 │   │   │   └── power_limits.py # Power limit features
 │   │   │
-│   │   └── state/              # Power-specific state
-│   │       └── state.py        # Device and grid state classes
+│   │   └── state/              # Power-specific state classes
+│   │       └── state.py        # DeviceState, GridState
 │   │
 │   ├── networks/               # IEEE/CIGRE test networks
 │   │   ├── ieee13.py           # IEEE 13-bus feeder
 │   │   ├── ieee34.py           # IEEE 34-bus feeder
 │   │   └── ieee123.py          # IEEE 123-bus feeder
 │   │
-│   ├── envs/                   # Power environments
+│   ├── envs/                   # Power environments (extends HeronEnvCore)
 │   │   ├── networked_grid_env.py      # Base (extends PettingZooParallelEnv)
 │   │   └── multi_agent_microgrids.py  # Multi-microgrid environment
 │   │
@@ -109,6 +137,20 @@ case_studies/power/
 │
 └── tests/                      # Power grid tests
 ```
+
+### HERON Classes Used
+
+| HERON Class | Power Extension | Purpose |
+|-------------|-----------------|---------|
+| `FeatureProvider` | `ElectricalBasePh`, `StorageBlock`, `BusVoltages` | Observable state attributes |
+| `FieldAgentState` | `DeviceState` | Device state container |
+| `CoordinatorAgentState` | `GridState` | Grid-level state |
+| `FieldAgent` | `DeviceAgent` | Base for power devices |
+| `CoordinatorAgent` | `GridAgent` | Microgrid coordinator |
+| `PettingZooParallelEnv` | `NetworkedGridEnv` | Multi-agent environment |
+| `SetpointProtocol` | - | Direct power setpoint control |
+| `EventScheduler` | - | Event-driven simulation |
+| `TickConfig` | - | Agent timing configuration |
 
 ---
 
@@ -289,6 +331,7 @@ from powergrid.envs.networked_grid_env import NetworkedGridEnv
 from powergrid.agents.power_grid_agent import PowerGridAgent
 from powergrid.networks.ieee13 import IEEE13Bus
 from heron.protocols.vertical import SetpointProtocol
+from heron.scheduling import TickConfig, JitterType
 
 
 class MyPowerGridEnv(NetworkedGridEnv):
@@ -329,13 +372,19 @@ class MyPowerGridEnv(NetworkedGridEnv):
                 ],
             },
             protocol=SetpointProtocol(),
-            # HERON timing parameters
-            tick_interval=60.0,
-            obs_delay=1.0,
-            act_delay=2.0,
-            msg_delay=0.5,
+            # HERON timing via TickConfig
+            tick_config=TickConfig.with_jitter(
+                tick_interval=60.0,
+                obs_delay=1.0,
+                act_delay=2.0,
+                msg_delay=0.5,
+                jitter_type=JitterType.GAUSSIAN,
+                jitter_ratio=0.1
+            ),
         )
 
+        # Register agent with HERON environment
+        self.register_agent(mg_agent)
         self.agent_dict = {"MG1": mg_agent}
         return net
 
@@ -361,6 +410,7 @@ The repository includes standard IEEE test systems:
 
 ## Further Reading
 
-- [HERON Framework Documentation](../../docs/)
-- [HERON Integration Guide](docs/HERON_INTEGRATION.md)
+- [HERON Framework Documentation](../../../docs/)
+- [HERON Integration Guide](./HERON_INTEGRATION.md)
+- [Build from Scratch Guide](./BUILD_FROM_SCRATCH.md)
 - [PandaPower Documentation](https://pandapower.readthedocs.io/)

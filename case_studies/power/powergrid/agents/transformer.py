@@ -5,10 +5,10 @@ from powergrid.agents.device_agent import DeviceAgent
 from heron.protocols.base import NoProtocol, Protocol
 from heron.core.policies import Policy
 from powergrid.core.features.tap_changer import TapChangerPh
-from heron.messaging.base import MessageBroker
 from powergrid.utils.cost import tap_change_cost
 from powergrid.utils.safety import loading_over_pct
 from heron.utils.typing import AgentID
+from heron.scheduling.tick_config import TickConfig
 
 
 @dataclass
@@ -35,10 +35,10 @@ class Transformer(DeviceAgent):
         agent_id: Optional[AgentID] = None,
         policy: Optional[Policy] = None,
         protocol: Protocol = NoProtocol(),
-        message_broker: Optional[MessageBroker] = None,
         upstream_id: Optional[AgentID] = None,
         env_id: Optional[str] = None,
         device_config: Dict[str, Any] = {},
+        tick_config: Optional[TickConfig] = None,
     ) -> None:
         """Initialize Transformer agent.
 
@@ -46,10 +46,10 @@ class Transformer(DeviceAgent):
             agent_id: Agent ID (defaults to name from config)
             policy: Decision policy (optional)
             protocol: Communication protocol (defaults to NoProtocol)
-            message_broker: Optional message broker for hierarchical execution
             upstream_id: Optional upstream agent ID for hierarchical execution
             env_id: Optional environment ID for multi-environment isolation
             device_config: Device configuration dict
+            tick_config: Timing configuration for event-driven scheduling
         """
         state_config = device_config.get("device_state_config", {})
 
@@ -68,13 +68,13 @@ class Transformer(DeviceAgent):
             agent_id=agent_id or self._transformer_config.name,
             policy=policy,
             protocol=protocol,
-            message_broker=message_broker,
             upstream_id=upstream_id,
             env_id=env_id,
             device_config=device_config,
+            tick_config=tick_config,
         )
 
-    def set_device_action(self) -> None:
+    def set_action(self) -> None:
         """Define discrete action for tap position selection."""
         cfg = self._transformer_config
         if cfg.tap_max is not None and cfg.tap_min is not None:
@@ -84,7 +84,7 @@ class Transformer(DeviceAgent):
                 ncats=cfg.tap_max - cfg.tap_min + 1,
             )
 
-    def set_device_state(self) -> None:
+    def set_state(self) -> None:
         """Define device state with tap changer block."""
         cfg = self._transformer_config
         tap_changer = TapChangerPh(
@@ -96,7 +96,7 @@ class Transformer(DeviceAgent):
         self.state.owner_id = self.agent_id
         self.state.owner_level = self.level
 
-    def reset_device(self, **kwargs) -> None:
+    def reset_agent(self, **kwargs) -> None:
         """Reset transformer to initial tap position.
 
         Args:

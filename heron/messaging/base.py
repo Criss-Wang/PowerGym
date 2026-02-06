@@ -268,6 +268,24 @@ class ChannelManager:
         return f"env_{env_id}__info__{node_id}_to_{upstream_id}"
 
     @staticmethod
+    def observation_channel(node_id: str, upstream_id: str, env_id: str = "default") -> str:
+        """Generate observation channel for child->parent observation delivery.
+
+        Used in fully async event-driven mode (Option B with async_observations=True)
+        where subordinates push observations to coordinators instead of coordinators
+        pulling them via direct method calls.
+
+        Args:
+            node_id: Child agent ID (observation sender)
+            upstream_id: Parent agent ID (observation receiver)
+            env_id: Environment ID
+
+        Returns:
+            Channel name string
+        """
+        return f"env_{env_id}__observation__{node_id}_to_{upstream_id}"
+
+    @staticmethod
     def broadcast_channel(agent_id: str, env_id: str = "default") -> str:
         """Generate broadcast channel name for agent broadcasts.
 
@@ -327,7 +345,8 @@ class ChannelManager:
         agent_id: str,
         upstream_id: Optional[str],
         subordinate_ids: List[str],
-        env_id: str = "default"
+        env_id: str = "default",
+        async_observations: bool = False,
     ) -> Dict[str, List[str]]:
         """Get all channels for an agent (subscribe and publish).
 
@@ -336,6 +355,8 @@ class ChannelManager:
             upstream_id: Parent agent ID (if any)
             subordinate_ids: List of subordinate agent IDs
             env_id: Environment identifier
+            async_observations: If True, include observation channels for
+                fully async mode where subordinates push observations
 
         Returns:
             Dict with 'subscribe' and 'publish' channel lists
@@ -355,10 +376,23 @@ class ChannelManager:
                 ChannelManager.info_channel(sub_id, agent_id, env_id)
             )
 
+        # Subscribe to observations from subordinates (async mode)
+        if async_observations:
+            for sub_id in subordinate_ids:
+                subscribe_channels.append(
+                    ChannelManager.observation_channel(sub_id, agent_id, env_id)
+                )
+
         # Publish info to parent
         if upstream_id:
             publish_channels.append(
                 ChannelManager.info_channel(agent_id, upstream_id, env_id)
+            )
+
+        # Publish observations to parent (async mode)
+        if async_observations and upstream_id:
+            publish_channels.append(
+                ChannelManager.observation_channel(agent_id, upstream_id, env_id)
             )
 
         # Publish actions to subordinates

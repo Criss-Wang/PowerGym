@@ -16,9 +16,11 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from heron.core.feature import FeatureProvider
+from heron.utils.registry import provider
 
 
-@dataclass
+@provider()
+@dataclass(slots=True)
 class SystemFrequency(FeatureProvider):
     """System frequency feature for power grid.
 
@@ -35,7 +37,7 @@ class SystemFrequency(FeatureProvider):
         array([59.95, -0.05], dtype=float32)
     """
 
-    visibility = ["system", "upper_level"]
+    visibility: List[str] = field(default_factory=lambda: ["system", "upper_level"])
 
     frequency_hz: float = 60.0
     nominal_hz: float = 60.0
@@ -77,7 +79,8 @@ class SystemFrequency(FeatureProvider):
         return self
 
 
-@dataclass
+@provider()
+@dataclass(slots=True)
 class AggregateGeneration(FeatureProvider):
     """Aggregate generation across all areas/grids.
 
@@ -94,7 +97,7 @@ class AggregateGeneration(FeatureProvider):
         array([1500., 300., 0.], dtype=float32)
     """
 
-    visibility = ["system"]
+    visibility: List[str] = field(default_factory=lambda: ["system"])
 
     total_mw: float = 0.0
     total_mvar: float = 0.0
@@ -145,7 +148,8 @@ class AggregateGeneration(FeatureProvider):
         return self
 
 
-@dataclass
+@provider()
+@dataclass(slots=True)
 class AggregateLoad(FeatureProvider):
     """Aggregate load across all areas/grids.
 
@@ -162,7 +166,7 @@ class AggregateLoad(FeatureProvider):
         array([1400., 280., 0.], dtype=float32)
     """
 
-    visibility = ["system"]
+    visibility: List[str] = field(default_factory=lambda: ["system"])
 
     total_mw: float = 0.0
     total_mvar: float = 0.0
@@ -213,7 +217,8 @@ class AggregateLoad(FeatureProvider):
         return self
 
 
-@dataclass
+@provider()
+@dataclass(slots=True)
 class InterAreaFlows(FeatureProvider):
     """Power flows between interconnected areas.
 
@@ -234,7 +239,7 @@ class InterAreaFlows(FeatureProvider):
         array([100., -50., 200., 200.], dtype=float32)
     """
 
-    visibility = ["system"]
+    visibility: List[str] = field(default_factory=lambda: ["system"])
 
     flows_mw: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.float32))
     limits_mw: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.float32))
@@ -289,7 +294,8 @@ class InterAreaFlows(FeatureProvider):
         return self
 
 
-@dataclass
+@provider()
+@dataclass(slots=True)
 class SystemImbalance(FeatureProvider):
     """System power imbalance (generation - load - losses).
 
@@ -306,7 +312,7 @@ class SystemImbalance(FeatureProvider):
         array([10., 5., 0.], dtype=float32)
     """
 
-    visibility = ["system", "upper_level"]
+    visibility: List[str] = field(default_factory=lambda: ["system", "upper_level"])
 
     imbalance_mw: float = 0.0
     ace_mw: float = 0.0

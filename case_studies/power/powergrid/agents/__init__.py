@@ -9,7 +9,12 @@ from powergrid.agents.generator import Generator
 from powergrid.agents.storage import ESS
 from powergrid.agents.power_grid_agent import GridAgent, PowerGridAgent
 from powergrid.agents.grid_system_agent import GridSystemAgent
-from powergrid.agents.proxy_agent import ProxyAgent
+
+# Import ProxyAgent from heron (no custom implementation needed)
+from heron.agents.proxy_agent import ProxyAgent, PROXY_LEVEL
+
+# Power grid uses "power_flow" as the channel type for power flow results
+POWER_FLOW_CHANNEL_TYPE = "power_flow"
 
 __all__ = [
     "DeviceAgent",
@@ -19,4 +24,6 @@ __all__ = [
     "PowerGridAgent",
     "GridSystemAgent",
     "ProxyAgent",
+    "PROXY_LEVEL",
+    "POWER_FLOW_CHANNEL_TYPE",
 ]

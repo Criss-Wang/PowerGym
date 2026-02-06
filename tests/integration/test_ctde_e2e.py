@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import gymnasium as gym
 from gymnasium.spaces import Box, Dict as DictSpace
 
-from heron.envs.base import MultiAgentEnv, HeronEnvCore
+from heron.envs.base import MultiAgentEnv, EnvCore
 from heron.agents.field_agent import FieldAgent, FIELD_LEVEL
 from heron.agents.coordinator_agent import CoordinatorAgent, COORDINATOR_LEVEL
 from heron.agents.system_agent import SystemAgent, SYSTEM_LEVEL
@@ -516,7 +516,7 @@ class GridMicrogridEnv(MultiAgentEnv):
 
     def _setup_proxy_agent(self):
         """Setup proxy agent for state distribution."""
-        all_agent_ids = list(self.heron_agents.keys())
+        all_agent_ids = list(self.registered_agents.keys())
         self._proxy_agent = ProxyAgent(
             agent_id="proxy",
             env_id=self.env_id,
@@ -900,7 +900,7 @@ class TestEventDrivenTestingMode:
         scheduler = EventScheduler(start_time=0.0)
 
         # Register all agents with their tick intervals
-        for agent_id, agent in env.heron_agents.items():
+        for agent_id, agent in env.registered_agents.items():
             if agent_id != "proxy":  # Skip proxy
                 scheduler.register_agent(
                     agent_id=agent_id,
@@ -910,7 +910,7 @@ class TestEventDrivenTestingMode:
                 )
 
         # Track ticks per agent
-        tick_counts = {agent_id: 0 for agent_id in env.heron_agents.keys() if agent_id != "proxy"}
+        tick_counts = {agent_id: 0 for agent_id in env.registered_agents.keys() if agent_id != "proxy"}
 
         def tick_handler(event, sched):
             if event.agent_id in tick_counts:
@@ -1486,7 +1486,7 @@ class TestComprehensiveAgentProperties:
 
         # State management
         proxy.update_state({"agents": {"agent_1": {"feature_a": 1.0, "feature_b": 2.0}}})
-        filtered = proxy.get_latest_state_for_agent("agent_1")
+        filtered = proxy.get_state_for_agent("agent_1", requestor_level=1)
         assert "feature_a" in filtered
         assert "feature_b" not in filtered  # Not in visibility rules
 

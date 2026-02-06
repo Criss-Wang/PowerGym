@@ -26,7 +26,8 @@ from powergrid.agents.transformer import Transformer, TransformerConfig
 
 # Grid Agents
 from powergrid.agents.power_grid_agent import GridAgent, PowerGridAgent
-from powergrid.agents.proxy_agent import ProxyAgent
+from heron.agents.proxy_agent import ProxyAgent, PROXY_LEVEL
+from powergrid.agents import POWER_FLOW_CHANNEL_TYPE
 
 # Environments
 from powergrid.envs.networked_grid_env import NetworkedGridEnv
@@ -59,6 +60,8 @@ __all__ = [
     "GridAgent",
     "PowerGridAgent",
     "ProxyAgent",
+    "PROXY_LEVEL",
+    "POWER_FLOW_CHANNEL_TYPE",
     # Environments
     "NetworkedGridEnv",
     "MultiAgentMicrogrids",

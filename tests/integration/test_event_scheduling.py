@@ -46,8 +46,11 @@ class MockFeature(FeatureProvider):
 class SensorAgent(FieldAgent):
     """Simulated sensor with fast tick rate."""
 
-    def __init__(self, agent_id, **kwargs):
-        kwargs.setdefault("tick_interval", 1.0)  # 1 second sampling
+    def __init__(self, agent_id, tick_interval=1.0, **kwargs):
+        from heron.scheduling.tick_config import TickConfig
+        # Convert tick_interval to tick_config if not provided
+        if "tick_config" not in kwargs:
+            kwargs["tick_config"] = TickConfig(tick_interval=tick_interval)
         super().__init__(agent_id=agent_id, **kwargs)
         self.readings = []
 
@@ -60,7 +63,7 @@ class SensorAgent(FieldAgent):
     def _get_obs(self, proxy=None):
         return self.state.vector()
 
-    def tick(self, scheduler, current_time, global_state=None, proxy=None):
+    def tick(self, scheduler, current_time, global_state=None, proxy=None, async_observations=False):
         """Record reading at each tick."""
         self._timestep = current_time
         self.readings.append({"time": current_time, "value": self.state.features[0].value})
@@ -69,8 +72,11 @@ class SensorAgent(FieldAgent):
 class ControllerAgent(FieldAgent):
     """Simulated controller with slower tick rate."""
 
-    def __init__(self, agent_id, **kwargs):
-        kwargs.setdefault("tick_interval", 5.0)  # 5 second control interval
+    def __init__(self, agent_id, tick_interval=5.0, **kwargs):
+        from heron.scheduling.tick_config import TickConfig
+        # Convert tick_interval to tick_config if not provided
+        if "tick_config" not in kwargs:
+            kwargs["tick_config"] = TickConfig(tick_interval=tick_interval)
         super().__init__(agent_id=agent_id, **kwargs)
         self.control_actions = []
 
@@ -83,7 +89,7 @@ class ControllerAgent(FieldAgent):
     def _get_obs(self, proxy=None):
         return self.state.vector()
 
-    def tick(self, scheduler, current_time, global_state=None, proxy=None):
+    def tick(self, scheduler, current_time, global_state=None, proxy=None, async_observations=False):
         """Compute control action at each tick."""
         self._timestep = current_time
         self.action.sample()
@@ -440,6 +446,262 @@ class TestAgentUnregistration:
 
         # Should only have ticks at t=0,1,2, then stop
         assert tick_times == [0.0, 1.0, 2.0]
+
+
+# =============================================================================
+# Async Observation Integration Tests
+# =============================================================================
+
+class TestAsyncObservations:
+    """Test fully async observation mode in event-driven simulation.
+
+    In async mode, subordinates push observations to coordinators via message
+    broker instead of coordinators pulling via direct method calls.
+    """
+
+    def test_async_observation_flow(self):
+        """Test full async observation flow from subordinate to coordinator."""
+        from heron.messaging.in_memory_broker import InMemoryBroker
+        from heron.core.observation import Observation
+        from heron.scheduling.tick_config import TickConfig
+
+        # Create agents
+        scheduler = EventScheduler(start_time=0.0)
+        broker = InMemoryBroker()
+
+        config1 = TickConfig(tick_interval=1.0, msg_delay=0.1)
+        config2 = TickConfig(tick_interval=2.0, msg_delay=0.1)
+
+        sub1 = SensorAgent(agent_id="sensor_1", env_id="test", upstream_id="coord", tick_config=config1)
+        sub2 = SensorAgent(agent_id="sensor_2", env_id="test", upstream_id="coord", tick_config=config2)
+
+        sub1.set_message_broker(broker)
+        sub2.set_message_broker(broker)
+
+        # Register agents with different tick rates
+        scheduler.register_agent("sensor_1", tick_config=config1)
+        scheduler.register_agent("sensor_2", tick_config=config2)
+        scheduler.register_agent("coord", tick_interval=5.0)
+
+        observations_received = []
+
+        def tick_handler(event, sched):
+            if event.agent_id == "sensor_1":
+                # Subordinate sends observation in async mode
+                obs = Observation(
+                    local={"sensor_value": sub1.state.features[0].value},
+                    timestamp=event.timestamp
+                )
+                sub1.send_observation_to_upstream(obs, scheduler=sched)
+
+            elif event.agent_id == "sensor_2":
+                obs = Observation(
+                    local={"sensor_value": sub2.state.features[0].value},
+                    timestamp=event.timestamp
+                )
+                sub2.send_observation_to_upstream(obs, scheduler=sched)
+
+        def message_handler(event, sched):
+            # Record delivered observations
+            if "observation" in event.payload.get("message", {}):
+                observations_received.append({
+                    "time": event.timestamp,
+                    "sender": event.payload.get("sender_id"),
+                    "obs_data": event.payload["message"]["observation"]
+                })
+
+        scheduler.set_handler(EventType.AGENT_TICK, tick_handler)
+        scheduler.set_handler(EventType.MESSAGE_DELIVERY, message_handler)
+
+        scheduler.run_until(t_end=5.0)
+
+        # Verify observations were received
+        # sensor_1 ticks at 0,1,2,3,4,5 -> messages at 0.1,1.1,2.1,3.1,4.1,5.1 (5.1 beyond t_end)
+        # sensor_2 ticks at 0,2,4 -> messages at 0.1,2.1,4.1
+        # Total within t_end=5.0: 5 + 3 = 8 messages (approximately, depends on timing)
+        assert len(observations_received) > 0
+
+    def test_async_observation_serialization_roundtrip(self):
+        """Test observation serialization through message broker."""
+        from heron.messaging.in_memory_broker import InMemoryBroker
+        from heron.messaging.base import ChannelManager, MessageType, Message
+        from heron.core.observation import Observation
+
+        broker = InMemoryBroker()
+
+        # Create observation with numpy array
+        original_obs = Observation(
+            local={
+                "power": 100.0,
+                "states": np.array([1.0, 2.0, 3.0], dtype=np.float32)
+            },
+            global_info={"frequency": 60.0},
+            timestamp=5.0
+        )
+
+        # Serialize and send through broker
+        channel = ChannelManager.observation_channel("sub1", "coord", "test_env")
+        broker.create_channel(channel)
+
+        msg = Message(
+            env_id="test_env",
+            sender_id="sub1",
+            recipient_id="coord",
+            timestamp=5.0,
+            message_type=MessageType.INFO,
+            payload={"observation": original_obs.to_dict()}
+        )
+        broker.publish(channel, msg)
+
+        # Receive and deserialize
+        messages = broker.consume(channel, "coord", "test_env")
+        received_obs = Observation.from_dict(messages[0].payload["observation"])
+
+        # Verify roundtrip
+        assert received_obs.timestamp == original_obs.timestamp
+        assert received_obs.local["power"] == original_obs.local["power"]
+        np.testing.assert_array_equal(
+            received_obs.local["states"],
+            original_obs.local["states"]
+        )
+        assert received_obs.global_info["frequency"] == original_obs.global_info["frequency"]
+
+    def test_async_observation_partial_arrival(self):
+        """Test coordinator handling when only some subordinates have sent."""
+        from heron.messaging.in_memory_broker import InMemoryBroker
+        from heron.core.observation import Observation
+        from heron.agents.base import Agent
+
+        # Simple concrete agent for testing
+        class SimpleAgent(Agent):
+            def __init__(self, agent_id, **kwargs):
+                super().__init__(agent_id=agent_id, **kwargs)
+                self.subordinates = {}
+
+            def observe(self, *args, **kwargs):
+                return Observation()
+
+            def act(self, *args, **kwargs):
+                return None
+
+        broker = InMemoryBroker()
+
+        # Create coordinator with 3 subordinates
+        coord = SimpleAgent(agent_id="coord", env_id="test")
+        sub1 = SimpleAgent(agent_id="sub1", env_id="test", upstream_id="coord")
+        sub2 = SimpleAgent(agent_id="sub2", env_id="test", upstream_id="coord")
+        sub3 = SimpleAgent(agent_id="sub3", env_id="test", upstream_id="coord")
+
+        coord.subordinates = {"sub1": sub1, "sub2": sub2, "sub3": sub3}
+
+        coord.set_message_broker(broker)
+        sub1.set_message_broker(broker)
+        sub2.set_message_broker(broker)
+        sub3.set_message_broker(broker)
+
+        # Only sub1 and sub3 send observations
+        sub1.send_observation_to_upstream(
+            Observation(local={"value": 100.0}, timestamp=1.0)
+        )
+        sub3.send_observation_to_upstream(
+            Observation(local={"value": 300.0}, timestamp=1.0)
+        )
+
+        # Coordinator receives - should only have 2 observations
+        received = coord.receive_observations_from_subordinates()
+
+        assert len(received) == 2
+        assert "sub1" in received
+        assert "sub3" in received
+        assert "sub2" not in received  # Never sent
+
+        assert received["sub1"].local["value"] == 100.0
+        assert received["sub3"].local["value"] == 300.0
+
+    def test_async_vs_sync_mode_equivalence(self):
+        """Test that sync and async modes produce equivalent observations."""
+        from heron.messaging.in_memory_broker import InMemoryBroker
+        from heron.core.observation import Observation
+
+        broker = InMemoryBroker()
+
+        # Create sensor agent
+        sensor = SensorAgent(
+            agent_id="sensor_1",
+            env_id="test",
+            upstream_id="coord"
+        )
+        sensor.set_message_broker(broker)
+        sensor.state.features[0].value = 42.0
+
+        # Get observation via sync mode (direct call)
+        sync_obs = sensor.observe()
+
+        # Get observation via async mode (send/receive through broker)
+        sensor.send_observation_to_upstream(sync_obs)
+
+        from heron.messaging.base import ChannelManager
+        channel = ChannelManager.observation_channel("sensor_1", "coord", "test")
+        messages = broker.consume(channel, "coord", "test")
+        async_obs = Observation.from_dict(messages[0].payload["observation"])
+
+        # Both should have same data
+        assert sync_obs.timestamp == async_obs.timestamp
+        # Note: The exact local dict may differ in structure but vectors should match
+        np.testing.assert_array_almost_equal(
+            sync_obs.vector(),
+            async_obs.vector()
+        )
+
+    def test_async_observation_with_msg_delay(self):
+        """Test that msg_delay delays observation delivery in scheduler."""
+        from heron.messaging.in_memory_broker import InMemoryBroker
+        from heron.core.observation import Observation
+        from heron.scheduling.tick_config import TickConfig
+
+        scheduler = EventScheduler(start_time=0.0)
+        broker = InMemoryBroker()
+
+        # Create sensor with msg_delay
+        tick_config = TickConfig(
+            tick_interval=5.0,
+            msg_delay=2.0  # 2 second message delay
+        )
+        sensor = SensorAgent(
+            agent_id="sensor_1",
+            env_id="test",
+            upstream_id="coord",
+            tick_config=tick_config
+        )
+        sensor.set_message_broker(broker)
+
+        scheduler.register_agent("sensor_1", tick_config=tick_config)
+        scheduler.register_agent("coord", tick_interval=10.0)
+
+        delivered_times = []
+
+        def tick_handler(event, sched):
+            if event.agent_id == "sensor_1":
+                obs = Observation(
+                    local={"value": 100.0},
+                    timestamp=event.timestamp
+                )
+                # Send with scheduler to use msg_delay
+                sensor.send_observation_to_upstream(obs, scheduler=sched)
+
+        def delivery_handler(event, sched):
+            delivered_times.append(event.timestamp)
+
+        scheduler.set_handler(EventType.AGENT_TICK, tick_handler)
+        scheduler.set_handler(EventType.MESSAGE_DELIVERY, delivery_handler)
+
+        scheduler.run_until(t_end=10.0)
+
+        # Sensor ticks at t=0,5,10
+        # Messages should be delivered at t=2,7,12 (12 beyond t_end)
+        assert len(delivered_times) == 2
+        np.testing.assert_almost_equal(delivered_times[0], 2.0)
+        np.testing.assert_almost_equal(delivered_times[1], 7.0)
 
 
 if __name__ == "__main__":

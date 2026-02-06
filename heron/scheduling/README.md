@@ -133,14 +133,14 @@ Events are ordered by: `(timestamp, priority, sequence_number)`
 
 ## Usage with Environments
 
-The `HeronEnvCore` mixin provides convenience methods for event-driven execution:
+The `EnvCore` mixin provides convenience methods for event-driven execution:
 
 ```python
-from heron.envs.base import HeronEnvCore
+from heron.envs.base import EnvCore
 
-class MyEnv(HeronEnvCore):
+class MyEnv(EnvCore):
     def __init__(self):
-        self._init_heron_core(env_id="my_env")
+        self._init_core(env_id="my_env")
         # ... register agents ...
 
     def run_test(self, t_end: float):
@@ -171,6 +171,69 @@ class MyEnv(HeronEnvCore):
 - **Coordinators**: Medium ticks (1-60s), coordinate subordinates
 - **System agents**: Slow ticks (60s+), high-level decisions
 
+## Async Observations Mode
+
+By default, event-driven mode uses **hybrid async**: actions are sent via messages (async), but observations are collected via direct method calls (sync). For fully realistic simulation, enable **async observations**:
+
+```python
+# In your tick handler or environment:
+agent.tick(
+    scheduler=scheduler,
+    current_time=current_time,
+    async_observations=True,  # Enable fully async mode
+)
+```
+
+### How It Works
+
+| Mode | Observation Collection | Action Distribution |
+|------|----------------------|---------------------|
+| **Sync (default)** | Coordinator calls `subordinate.observe()` | MESSAGE_DELIVERY with msg_delay |
+| **Async** | Subordinates push via MESSAGE_DELIVERY | MESSAGE_DELIVERY with msg_delay |
+
+### Tricky Parts (Follow-up Work May Be Needed)
+
+**1. Partial Information**
+Coordinator acts on whatever observations have arrived. Some subordinates may not have sent yet:
+```python
+# Coordinator receives: {sub_1: obs, sub_2: obs}
+# But sub_3 hasn't ticked yet - uses empty/cached observation
+```
+*Follow-up*: Add padding option for fixed-shape policies.
+
+**2. Stale Observations**
+If field agent ticks every 100ms but coordinator ticks every 5s, coordinator uses the most recent (but old) observation:
+```python
+# Field agent sent obs at t=4.9s
+# Coordinator ticks at t=5.0s, uses 100ms stale observation
+```
+*Follow-up*: Add observation timestamps and staleness metrics.
+
+**3. Observation Serialization**
+Observations are serialized to JSON for message passing. Nested Observations and numpy arrays use `__type__` markers:
+```python
+{"__type__": "ndarray", "data": [1.0, 2.0], "dtype": "float32"}
+{"__type__": "Observation", "data": {...}}
+```
+*Follow-up*: Consider msgpack/pickle for complex structures.
+
+**4. Observation Shape Mismatch**
+If policy expects fixed observation shape but some subordinates are missing:
+- Option 1: Pre-populate cache during `reset()`
+- Option 2: Train with observation dropout
+- Option 3: Pad missing observations with zeros
+
+*Follow-up*: Add `pad_missing_observations` parameter.
+
+### When to Use Async Observations
+
+| Scenario | Use Async? |
+|----------|-----------|
+| Policy robustness testing | Yes |
+| Simulating network partitions | Yes |
+| Debugging coordination logic | No (use sync) |
+| Performance benchmarking | Depends |
+
 ## Example: Event-Driven Testing
 
 See `case_studies/power/examples/07_event_driven_mode.py` for a complete example.
@@ -182,7 +245,7 @@ See `case_studies/power/examples/07_event_driven_mode.py` for a complete example
 env.setup_event_driven()
 
 # Register agents with realistic timing
-for agent_id, agent in env.heron_agents.items():
+for agent_id, agent in env.registered_agents.items():
     config = TickConfig.with_jitter(
         tick_interval=agent.tick_interval,
         obs_delay=0.1,

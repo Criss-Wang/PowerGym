@@ -239,7 +239,7 @@ class TestProxyAgentGetLatestState:
             }
         }
 
-        state = proxy.get_latest_state_for_agent("agent_1")
+        state = proxy.get_state_for_agent("agent_1", requestor_level=1)
 
         assert state == {"power": 100, "voltage": 1.0}
 
@@ -248,7 +248,7 @@ class TestProxyAgentGetLatestState:
         proxy = ProxyAgent()
         proxy.state_cache = {"agents": {}}
 
-        state = proxy.get_latest_state_for_agent("unknown_agent")
+        state = proxy.get_state_for_agent("unknown_agent", requestor_level=1)
 
         assert state == {}
 

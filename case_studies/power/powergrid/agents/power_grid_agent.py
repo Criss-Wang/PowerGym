@@ -6,6 +6,26 @@ protocols like price signals, setpoints, or consensus algorithms.
 GridAgent extends CoordinatorAgent from the HERON framework, inheriting
 standard coordinator-level capabilities while adding power-grid specific
 functionality.
+
+Timing Configuration:
+    GridAgent and PowerGridAgent accept a `tick_config` parameter for
+    event-driven scheduling. Use `TickConfig.deterministic()` for training
+    (no jitter) or `TickConfig.with_jitter()` for testing (realistic timing).
+
+    Example:
+        # Deterministic timing (training)
+        tick_config = TickConfig.deterministic(tick_interval=60.0)
+
+        # With jitter (testing)
+        tick_config = TickConfig.with_jitter(
+            tick_interval=60.0,
+            obs_delay=1.0,
+            act_delay=2.0,
+            msg_delay=0.5,
+            jitter_type=JitterType.GAUSSIAN,
+            jitter_ratio=0.1,
+            seed=42,
+        )
 """
 
 from typing import Any, Dict as DictType, Iterable, List, Optional, Union
@@ -15,20 +35,17 @@ import numpy as np
 import pandapower as pp
 from gymnasium.spaces import Box, Dict, Discrete, MultiDiscrete
 
-from heron.agents.coordinator_agent import CoordinatorAgent, COORDINATOR_LEVEL
+from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.agents.base import Agent, AgentID
-from heron.core.action import Action
 from heron.core.observation import Observation
 from powergrid.agents.device_agent import DeviceAgent
 from heron.core.policies import Policy
 from heron.protocols.base import NoProtocol, Protocol
+from heron.scheduling.tick_config import TickConfig, JitterType
 from powergrid.core.state.state import GridState
 from powergrid.agents.generator import Generator
 from powergrid.agents.storage import ESS
 from powergrid.core.features.network import BusVoltages, LineFlows, NetworkMetrics
-
-
-GRID_LEVEL = COORDINATOR_LEVEL  # Level identifier for grid-level agents (same as coordinator)
 
 
 class GridAgent(CoordinatorAgent):
@@ -61,11 +78,8 @@ class GridAgent(CoordinatorAgent):
         centralized: bool = True,
         grid_config: Optional[DictType[str, Any]] = None,
 
-        # timing params (for event-driven scheduling - Option B)
-        tick_interval: float = 60.0,
-        obs_delay: float = 0.0,
-        act_delay: float = 0.0,
-        msg_delay: float = 0.0,
+        # timing config (for event-driven scheduling - Option B)
+        tick_config: Optional[TickConfig] = None,
     ):
         """Initialize grid coordinator.
 
@@ -78,10 +92,9 @@ class GridAgent(CoordinatorAgent):
             devices: List of device agents to manage (alternative to grid_config)
             centralized: If True, uses centralized policy; if False, devices act independently
             grid_config: Grid configuration dictionary
-            tick_interval: Time between agent ticks (default 60s for coordinators)
-            obs_delay: Observation delay
-            act_delay: Action delay
-            msg_delay: Message delay
+            tick_config: Timing configuration for event-driven scheduling.
+                Defaults to TickConfig with tick_interval=60.0 (coordinators tick less frequently).
+                Use TickConfig.deterministic() or TickConfig.with_jitter().
         """
         self.centralized = centralized
         if grid_config is None:
@@ -105,85 +118,107 @@ class GridAgent(CoordinatorAgent):
             upstream_id=upstream_id,
             env_id=env_id,
             config=config,
-            tick_interval=tick_interval,
-            obs_delay=obs_delay,
-            act_delay=act_delay,
-            msg_delay=msg_delay,
+            tick_config=tick_config,
         )
 
         # Use GridState instead of CoordinatorAgentState for power-grid domain
         self.state = GridState(
             owner_id=self.agent_id,
-            owner_level=GRID_LEVEL
+            owner_level=self.level
         )
 
         # If devices were provided directly, set them up now
         if self._init_devices is not None:
-            self.subordinate_agents = {
+            self.subordinates = {
                 device.agent_id: device for device in self._init_devices
             }
             # Set upstream relationship for devices
             for device in self._init_devices:
                 device.upstream_id = self.agent_id
 
+        # Initialize optional attributes (avoid hasattr checks)
+        self._cost: Optional[float] = None
+        self._safety: Optional[float] = None
+        self._cached_load_pq: Optional[np.ndarray] = None
+
     # ============================================
-    # Backward Compatibility: devices <-> subordinate_agents
+    # Subordinate Building (HERON Hook)
+    # ============================================
+
+    def _build_subordinates(
+        self,
+        configs: List[DictType[str, Any]],
+        env_id: Optional[str] = None,
+        upstream_id: Optional[AgentID] = None,
+    ) -> DictType[AgentID, DeviceAgent]:
+        """Build device agents from configuration.
+
+        This is the HERON pattern for building subordinate hierarchy.
+        Called automatically by CoordinatorAgent.__init__().
+
+        Note: If `devices` were provided directly to __init__, this returns
+        empty dict and devices are set up manually after super().__init__().
+
+        Args:
+            configs: List of device configuration dictionaries. Each should have:
+                - 'type': Device type ('generator', 'ess', etc.)
+                - 'name' or 'id': Device identifier
+                - Other device-specific parameters
+            env_id: Environment ID for multi-environment isolation
+            upstream_id: Upstream agent ID (this coordinator)
+
+        Returns:
+            Dictionary mapping device IDs to DeviceAgent instances
+        """
+        # If devices were provided directly, they'll be set after super().__init__
+        if not configs:
+            return {}
+
+        devices = {}
+        for config in configs:
+            device_type = config.get('type', 'device').lower()
+            device_id = config.get('name') or config.get('id')
+
+            if device_type == 'generator':
+                device = Generator(
+                    agent_id=device_id,
+                    env_id=env_id,
+                    upstream_id=upstream_id,
+                    generator_config=config,
+                )
+            elif device_type == 'ess' or device_type == 'storage':
+                device = ESS(
+                    agent_id=device_id,
+                    env_id=env_id,
+                    upstream_id=upstream_id,
+                    ess_config=config,
+                )
+            else:
+                # Generic device agent
+                device = DeviceAgent(
+                    agent_id=device_id,
+                    env_id=env_id,
+                    upstream_id=upstream_id,
+                    device_config=config,
+                )
+
+            devices[device.agent_id] = device
+
+        return devices
+
+    # ============================================
+    # Backward Compatibility: devices <-> subordinates
     # ============================================
 
     @property
     def devices(self) -> DictType[AgentID, DeviceAgent]:
-        """Alias for subordinate_agents for backward compatibility."""
-        return self.subordinate_agents
+        """Alias for subordinates for backward compatibility."""
+        return self.subordinates
 
     @devices.setter
     def devices(self, value: DictType[AgentID, DeviceAgent]) -> None:
         """Setter for devices alias."""
-        self.subordinate_agents = value
-
-    def _build_subordinate_agents(
-        self,
-        agent_configs: List[DictType[str, Any]],
-        env_id: Optional[str] = None,
-        upstream_id: Optional[AgentID] = None,
-    ) -> DictType[AgentID, DeviceAgent]:
-        """Build device agents from configuration.
-
-        Overrides CoordinatorAgent method to create DeviceAgent instances.
-
-        Args:
-            agent_configs: List of device configuration dictionaries
-            env_id: Environment ID for multi-environment isolation
-            upstream_id: Upstream agent ID (this grid agent)
-
-        Returns:
-            Dictionary mapping device IDs to DeviceAgent instances
-        """
-        return self._build_device_agents(
-            agent_configs,
-            env_id=env_id,
-            upstream_id=upstream_id
-        )
-
-    def _build_device_agents(
-        self,
-        device_configs: List[DictType[str, Any]],
-        env_id: Optional[str] = None,
-        upstream_id: Optional[AgentID] = None,
-    ) -> DictType[AgentID, DeviceAgent]:
-        """Build device agents from configuration.
-
-        Override in subclasses to create specific device types.
-
-        Args:
-            device_configs: List of device configuration dictionaries
-            env_id: Environment ID for multi-environment isolation
-            upstream_id: Upstream agent ID (this grid agent)
-
-        Returns:
-            Dictionary mapping device IDs to DeviceAgent instances
-        """
-        # Default implementation - override in subclasses
-        return {}
+        self.subordinates = value
 
     # ============================================
     # Cost/Safety Properties (Override to allow setting)
@@ -196,9 +231,9 @@ class GridAgent(CoordinatorAgent):
         If _cost is set explicitly, return that value.
         Otherwise, aggregate from subordinate devices.
         """
-        if hasattr(self, '_cost') and self._cost is not None:
+        if self._cost is not None:
             return self._cost
-        return sum(agent.cost for agent in self.subordinate_agents.values())
+        return sum(agent.cost for agent in self.devices.values())
 
     @cost.setter
     def cost(self, value: float) -> None:
@@ -212,9 +247,9 @@ class GridAgent(CoordinatorAgent):
         If _safety is set explicitly, return that value.
         Otherwise, aggregate from subordinate devices.
         """
-        if hasattr(self, '_safety') and self._safety is not None:
+        if self._safety is not None:
             return self._safety
-        return sum(agent.safety for agent in self.subordinate_agents.values())
+        return sum(agent.safety for agent in self.devices.values())
 
     @safety.setter
     def safety(self, value: float) -> None:
@@ -252,116 +287,9 @@ class GridAgent(CoordinatorAgent):
             Aggregated local observation dictionary
         """
         return {
-            "device_obs": subordinate_obs,  # Use device_obs for backward compat
-            "subordinate_obs": subordinate_obs,  # Also include standard name
+            "device_obs": subordinate_obs,
             "grid_state": self.state.vector(),
-            "coordinator_state": self.state.vector(),
         }
-
-    # ============================================
-    # Action Methods (Override for centralized flag)
-    # ============================================
-
-    def act(self, observation: Observation, upstream_action: Any = None) -> Optional[Action]:
-        """Compute coordination action and distribute to devices.
-
-        Extends CoordinatorAgent.act() with centralized mode check.
-
-        Args:
-            observation: Aggregated observation
-            upstream_action: Pre-computed action (if any)
-
-        Returns:
-            Action object (if centralized mode with policy)
-
-        Raises:
-            NotImplementedError: If decentralized mode without policy
-            RuntimeError: If centralized mode without action or policy
-        """
-        # Check centralized vs decentralized mode
-        if not self.centralized:
-            if self.policy is None and upstream_action is None:
-                raise NotImplementedError(
-                    "Decentralized mode requires devices to act independently. "
-                    "Use device.act() directly or provide a policy."
-                )
-
-        # Get coordinator action from policy if available
-        if upstream_action is not None:
-            action = upstream_action
-        elif self.policy is not None:
-            action = self.policy.forward(observation)
-        else:
-            raise RuntimeError("No action or policy provided for GridAgent.")
-
-        # Coordinate devices using unified method
-        self.coordinate_devices(observation, action)
-
-        return action
-
-    # ============================================
-    # Coordination Methods (Aliases for backward compatibility)
-    # ============================================
-
-    def coordinate_devices(
-        self,
-        observation: Observation,
-        action: Any,
-    ) -> None:
-        """Unified coordination method using protocol.
-
-        Alias for coordinate_subordinates() for backward compatibility.
-
-        Args:
-            observation: Current observation
-            action: Computed action from coordinator
-        """
-        self.coordinate_subordinates(observation, action)
-
-    def coordinate_device(
-        self,
-        observation: Observation,
-        action: Any,
-    ) -> None:
-        """Coordinate a single device or all devices with given action.
-
-        Alias for coordinate_devices for backward compatibility.
-
-        Args:
-            observation: Current observation
-            action: Computed action from coordinator
-        """
-        self.coordinate_devices(observation, action)
-
-    # ============================================
-    # State Update Hooks
-    # ============================================
-
-    def _update_state_with_upstream_info(self, upstream_info: Optional[DictType[str, Any]]) -> None:
-        """Update internal state based on info received from upstream agent.
-
-        In distributed mode, this receives network state from ProxyAgent and
-        updates internal features/attributes accordingly.
-
-        Args:
-            upstream_info: Info dict received from upstream agent (ProxyAgent in distributed mode)
-        """
-        if not upstream_info:
-            return
-
-        # In distributed mode, upstream_info contains network state from ProxyAgent
-        # Update internal state features based on received network info
-        self._update_from_network_state(upstream_info)
-
-    def _update_from_network_state(self, network_state: DictType[str, Any]) -> None:
-        """Update internal features from received network state.
-
-        Override in subclasses to handle power-grid specific state updates.
-
-        Args:
-            network_state: Network state dict from ProxyAgent
-        """
-        pass
 
     # ============================================
     # Utility Methods
@@ -423,11 +351,8 @@ class PowerGridAgent(GridAgent):
         # PowerGridAgent specific params
         net: Optional[pp.pandapowerNet] = None,
 
-        # timing params (for event-driven scheduling - Option B)
-        tick_interval: float = 60.0,
-        obs_delay: float = 0.0,
-        act_delay: float = 0.0,
-        msg_delay: float = 0.0,
+        # timing config (for event-driven scheduling - Option B)
+        tick_config: Optional[TickConfig] = None,
     ):
         """Initialize power grid agent.
 
@@ -440,10 +365,9 @@ class PowerGridAgent(GridAgent):
             devices: Optional list of device agents to manage
             centralized: If True, uses centralized policy for coordination
             net: PandaPower network object (required)
-            tick_interval: Time between agent ticks (default 60s for coordinators)
-            obs_delay: Observation delay
-            act_delay: Action delay
-            msg_delay: Message delay
+            tick_config: Timing configuration for event-driven scheduling.
+                Defaults to TickConfig with tick_interval=60.0 (coordinators tick less frequently).
+                Use TickConfig.deterministic() or TickConfig.with_jitter().
         """
         if net is None:
             raise ValueError("PandaPower network 'net' must be provided to PowerGridAgent.")
@@ -468,10 +392,7 @@ class PowerGridAgent(GridAgent):
             devices=devices,
             centralized=centralized,
             grid_config=grid_config,
-            tick_interval=tick_interval,
-            obs_delay=obs_delay,
-            act_delay=act_delay,
-            msg_delay=msg_delay,
+            tick_config=tick_config,
         )
 
     def _build_device_agents(
@@ -748,7 +669,7 @@ class PowerGridAgent(GridAgent):
         # P, Q at all buses - only include for system/upper_level visibility
         # (set via set_load_data() by the environment after power flow)
         if visibility_level in ('system', 'upper_level'):
-            if hasattr(self, '_cached_load_pq') and self._cached_load_pq is not None:
+            if self._cached_load_pq is not None:
                 obs = np.concatenate([obs, self._cached_load_pq.ravel() / self.base_power])
 
         return obs.astype(np.float32)
@@ -1110,16 +1031,9 @@ class PowerGridAgent(GridAgent):
         if message_broker is not None:
             self.set_message_broker(message_broker)
 
-        # Create message channel for this grid agent (uses result channel for agent state)
-        if self.message_broker is not None:
-            from heron.messaging.base import ChannelManager
-            env_id = self.env_id or "default"
-            channel = ChannelManager.result_channel(env_id, self.agent_id)
-            self.message_broker.create_channel(channel)
-
         # Propagate to all subordinate devices
         for device in self.devices.values():
-            device.configure_for_distributed(self.message_broker)
+            device.set_message_broker(self.message_broker)
 
     def reset_all_devices(self, **kwargs) -> None:
         """Reset all subordinate device agents.

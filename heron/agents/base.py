@@ -203,6 +203,32 @@ class Agent(ABC):
         """
         pass
 
+    def _update_action_features(self, action: Any, observation: Observation) -> None:
+        """Update features that depend on the action taken. [Phase 1 - Both Modes]
+
+        Called immediately after action is computed/set in act() and tick().
+        Override in subclasses to update action-dependent features that should
+        be included when environment collects agent states via get_state_for_environment().
+
+        This enables the two-phase update flow:
+        1. Phase 1: Agent takes action → _update_action_features() updates features
+           → Environment collects states (with updated features) → runs simulation
+        2. Phase 2: Environment returns results → update_from_environment() updates
+           result-dependent features
+
+        Args:
+            action: The action just taken (may be None if no action)
+            observation: The observation used to compute the action
+
+        Example:
+            def _update_action_features(self, action, observation):
+                if action is not None:
+                    # Update features based on action
+                    self.state.features.power_setpoint = action[0]
+                    self.state.features.coordination_signal = action[1]
+        """
+        pass  # Override in subclasses
+
     # ============================================
     # Event-Driven Execution (Option B - Testing)
     # ============================================
@@ -216,15 +242,9 @@ class Agent(ABC):
     ) -> None:
         """Execute one tick in event-driven mode. [Testing Only]
 
-        Called by EventScheduler when AGENT_TICK event fires. The default
-        implementation provides a simple observe-act cycle. Override for
-        custom behavior.
-
-        Default behavior:
-        1. Update internal timestep
-        2. Get observation (using cached or fresh)
-        3. Compute action via act()
-        4. Schedule ACTION_EFFECT event with act_delay
+        Called by EventScheduler when AGENT_TICK event fires.
+        Override in subclasses (FieldAgent, HierarchicalAgent) to implement
+        the agent-specific tick behavior.
 
         Args:
             scheduler: EventScheduler instance for scheduling future events
@@ -232,22 +252,7 @@ class Agent(ABC):
             global_state: Optional global state for observation
             proxy: Optional ProxyAgent for delayed observations
         """
-        self._timestep = current_time
-
-        # Get observation (may use delayed state via ProxyAgent in subclasses)
-        observation = self.observe(global_state)
-        self._last_observation = observation
-
-        # Compute action
-        self.act(observation)
-
-        # Schedule delayed action effect if act_delay > 0
-        if self._tick_config.act_delay > 0 and hasattr(self, 'action'):
-            scheduler.schedule_action_effect(
-                agent_id=self.agent_id,
-                action=getattr(self, 'action', None),
-                delay=self._tick_config.act_delay,
-            )
+        pass  # Override in subclasses
 
     # ============================================
     # Messaging via Message Broker (Both Modes)
@@ -597,6 +602,114 @@ class Agent(ABC):
             messages = self.consume_from_broker(broker, channel)
             if messages:
                 result[sub_id] = [msg.payload for msg in messages]
+
+        return result
+
+    # ============================================
+    # Async Observation Methods (Option B - Fully Async)
+    # ============================================
+
+    def send_observation_to_upstream(
+        self,
+        observation: Observation,
+        scheduler: Optional["EventScheduler"] = None,
+    ) -> None:
+        """Send observation to upstream agent via message broker. [Testing Only - Async Mode]
+
+        Used in fully async event-driven mode where subordinates push observations
+        to coordinators instead of coordinators pulling them via direct method calls.
+
+        **Tricky Part - Timing**:
+        Observations are sent with msg_delay, so they arrive at the coordinator
+        after some latency. If the coordinator ticks before the observation arrives,
+        it will use stale/cached data. This is realistic but may surprise users.
+
+        **Tricky Part - Message Delivery vs Direct Send**:
+        If scheduler is provided, observation is scheduled as MESSAGE_DELIVERY event
+        with msg_delay. Otherwise, it's published directly to the broker (no delay).
+
+        Args:
+            observation: Observation to send
+            scheduler: Optional EventScheduler for delayed delivery
+        """
+        if self._message_broker is None or self.upstream_id is None:
+            return
+
+        payload = {"observation": observation.to_dict()}
+
+        if scheduler is not None and self._tick_config.msg_delay > 0:
+            # Schedule delayed delivery
+            scheduler.schedule_message_delivery(
+                sender_id=self.agent_id,
+                recipient_id=self.upstream_id,
+                message=payload,
+                delay=self._tick_config.msg_delay,
+            )
+        else:
+            # Direct publish (no delay)
+            channel = ChannelManager.observation_channel(
+                self.agent_id, self.upstream_id, self.env_id or "default"
+            )
+            self.publish_to_broker(
+                broker=self._message_broker,
+                channel=channel,
+                payload=payload,
+                recipient_id=self.upstream_id,
+                message_type="INFO",
+            )
+
+    def receive_observations_from_subordinates(
+        self,
+        subordinate_ids: Optional[List[str]] = None,
+        clear: bool = True,
+    ) -> Dict[str, Observation]:
+        """Receive observations from subordinates via message broker. [Testing Only - Async Mode]
+
+        Returns whatever observations have arrived from subordinates. May be partial
+        (some subordinates haven't sent yet) or stale (old observations).
+
+        **Tricky Part - Partial Information**:
+        Unlike synchronous mode where coordinator waits for all subordinates,
+        async mode returns only what has arrived. The coordinator must handle:
+        - Missing subordinates (use cached observation or skip)
+        - Stale observations (subordinate sent before its latest tick)
+        - Out-of-order delivery (older observation arrives after newer one)
+
+        **Tricky Part - Observation Space Mismatch**:
+        If the policy expects a fixed observation shape but some subordinates
+        haven't reported, the observation vector will be different. Options:
+        1. Pad missing observations with zeros (requires knowing expected shape)
+        2. Use cached observations for missing subordinates
+        3. Train policy to handle variable-length observations
+
+        **Follow-up Work Needed**:
+        - Add observation caching with timestamps to detect staleness
+        - Add padding option for fixed-shape policy compatibility
+        - Add metrics for observation freshness/completeness
+
+        Args:
+            subordinate_ids: IDs of subordinates to receive from (defaults to all)
+            clear: If True, remove consumed messages from broker
+
+        Returns:
+            Dict mapping subordinate IDs to their Observations (only those received)
+        """
+        if self._message_broker is None:
+            return {}
+
+        if subordinate_ids is None:
+            subordinate_ids = list(self.subordinates.keys())
+
+        result = {}
+        for sub_id in subordinate_ids:
+            channel = ChannelManager.observation_channel(
+                sub_id, self.agent_id, self.env_id or "default"
+            )
+            messages = self.consume_from_broker(self._message_broker, channel, clear=clear)
+            if messages:
+                # Use most recent observation (last message)
+                obs_dict = messages[-1].payload.get("observation", {})
+                result[sub_id] = Observation.from_dict(obs_dict)
 
         return result
 

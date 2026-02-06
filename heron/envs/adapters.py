@@ -1,6 +1,6 @@
-"""Environment interface adapters for the HERON framework.
+"""Environment interface adapters for the multi-agent framework.
 
-This module provides adapters that combine HeronEnvCore with different
+This module provides adapters that combine EnvCore with different
 environment interfaces (PettingZoo, RLlib, etc.).
 
 Execution Modes:
@@ -36,15 +36,15 @@ from pettingzoo import ParallelEnv
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
 import gymnasium as gym
 
-from heron.envs.base import HeronEnvCore
+from heron.envs.base import EnvCore
 from heron.messaging.base import MessageBroker
 from heron.utils.typing import AgentID
 
 
-class PettingZooParallelEnv(ParallelEnv, HeronEnvCore):
-    """HERON environment with PettingZoo ParallelEnv interface.
+class PettingZooParallelEnv(ParallelEnv, EnvCore):
+    """Environment adapter with PettingZoo ParallelEnv interface.
 
-    This adapter combines HeronEnvCore functionality with PettingZoo's
+    This adapter combines EnvCore functionality with PettingZoo's
     ParallelEnv interface, suitable for multi-agent environments where
     all agents act simultaneously.
 
@@ -88,14 +88,14 @@ class PettingZooParallelEnv(ParallelEnv, HeronEnvCore):
         env_id: Optional[str] = None,
         message_broker: Optional[MessageBroker] = None,
     ):
-        """Initialize PettingZoo-compatible HERON environment.
+        """Initialize PettingZoo-compatible environment.
 
         Args:
             env_id: Environment identifier (auto-generated if not provided)
             message_broker: Optional MessageBroker (defaults to InMemoryBroker)
         """
         ParallelEnv.__init__(self)
-        self._init_heron_core(
+        self._init_core(
             env_id=env_id,
             message_broker=message_broker,
         )
@@ -169,13 +169,13 @@ class PettingZooParallelEnv(ParallelEnv, HeronEnvCore):
 
     def close(self) -> None:
         """Clean up environment resources."""
-        self.close_heron()
+        self.close_core()
 
 
-class RLlibMultiAgentEnv(MultiAgentEnv, HeronEnvCore):
-    """HERON environment with RLlib MultiAgentEnv interface.
+class RLlibMultiAgentEnv(MultiAgentEnv, EnvCore):
+    """Environment adapter with RLlib MultiAgentEnv interface.
 
-    This adapter combines HeronEnvCore functionality with RLlib's
+    This adapter combines EnvCore functionality with RLlib's
     MultiAgentEnv interface, suitable for training with Ray RLlib.
 
     Execution Modes:
@@ -218,14 +218,14 @@ class RLlibMultiAgentEnv(MultiAgentEnv, HeronEnvCore):
         env_id: Optional[str] = None,
         message_broker: Optional[MessageBroker] = None,
     ):
-        """Initialize RLlib-compatible HERON environment.
+        """Initialize RLlib-compatible environment.
 
         Args:
             env_id: Environment identifier (auto-generated if not provided)
             message_broker: Optional MessageBroker (defaults to InMemoryBroker)
         """
         MultiAgentEnv.__init__(self)
-        self._init_heron_core(
+        self._init_core(
             env_id=env_id,
             message_broker=message_broker,
         )
@@ -319,4 +319,4 @@ class RLlibMultiAgentEnv(MultiAgentEnv, HeronEnvCore):
 
     def close(self) -> None:
         """Clean up environment resources."""
-        self.close_heron()
+        self.close_core()

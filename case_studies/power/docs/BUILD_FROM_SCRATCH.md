@@ -188,35 +188,48 @@ case_studies/power/
 The HERON framework uses a **hierarchical agent architecture**:
 
 ```
-┌────────────────────────────────────────────────────────┐
-│                    HERON Framework                      │
-├────────────────────────────────────────────────────────┤
-│  CoordinatorAgent (base class)                         │
-│       ↑ extends                                        │
-│       └─→ GridAgent (power grid coordinator)           │
-│           ↑ extends                                    │
-│           └─→ PowerGridAgent (with PandaPower)         │
-│                                                        │
-│  FieldAgent (base class)                               │
-│       ↑ extends                                        │
-│       └─→ DeviceAgent (power device base)              │
-│           ├─→ Generator                                │
-│           ├─→ ESS (Energy Storage)                     │
-│           └─→ Transformer                              │
-│                                                        │
-│  ProxyAgent (for distributed mode)                     │
-└────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│                    HERON Framework                          │
+├────────────────────────────────────────────────────────────┤
+│  Agent (ABC) ─────────────────────────────────────────────  │
+│       │                                                     │
+│       ├── FieldAgent (L1 - devices)                         │
+│       │       ↑ extends                                     │
+│       │       └─→ DeviceAgent                               │
+│       │           ├─→ Generator                             │
+│       │           ├─→ ESS (Energy Storage)                  │
+│       │           └─→ Transformer                           │
+│       │                                                     │
+│       ├── HierarchicalAgent (shared base for L2/L3)         │
+│       │       │                                             │
+│       │       ├── CoordinatorAgent (L2 - coordinators)      │
+│       │       │       ↑ extends                             │
+│       │       │       └─→ GridAgent                         │
+│       │       │           ↑ extends                         │
+│       │       │           └─→ PowerGridAgent (PandaPower)   │
+│       │       │                                             │
+│       │       └── SystemAgent (L3 - system operators)       │
+│       │               ↑ extends                             │
+│       │               └─→ DSOAgent                          │
+│       │                                                     │
+│       └── ProxyAgent (L0 - state distribution)              │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Concepts
 
 | Concept | Description |
 |---------|-------------|
-| **CoordinatorAgent** | Manages multiple subordinate agents, coordinates actions |
-| **FieldAgent** | Lowest-level agent controlling a single device |
-| **Protocol** | Communication pattern between agents (SetpointProtocol, PriceSignalProtocol) |
-| **Feature** | Observable state component (voltage, power, SOC) |
-| **State** | Collection of features representing agent's current condition |
+| **Agent** | Abstract base class with core methods: `reset()`, `observe()`, `act()`, `tick()` |
+| **FieldAgent** | L1 - Lowest-level agent controlling a single device |
+| **HierarchicalAgent** | Shared base for L2/L3 with subordinate management |
+| **CoordinatorAgent** | L2 - Manages multiple FieldAgents, coordinates actions |
+| **SystemAgent** | L3 - Top-level system operator, manages CoordinatorAgents |
+| **ProxyAgent** | L0 - State distribution with visibility filtering |
+| **Protocol** | Communication pattern (SetpointProtocol, PriceSignalProtocol) |
+| **FeatureProvider** | Observable state component with visibility rules |
+| **State** | Collection of FeatureProviders representing agent's condition |
+| **TickConfig** | Timing configuration for event-driven mode |
 
 ### Execution Modes
 
@@ -294,16 +307,54 @@ Each agent's observation dimension depends on its devices. The action space is s
 
 Features represent observable state components with **declarative visibility**. This is a key HERON contribution—features declare who can see them, eliminating manual observation filtering.
 
-### 1.1 Electrical Features
+### 1.1 Understanding FeatureProvider
+
+The HERON `FeatureProvider` is an abstract base class that defines the interface for state features:
+
+```python
+# Key methods to implement
+class FeatureProvider(ABC):
+    visibility: List[str]  # Who can observe this feature
+
+    @abstractmethod
+    def vector(self) -> np.ndarray:
+        """Convert to numpy array for RL observations."""
+
+    @abstractmethod
+    def names(self) -> List[str]:
+        """Field names corresponding to vector elements."""
+
+    @abstractmethod
+    def to_dict(self) -> dict:
+        """Serialize for communication/logging."""
+
+    @classmethod
+    @abstractmethod
+    def from_dict(cls, d: dict) -> "FeatureProvider":
+        """Deserialize from dictionary."""
+
+    def set_values(self, **kwargs) -> None:
+        """Update values from keyword arguments."""
+
+    def reset(self, **overrides) -> "FeatureProvider":
+        """Reset to initial state."""
+```
+
+### Visibility Options
+
+- `"public"`: Visible to all agents
+- `"owner"`: Only the owning agent
+- `"upper_level"`: Agents one level above
+- `"system"`: System-level (L3) only
+
+### 1.2 Electrical Features
 
 ```python
 # powergrid/core/features/electrical.py
-from dataclasses import dataclass, field
-from typing import List, Optional
+from heron.core import FeatureProvider
+from typing import List
 import numpy as np
-from heron.core.feature import FeatureProvider
 
-@dataclass
 class ElectricalBasePh(FeatureProvider):
     """Base electrical features for single-phase devices.
 
@@ -314,19 +365,17 @@ class ElectricalBasePh(FeatureProvider):
     """
 
     # Visibility: device + coordinator + system can see electrical state
-    visibility: List[str] = field(default_factory=lambda: ['owner', 'upper_level', 'system'])
+    visibility = ['owner', 'upper_level', 'system']
 
-    # Active power (MW)
-    p_MW: float = 0.0
-
-    # Reactive power (MVAr)
-    q_MVAr: float = 0.0
-
-    # Voltage magnitude (per-unit)
-    v_pu: float = 1.0
-
-    # Voltage angle (degrees)
-    va_deg: float = 0.0
+    def __init__(self, p_MW=0.0, q_MVAr=0.0, v_pu=1.0, va_deg=0.0):
+        # Active power (MW)
+        self.p_MW = p_MW
+        # Reactive power (MVAr)
+        self.q_MVAr = q_MVAr
+        # Voltage magnitude (per-unit)
+        self.v_pu = v_pu
+        # Voltage angle (degrees)
+        self.va_deg = va_deg
 
     def vector(self) -> np.ndarray:
         """Convert to numpy array for RL observation."""
@@ -347,40 +396,42 @@ class ElectricalBasePh(FeatureProvider):
         for k, v in kwargs.items():
             if hasattr(self, k):
                 setattr(self, k, float(v))
+
+    def reset(self, **overrides) -> "ElectricalBasePh":
+        self.p_MW = overrides.get('p_MW', 0.0)
+        self.q_MVAr = overrides.get('q_MVAr', 0.0)
+        self.v_pu = overrides.get('v_pu', 1.0)
+        self.va_deg = overrides.get('va_deg', 0.0)
+        return self
 ```
 
-### 1.2 Storage Features
+### 1.3 Storage Features
 
 ```python
 # powergrid/core/features/storage.py
-from dataclasses import dataclass, field
+from heron.core import FeatureProvider
 from typing import List
 import numpy as np
-from heron.core.feature import FeatureProvider
 
-@dataclass
 class StorageBlock(FeatureProvider):
     """State-of-charge and capacity features for storage devices.
 
     Visibility: owner + upper_level (coordinator needs SOC for dispatch decisions)
     """
 
-    visibility: List[str] = field(default_factory=lambda: ['owner', 'upper_level'])
+    visibility = ['owner', 'upper_level']
 
-    # Current state of charge (0-1)
-    soc: float = 0.5
-
-    # Energy capacity (MWh)
-    e_capacity_MWh: float = 1.0
-
-    # Current energy stored (MWh)
-    e_stored_MWh: float = 0.5
-
-    # Charge efficiency
-    ch_eff: float = 0.95
-
-    # Discharge efficiency
-    dsc_eff: float = 0.95
+    def __init__(self, soc=0.5, e_capacity_MWh=1.0, ch_eff=0.95, dsc_eff=0.95):
+        # Current state of charge (0-1)
+        self.soc = soc
+        # Energy capacity (MWh)
+        self.e_capacity_MWh = e_capacity_MWh
+        # Current energy stored (MWh)
+        self.e_stored_MWh = soc * e_capacity_MWh
+        # Charge efficiency
+        self.ch_eff = ch_eff
+        # Discharge efficiency
+        self.dsc_eff = dsc_eff
 
     def vector(self) -> np.ndarray:
         return np.array([self.soc, self.e_capacity_MWh, self.e_stored_MWh], dtype=np.float32)
@@ -394,40 +445,46 @@ class StorageBlock(FeatureProvider):
 
     @classmethod
     def from_dict(cls, d: dict) -> "StorageBlock":
-        return cls(**d)
+        f = cls(d.get('soc', 0.5), d.get('e_capacity_MWh', 1.0))
+        f.e_stored_MWh = d.get('e_stored_MWh', f.e_stored_MWh)
+        f.ch_eff = d.get('ch_eff', 0.95)
+        f.dsc_eff = d.get('dsc_eff', 0.95)
+        return f
 
     def set_values(self, **kwargs):
         for k, v in kwargs.items():
             if hasattr(self, k):
                 setattr(self, k, float(v))
+
+    def reset(self, **overrides) -> "StorageBlock":
+        self.soc = overrides.get('soc', 0.5)
+        self.e_stored_MWh = self.soc * self.e_capacity_MWh
+        return self
 ```
 
-### 1.3 Network Features
+### 1.4 Network Features
 
 ```python
 # powergrid/core/features/network.py
-from dataclasses import dataclass, field
+from heron.core import FeatureProvider
 from typing import List
 import numpy as np
-from heron.core.feature import FeatureProvider
 
-@dataclass
 class BusVoltages(FeatureProvider):
     """Aggregated bus voltage information.
 
     Visibility: 'system' - only DSO/system operator sees full network voltages
     """
 
-    visibility: List[str] = field(default_factory=lambda: ['system'])
+    visibility = ['system']
 
-    # Voltage magnitudes for all buses (per-unit)
-    vm_pu: np.ndarray = field(default_factory=lambda: np.array([1.0]))
-
-    # Minimum voltage in network
-    v_min: float = 1.0
-
-    # Maximum voltage in network
-    v_max: float = 1.0
+    def __init__(self, vm_pu=None, v_min=1.0, v_max=1.0):
+        # Voltage magnitudes for all buses (per-unit)
+        self.vm_pu = vm_pu if vm_pu is not None else np.array([1.0])
+        # Minimum voltage in network
+        self.v_min = v_min
+        # Maximum voltage in network
+        self.v_max = v_max
 
     def vector(self) -> np.ndarray:
         return np.array([self.v_min, self.v_max], dtype=np.float32)
@@ -440,26 +497,39 @@ class BusVoltages(FeatureProvider):
 
     @classmethod
     def from_dict(cls, d: dict) -> "BusVoltages":
-        d['vm_pu'] = np.array(d['vm_pu'])
-        return cls(**d)
+        return cls(
+            vm_pu=np.array(d.get('vm_pu', [1.0])),
+            v_min=d.get('v_min', 1.0),
+            v_max=d.get('v_max', 1.0)
+        )
 
-@dataclass
+    def set_values(self, **kwargs):
+        for k, v in kwargs.items():
+            if hasattr(self, k):
+                setattr(self, k, v)
+
+    def reset(self, **overrides) -> "BusVoltages":
+        self.vm_pu = overrides.get('vm_pu', np.array([1.0]))
+        self.v_min = overrides.get('v_min', 1.0)
+        self.v_max = overrides.get('v_max', 1.0)
+        return self
+
+
 class LineFlows(FeatureProvider):
     """Line power flow information.
 
     Visibility: 'system' - only DSO sees line loading
     """
 
-    visibility: List[str] = field(default_factory=lambda: ['system'])
+    visibility = ['system']
 
-    # Active power flows (MW)
-    p_MW: np.ndarray = field(default_factory=lambda: np.array([0.0]))
-
-    # Loading percentage (0-100%)
-    loading_pct: np.ndarray = field(default_factory=lambda: np.array([0.0]))
-
-    # Maximum loading across all lines
-    max_loading: float = 0.0
+    def __init__(self, p_MW=None, loading_pct=None, max_loading=0.0):
+        # Active power flows (MW)
+        self.p_MW = p_MW if p_MW is not None else np.array([0.0])
+        # Loading percentage (0-100%)
+        self.loading_pct = loading_pct if loading_pct is not None else np.array([0.0])
+        # Maximum loading across all lines
+        self.max_loading = max_loading
 
     def vector(self) -> np.ndarray:
         return np.array([self.max_loading / 100.0], dtype=np.float32)
@@ -473,9 +543,16 @@ class LineFlows(FeatureProvider):
 
     @classmethod
     def from_dict(cls, d: dict) -> "LineFlows":
-        d['p_MW'] = np.array(d['p_MW'])
-        d['loading_pct'] = np.array(d['loading_pct'])
-        return cls(**d)
+        return cls(
+            p_MW=np.array(d.get('p_MW', [0.0])),
+            loading_pct=np.array(d.get('loading_pct', [0.0])),
+            max_loading=d.get('max_loading', 0.0)
+        )
+
+    def set_values(self, **kwargs):
+        for k, v in kwargs.items():
+            if hasattr(self, k):
+                setattr(self, k, v)
 ```
 
 ---
@@ -489,15 +566,25 @@ Device agents control individual power system components. They extend HERON's `F
 ```python
 # powergrid/agents/device_agent.py
 from typing import Any, Dict, Optional
-from heron.agents.field_agent import FieldAgent, FIELD_LEVEL
-from heron.core.policies import Policy
-from heron.protocols.base import Protocol
-from powergrid.core.state.state import DeviceState
+from heron.agents import FieldAgent
+from heron.core import FieldAgentState, Policy
+from heron.protocols import Protocol
+from heron.scheduling import TickConfig
+import numpy as np
+
+# Level constants (from heron.agents.base)
+FIELD_LEVEL = 1
 
 class DeviceAgent(FieldAgent):
     """Base class for power device agents.
 
     Extends HERON's FieldAgent with power-grid specific functionality.
+
+    Key HERON methods to override:
+    - set_action(): Define action space via self.action.set_specs()
+    - set_state(): Add features via self.state.features.append()
+    - reset_agent(): Custom reset logic (optional)
+    - update_state(): Handle environment feedback (optional)
     """
 
     def __init__(
@@ -505,40 +592,56 @@ class DeviceAgent(FieldAgent):
         agent_id: str,
         policy: Optional[Policy] = None,
         protocol: Optional[Protocol] = None,
-        device_state_config: Dict[str, Any] = {},
+        device_state_config: Dict[str, Any] = None,
+        tick_config: Optional[TickConfig] = None,
         **kwargs
     ):
         super().__init__(
             agent_id=agent_id,
             policy=policy,
             protocol=protocol,
+            tick_config=tick_config,
             **kwargs
         )
 
-        # Initialize device-specific state
-        self.state = DeviceState(
-            owner_id=self.agent_id,
-            owner_level=FIELD_LEVEL
-        )
-
         # Store configuration
-        self._config = device_state_config
+        self._config = device_state_config or {}
 
         # Initialize cost and safety metrics
         self.cost = 0.0
         self.safety = 0.0
 
-    def set_device_action(self, action: Any) -> None:
-        """Apply action to device. Override in subclasses."""
-        raise NotImplementedError
+    def set_state(self):
+        """Initialize device-specific state. Override in subclasses."""
+        self.state = FieldAgentState(
+            owner_id=self.agent_id,
+            owner_level=FIELD_LEVEL
+        )
 
-    def update_state(self, net_results: Dict[str, Any]) -> None:
-        """Update state from power flow results. Override in subclasses."""
-        raise NotImplementedError
+    def set_action(self):
+        """Define device action space. Override in subclasses.
+
+        Example:
+            self.action.set_specs(
+                dim_c=2,
+                range=(np.array([0.0, -1.0]), np.array([10.0, 1.0]))
+            )
+        """
+        raise NotImplementedError("Subclasses must implement set_action()")
+
+    def reset_agent(self, **kwargs):
+        """Reset device to initial state. Override in subclasses."""
+        self.state.reset()
+        self.cost = 0.0
+        self.safety = 0.0
+
+    def update_state(self, **kwargs) -> None:
+        """Update state from environment feedback. Override in subclasses."""
+        pass
 
     def update_cost_safety(self) -> None:
         """Compute cost and safety metrics. Override in subclasses."""
-        raise NotImplementedError
+        raise NotImplementedError("Subclasses must implement update_cost_safety()")
 ```
 
 ### 2.2 Generator Agent
@@ -548,7 +651,6 @@ class DeviceAgent(FieldAgent):
 from dataclasses import dataclass
 from typing import Any, Dict
 import numpy as np
-from gymnasium.spaces import Box
 
 from powergrid.agents.device_agent import DeviceAgent
 from powergrid.core.features.electrical import ElectricalBasePh
@@ -568,6 +670,7 @@ class GeneratorConfig:
     startup_time_hr: float = 1.0
     shutdown_time_hr: float = 1.0
 
+
 class Generator(DeviceAgent):
     """Dispatchable generator device agent."""
 
@@ -577,23 +680,30 @@ class Generator(DeviceAgent):
         # Parse configuration
         self.config = GeneratorConfig(**device_state_config)
 
+        # PandaPower element index (set by GridAgent)
+        self.pp_idx: int = -1
+
+    def set_state(self):
+        """Initialize generator state with features."""
+        super().set_state()
+
         # Add features to state
-        self.state.add_feature('electrical', ElectricalBasePh())
-        self.state.add_feature('limits', PowerLimits(
+        self.state.features.append(ElectricalBasePh())
+        self.state.features.append(PowerLimits(
             p_max_MW=self.config.p_max_MW,
             p_min_MW=self.config.p_min_MW,
             q_max_MVAr=self.config.q_max_MVAr,
             q_min_MVAr=self.config.q_min_MVAr,
         ))
 
-        # PandaPower element index (set by GridAgent)
-        self.pp_idx: int = -1
-
-    def get_action_space(self) -> Box:
+    def set_action(self):
         """Define action space: [P_setpoint, Q_setpoint] normalized to [-1, 1]."""
-        return Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+        self.action.set_specs(
+            dim_c=2,
+            range=(np.array([-1.0, -1.0]), np.array([1.0, 1.0]))
+        )
 
-    def set_device_action(self, action: np.ndarray) -> None:
+    def apply_action(self, action: np.ndarray) -> None:
         """Apply action to set power output.
 
         Args:
@@ -610,13 +720,15 @@ class Generator(DeviceAgent):
         p_setpoint = np.clip(p_setpoint, self.config.p_min_MW, self.config.p_max_MW)
         q_setpoint = np.clip(q_setpoint, self.config.q_min_MVAr, self.config.q_max_MVAr)
 
-        # Update state
-        self.state.electrical.p_MW = p_setpoint
-        self.state.electrical.q_MVAr = q_setpoint
+        # Update state via feature
+        self.state.update_feature("ElectricalBasePh", p_MW=p_setpoint, q_MVAr=q_setpoint)
 
     def update_cost_safety(self) -> None:
         """Compute generation cost using quadratic cost function."""
-        p = self.state.electrical.p_MW
+        # Get electrical feature values
+        electrical = next(f for f in self.state.features if f.__class__.__name__ == "ElectricalBasePh")
+        p = electrical.p_MW
+
         a, b, c = self.config.cost_curve_coefs
         self.cost = quadratic_cost(p, a, b, c)
 
@@ -633,7 +745,6 @@ class Generator(DeviceAgent):
 from dataclasses import dataclass
 from typing import Any, Dict
 import numpy as np
-from gymnasium.spaces import Box
 
 from powergrid.agents.device_agent import DeviceAgent
 from powergrid.core.features.electrical import ElectricalBasePh
@@ -652,31 +763,46 @@ class StorageConfig:
     ch_eff: float = 0.95
     dsc_eff: float = 0.95
 
+
 class ESS(DeviceAgent):
     """Energy Storage System device agent."""
 
     def __init__(self, agent_id: str, device_state_config: Dict[str, Any], **kwargs):
         super().__init__(agent_id=agent_id, device_state_config=device_state_config, **kwargs)
-
         self.config = StorageConfig(**device_state_config)
 
+    def set_state(self):
+        """Initialize ESS state with features."""
+        super().set_state()
+
         # Add features
-        self.state.add_feature('electrical', ElectricalBasePh())
-        self.state.add_feature('storage', StorageBlock(
+        self.state.features.append(ElectricalBasePh())
+        self.state.features.append(StorageBlock(
             soc=self.config.init_soc,
             e_capacity_MWh=self.config.e_capacity_MWh,
+            ch_eff=self.config.ch_eff,
+            dsc_eff=self.config.dsc_eff,
         ))
 
-    def set_device_action(self, action: np.ndarray) -> None:
+    def set_action(self):
+        """Define action space: [P_setpoint] normalized to [-1, 1]."""
+        self.action.set_specs(
+            dim_c=1,
+            range=(np.array([-1.0]), np.array([1.0]))
+        )
+
+    def apply_action(self, action: np.ndarray) -> None:
         """Set charge/discharge power."""
         # Denormalize
         p_range = self.config.p_max_MW - self.config.p_min_MW
         p_setpoint = self.config.p_min_MW + (action[0] + 1) / 2 * p_range
 
-        # Apply SOC constraints
-        current_soc = self.state.storage.soc
+        # Get current SOC from storage feature
+        storage = next(f for f in self.state.features if f.__class__.__name__ == "StorageBlock")
+        current_soc = storage.soc
         dt = 1.0  # 1 hour timestep
 
+        # Apply SOC constraints
         if p_setpoint > 0:  # Discharging
             max_discharge = (current_soc - self.config.soc_min) * self.config.e_capacity_MWh / dt
             p_setpoint = min(p_setpoint, max_discharge * self.config.dsc_eff)
@@ -684,41 +810,54 @@ class ESS(DeviceAgent):
             max_charge = (self.config.soc_max - current_soc) * self.config.e_capacity_MWh / dt
             p_setpoint = max(p_setpoint, -max_charge / self.config.ch_eff)
 
-        self.state.electrical.p_MW = p_setpoint
+        # Update electrical feature
+        self.state.update_feature("ElectricalBasePh", p_MW=p_setpoint)
 
-    def update_state(self, dt: float = 1.0) -> None:
+    def update_state(self, dt: float = 1.0, **kwargs) -> None:
         """Update SOC based on power flow."""
-        p = self.state.electrical.p_MW
+        electrical = next(f for f in self.state.features if f.__class__.__name__ == "ElectricalBasePh")
+        storage = next(f for f in self.state.features if f.__class__.__name__ == "StorageBlock")
+
+        p = electrical.p_MW
 
         if p > 0:  # Discharging
             energy_out = p * dt / self.config.dsc_eff
         else:  # Charging
             energy_out = p * dt * self.config.ch_eff
 
-        new_soc = self.state.storage.soc - energy_out / self.config.e_capacity_MWh
-        self.state.storage.soc = np.clip(new_soc, self.config.soc_min, self.config.soc_max)
+        new_soc = storage.soc - energy_out / self.config.e_capacity_MWh
+        storage.soc = np.clip(new_soc, self.config.soc_min, self.config.soc_max)
+        storage.e_stored_MWh = storage.soc * self.config.e_capacity_MWh
+
+    def update_cost_safety(self) -> None:
+        """ESS has no fuel cost, only degradation."""
+        self.cost = 0.0  # Could add degradation cost here
+        self.safety = 0.0
 ```
 
 ---
 
 ## Step 3: Build the Grid Agent (Coordinator)
 
-The `GridAgent` coordinates multiple device agents within a microgrid.
+The `GridAgent` coordinates multiple device agents within a microgrid. It extends HERON's `CoordinatorAgent`.
 
 ```python
 # powergrid/agents/power_grid_agent.py
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 import numpy as np
 import pandapower as pp
-from gymnasium.spaces import Box, Dict as SpaceDict
 
-from heron.agents.coordinator_agent import CoordinatorAgent
-from heron.protocols.base import Protocol
+from heron.agents import CoordinatorAgent
+from heron.core import CoordinatorAgentState
+from heron.protocols import Protocol
+from heron.scheduling import TickConfig
 from powergrid.agents.device_agent import DeviceAgent
 from powergrid.agents.generator import Generator
 from powergrid.agents.storage import ESS
-from powergrid.core.state.state import GridState
 from powergrid.core.features.network import BusVoltages, LineFlows
+
+# Level constant
+COORDINATOR_LEVEL = 2
 
 # Device type registry
 DEVICE_REGISTRY = {
@@ -726,10 +865,16 @@ DEVICE_REGISTRY = {
     'ESS': ESS,
 }
 
+
 class PowerGridAgent(CoordinatorAgent):
     """Grid-level coordinator with PandaPower integration.
 
     Manages device agents and interfaces with PandaPower for power flow analysis.
+
+    Key HERON methods:
+    - _build_subordinates(): Create device agents from config
+    - set_state(): Initialize coordinator state with features
+    - coordinate_subordinates(): Distribute actions via protocol
     """
 
     def __init__(
@@ -738,52 +883,57 @@ class PowerGridAgent(CoordinatorAgent):
         grid_config: Dict[str, Any],
         protocol: Protocol,
         policy=None,
+        tick_config: Optional[TickConfig] = None,
         **kwargs
     ):
         self._net = net
         self._grid_config = grid_config
 
+        # Call HERON's CoordinatorAgent init
         super().__init__(
             agent_id=grid_config.get('name', 'grid'),
             protocol=protocol,
             policy=policy,
             config={'agents': grid_config.get('devices', [])},
+            tick_config=tick_config,
             **kwargs
         )
-
-        # Initialize grid state
-        self.state = GridState(owner_id=self.agent_id)
-
-        # Add network-level features
-        self.state.add_feature('bus_voltages', BusVoltages())
-        self.state.add_feature('line_flows', LineFlows())
-
-        # Build device agents and add to network
-        self._build_device_agents()
 
         # Dataset for time-series data
         self._dataset = None
         self._t = 0
 
-    @property
-    def devices(self) -> Dict[str, DeviceAgent]:
-        """Alias for subordinate_agents."""
-        return self.subordinate_agents
+    def set_state(self):
+        """Initialize grid state with network-level features."""
+        self.state = CoordinatorAgentState(
+            owner_id=self.agent_id,
+            owner_level=COORDINATOR_LEVEL
+        )
 
-    def _build_device_agents(self) -> None:
-        """Create device agents from configuration and add to PandaPower network."""
+        # Add network-level features
+        self.state.features.append(BusVoltages())
+        self.state.features.append(LineFlows())
+
+    def _build_subordinates(self, configs, env_id, upstream_id):
+        """Create device agents from configuration.
+
+        This is the HERON pattern for building subordinate hierarchy.
+        Called automatically by CoordinatorAgent.__init__().
+        """
         devices = {}
 
-        for device_cfg in self._grid_config.get('devices', []):
+        for device_cfg in configs:
             device_type = device_cfg['type']
             device_name = device_cfg['name']
             state_config = device_cfg.get('device_state_config', {})
 
-            # Create device agent
+            # Create device agent using registry
             DeviceClass = DEVICE_REGISTRY[device_type]
             device = DeviceClass(
                 agent_id=device_name,
                 device_state_config=state_config,
+                env_id=env_id,
+                upstream_id=upstream_id or self.agent_id,
             )
 
             # Add device to PandaPower network
@@ -791,7 +941,12 @@ class PowerGridAgent(CoordinatorAgent):
 
             devices[device_name] = device
 
-        self.subordinate_agents = devices
+        return devices
+
+    @property
+    def devices(self) -> Dict[str, DeviceAgent]:
+        """Alias for subordinates (HERON naming)."""
+        return self.subordinates
 
     def _add_device_to_network(self, device: DeviceAgent, config: Dict) -> None:
         """Add device to PandaPower network."""
@@ -799,7 +954,6 @@ class PowerGridAgent(CoordinatorAgent):
         bus_idx = self._get_bus_idx(bus_name)
 
         if isinstance(device, Generator):
-            # Add as static generator (sgen)
             idx = pp.create_sgen(
                 self._net,
                 bus=bus_idx,
@@ -810,7 +964,6 @@ class PowerGridAgent(CoordinatorAgent):
             device.pp_idx = idx
 
         elif isinstance(device, ESS):
-            # Add as storage
             idx = pp.create_storage(
                 self._net,
                 bus=bus_idx,
@@ -835,25 +988,23 @@ class PowerGridAgent(CoordinatorAgent):
     def step(self, action: np.ndarray) -> None:
         """Execute one timestep with given action.
 
-        1. Distribute action to devices via protocol
+        1. Distribute action to devices via protocol (HERON pattern)
         2. Update PandaPower network
         3. Run power flow
         4. Update state from results
         """
-        # 1. Coordinate devices using protocol
-        device_actions = self.protocol.coordinate(action, self.devices)
+        # 1. Coordinate devices using HERON's protocol system
+        self.coordinate_subordinates(observation=None, action=action)
 
-        # 2. Apply actions to devices
-        for device_id, device_action in device_actions.items():
-            device = self.devices[device_id]
-            device.set_device_action(device_action)
-
-            # Update PandaPower network
+        # 2. Sync device states to PandaPower network
+        for device_id, device in self.devices.items():
+            electrical = next(f for f in device.state.features
+                           if f.__class__.__name__ == "ElectricalBasePh")
             if isinstance(device, Generator):
-                self._net.sgen.at[device.pp_idx, 'p_mw'] = device.state.electrical.p_MW
-                self._net.sgen.at[device.pp_idx, 'q_mvar'] = device.state.electrical.q_MVAr
+                self._net.sgen.at[device.pp_idx, 'p_mw'] = electrical.p_MW
+                self._net.sgen.at[device.pp_idx, 'q_mvar'] = electrical.q_MVAr
             elif isinstance(device, ESS):
-                self._net.storage.at[device.pp_idx, 'p_mw'] = device.state.electrical.p_MW
+                self._net.storage.at[device.pp_idx, 'p_mw'] = electrical.p_MW
 
         # 3. Update loads from dataset
         if self._dataset is not None:
@@ -872,21 +1023,26 @@ class PowerGridAgent(CoordinatorAgent):
 
     def _sync_state_from_network(self) -> None:
         """Update state from PandaPower results."""
-        # Update bus voltages
-        self.state.bus_voltages.vm_pu = self._net.res_bus['vm_pu'].values
-        self.state.bus_voltages.v_min = self._net.res_bus['vm_pu'].min()
-        self.state.bus_voltages.v_max = self._net.res_bus['vm_pu'].max()
+        # Update bus voltages feature
+        bus_voltages = next(f for f in self.state.features
+                          if f.__class__.__name__ == "BusVoltages")
+        bus_voltages.vm_pu = self._net.res_bus['vm_pu'].values
+        bus_voltages.v_min = self._net.res_bus['vm_pu'].min()
+        bus_voltages.v_max = self._net.res_bus['vm_pu'].max()
 
-        # Update line flows
+        # Update line flows feature
         if len(self._net.line) > 0:
-            self.state.line_flows.loading_pct = self._net.res_line['loading_percent'].values
-            self.state.line_flows.max_loading = self._net.res_line['loading_percent'].max()
+            line_flows = next(f for f in self.state.features
+                             if f.__class__.__name__ == "LineFlows")
+            line_flows.loading_pct = self._net.res_line['loading_percent'].values
+            line_flows.max_loading = self._net.res_line['loading_percent'].max()
 
         # Update device states
         for device in self.devices.values():
             if isinstance(device, Generator):
                 bus_idx = self._net.sgen.at[device.pp_idx, 'bus']
-                device.state.electrical.v_pu = self._net.res_bus.at[bus_idx, 'vm_pu']
+                v_pu = self._net.res_bus.at[bus_idx, 'vm_pu']
+                device.state.update_feature("ElectricalBasePh", v_pu=v_pu)
             elif isinstance(device, ESS):
                 device.update_state()
 
@@ -902,35 +1058,19 @@ class PowerGridAgent(CoordinatorAgent):
             self.safety += device.safety
 
         # Network-level safety (voltage violations)
-        v_min, v_max = 0.95, 1.05  # Typical voltage limits
-        voltage_violation = np.sum(np.maximum(0, v_min - self.state.bus_voltages.vm_pu))
-        voltage_violation += np.sum(np.maximum(0, self.state.bus_voltages.vm_pu - v_max))
+        bus_voltages = next(f for f in self.state.features
+                          if f.__class__.__name__ == "BusVoltages")
+        v_min_limit, v_max_limit = 0.95, 1.05
+        voltage_violation = np.sum(np.maximum(0, v_min_limit - bus_voltages.vm_pu))
+        voltage_violation += np.sum(np.maximum(0, bus_voltages.vm_pu - v_max_limit))
         self.safety += voltage_violation
 
         # Line overloading
-        if hasattr(self.state, 'line_flows'):
-            overload = np.sum(np.maximum(0, self.state.line_flows.loading_pct - 100))
+        line_flows = next((f for f in self.state.features
+                          if f.__class__.__name__ == "LineFlows"), None)
+        if line_flows:
+            overload = np.sum(np.maximum(0, line_flows.loading_pct - 100))
             self.safety += overload / 100
-
-    def get_observation(self) -> np.ndarray:
-        """Build observation vector for RL."""
-        obs_parts = []
-
-        # Device observations
-        for device in self.devices.values():
-            obs_parts.append(device.state.to_array())
-
-        # Network observations
-        obs_parts.append(self.state.bus_voltages.to_array())
-
-        return np.concatenate(obs_parts)
-
-    def get_action_space(self) -> SpaceDict:
-        """Get combined action space for all devices."""
-        return SpaceDict({
-            device_id: device.get_action_space()
-            for device_id, device in self.devices.items()
-        })
 ```
 
 ---
@@ -942,20 +1082,36 @@ The environment wraps agents using **HERON's `PettingZooParallelEnv` adapter** (
 - Agent registration and management
 - Message broker integration
 
+### HeronEnvCore Features
+
+The `HeronEnvCore` mixin (inherited by `PettingZooParallelEnv`) provides:
+
+| Method | Purpose |
+|--------|---------|
+| `register_agent(agent)` | Register agent with environment |
+| `get_heron_agent(agent_id)` | Get agent by ID |
+| `get_observations(global_state)` | Get observations for all agents |
+| `apply_actions(actions)` | Apply actions to agents |
+| `reset_agents(seed)` | Reset all registered agents |
+| `setup_event_driven()` | Initialize event scheduler |
+| `run_event_driven(t_end)` | Run event-driven simulation |
+| `configure_agents_for_distributed()` | Setup message broker |
+
 ### 4.1 Base Environment
 
 ```python
 # powergrid/envs/networked_grid_env.py
 from abc import abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 import numpy as np
 from gymnasium.spaces import Box, Dict as SpaceDict
 
 # IMPORTANT: Use HERON's adapter, NOT raw PettingZoo ParallelEnv
-from heron.envs.adapters import PettingZooParallelEnv
+from heron.envs import PettingZooParallelEnv
+from heron.messaging import InMemoryBroker
 
 from powergrid.agents.power_grid_agent import PowerGridAgent
-from heron.messaging.memory import InMemoryBroker
+
 
 class NetworkedGridEnv(PettingZooParallelEnv):
     """Base multi-agent environment for networked power grids.
@@ -964,7 +1120,7 @@ class NetworkedGridEnv(PettingZooParallelEnv):
     - register_agent() for agent management
     - setup_event_driven() for realistic timing
     - run_event_driven() for event-based simulation
-    - Message broker integration for distributed mode
+    - configure_agents_for_distributed() for message broker integration
 
     Supports both centralized and distributed execution modes.
     """
@@ -987,24 +1143,22 @@ class NetworkedGridEnv(PettingZooParallelEnv):
         self.net = None
 
         # Build components
-        self.message_broker = self._build_message_broker()
         self.net = self._build_net()
         self._build_agents()
 
-        # HERON pattern: Register agents and initialize spaces
-        self._register_agents_with_heron()
+        # HERON pattern: Register agents with HeronEnvCore
+        for agent_id, agent in self.agent_dict.items():
+            self.register_agent(agent)
+
+        # Setup spaces using HERON helpers
         self._setup_spaces()
+
+        # Setup distributed mode if needed
+        if not self.centralized:
+            self.configure_agents_for_distributed()
 
         # Episode state
         self._t = 0
-
-    def _register_agents_with_heron(self) -> None:
-        """Register all agents with HERON for event-driven support."""
-        for agent_id, agent in self.agent_dict.items():
-            self.register_agent(agent)  # HERON's register_agent()
-
-        # Use HERON helpers to set up PettingZoo attributes
-        self._set_agent_ids(list(self.agent_dict.keys()))
 
     @abstractmethod
     def _build_net(self):
@@ -1021,39 +1175,26 @@ class NetworkedGridEnv(PettingZooParallelEnv):
         """Compute rewards and safety violations."""
         pass
 
-    def _build_message_broker(self) -> Optional[InMemoryBroker]:
-        """Build message broker for distributed mode."""
-        if self.centralized:
-            return None
-        return InMemoryBroker()
-
     def _setup_spaces(self) -> None:
-        """Initialize observation and action spaces using HERON helpers."""
+        """Initialize observation and action spaces."""
         obs_spaces = {}
         act_spaces = {}
 
         for agent_id, agent in self.agent_dict.items():
-            # Observation space
-            obs_dim = len(agent.get_observation())
+            # Observation space from agent state
+            obs_vec = agent.state.vector()
             obs_spaces[agent_id] = Box(
-                low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
+                low=-np.inf, high=np.inf, shape=obs_vec.shape, dtype=np.float32
             )
 
-            # Action space (flattened)
-            action_space = agent.get_action_space()
-            if isinstance(action_space, SpaceDict):
-                total_dim = sum(s.shape[0] for s in action_space.spaces.values())
-                act_spaces[agent_id] = Box(
-                    low=-1.0, high=1.0, shape=(total_dim,), dtype=np.float32
-                )
-            else:
-                act_spaces[agent_id] = action_space
+            # Action space from agent action
+            act_spaces[agent_id] = agent.action.space
 
-        # Use HERON's helper to initialize spaces
-        self._init_spaces(
-            action_spaces=act_spaces,
-            observation_spaces=obs_spaces,
-        )
+        # PettingZoo required attributes
+        self.observation_spaces = obs_spaces
+        self.action_spaces = act_spaces
+        self.possible_agents = list(self.agent_dict.keys())
+        self.agents = self.possible_agents.copy()
 
     def reset(self, seed=None, options=None):
         """Reset environment to initial state."""
@@ -1061,8 +1202,7 @@ class NetworkedGridEnv(PettingZooParallelEnv):
             np.random.seed(seed)
 
         self._t = 0
-        self._timestep = 0  # HERON internal timestep
-        self._agents = self._possible_agents.copy()  # Reset active agents
+        self.agents = self.possible_agents.copy()
 
         # Use HERON's reset_agents helper
         self.reset_agents(seed=seed)
@@ -1071,21 +1211,21 @@ class NetworkedGridEnv(PettingZooParallelEnv):
         import pandapower as pp
         pp.runpp(self.net)
 
-        # Get observations
-        observations = {
-            agent_id: agent.get_observation()
-            for agent_id, agent in self.agent_dict.items()
+        # Get observations using HERON helper
+        observations = self.get_observations()
+        # Convert to vectors for PettingZoo
+        obs_dict = {
+            agent_id: obs.vector() if hasattr(obs, 'vector') else obs
+            for agent_id, obs in observations.items()
         }
 
         infos = {agent_id: {} for agent_id in self.agents}
-
-        return observations, infos
+        return obs_dict, infos
 
     def step(self, actions: Dict[str, np.ndarray]):
         """Execute one environment step."""
-        # Apply actions to each agent
-        for agent_id, action in actions.items():
-            self.agent_dict[agent_id].step(action)
+        # Apply actions using HERON helper
+        self.apply_actions(actions)
 
         self._t += 1
 
@@ -1102,10 +1242,11 @@ class NetworkedGridEnv(PettingZooParallelEnv):
             avg_reward = total_reward / len(rewards)
             rewards = {agent_id: avg_reward for agent_id in rewards}
 
-        # Get observations
-        observations = {
-            agent_id: agent.get_observation()
-            for agent_id, agent in self.agent_dict.items()
+        # Get observations using HERON helper
+        observations = self.get_observations()
+        obs_dict = {
+            agent_id: obs.vector() if hasattr(obs, 'vector') else obs
+            for agent_id, obs in observations.items()
         }
 
         # Check termination
@@ -1124,7 +1265,7 @@ class NetworkedGridEnv(PettingZooParallelEnv):
             for agent_id in self.agents
         }
 
-        return observations, rewards, terminateds, truncateds, infos
+        return obs_dict, rewards, terminateds, truncateds, infos
 
     def observation_space(self, agent_id: str) -> Box:
         return self.observation_spaces[agent_id]
@@ -1511,6 +1652,9 @@ Policies trained in synchronous mode may fail in deployment where:
 
 ```python
 # In your environment's __init__:
+from heron.envs import PettingZooParallelEnv
+from heron.scheduling import TickConfig, JitterType
+
 class NetworkedGridEnv(PettingZooParallelEnv):
     def __init__(self, env_config):
         super().__init__(env_id="networked_grid")
@@ -1531,9 +1675,9 @@ class NetworkedGridEnv(PettingZooParallelEnv):
         # Setup handlers for agent ticks and action effects
         def on_action_effect(agent_id, action):
             """Called when action effects are applied."""
-            agent = self.agent_dict.get(agent_id)
+            agent = self.get_heron_agent(agent_id)
             if agent:
-                agent.step(action)
+                agent.apply_action(action)
 
         self.setup_default_handlers(
             global_state_fn=lambda: self._get_global_state(),
@@ -1541,45 +1685,56 @@ class NetworkedGridEnv(PettingZooParallelEnv):
         )
 ```
 
-### 7.3 Configuring Agent Timing
+### 7.3 Configuring Agent Timing with TickConfig
 
-Set timing parameters on your agents:
+HERON uses `TickConfig` for configurable timing with optional jitter:
 
 ```python
+from heron.scheduling import TickConfig, JitterType
+
 class Generator(DeviceAgent):
     def __init__(self, agent_id, device_state_config, **kwargs):
+        # Pass TickConfig to HERON agent
         super().__init__(
             agent_id=agent_id,
-            tick_interval=1.0,    # Device ticks every 1 second
+            tick_config=TickConfig.with_jitter(
+                tick_interval=1.0,     # Device ticks every 1 second
+                obs_delay=0.05,        # 50ms observation delay
+                act_delay=0.1,         # 100ms action delay
+                msg_delay=0.02,        # 20ms message delay
+                jitter_type=JitterType.GAUSSIAN,
+                jitter_ratio=0.1,      # 10% jitter
+            ),
             **kwargs
         )
-        # Additional timing for event-driven mode
-        self.obs_delay = 0.05    # 50ms observation delay
-        self.act_delay = 0.1     # 100ms action delay
 
 class PowerGridAgent(CoordinatorAgent):
     def __init__(self, net, grid_config, **kwargs):
         super().__init__(
             agent_id=grid_config['name'],
-            tick_interval=60.0,   # Coordinator ticks every 60 seconds
+            tick_config=TickConfig.with_jitter(
+                tick_interval=60.0,    # Coordinator ticks every 60 seconds
+                obs_delay=0.2,         # 200ms for aggregated observations
+                act_delay=0.5,         # 500ms for coordinated actions
+                msg_delay=0.1,         # 100ms message delay
+                jitter_type=JitterType.GAUSSIAN,
+                jitter_ratio=0.2,
+            ),
             **kwargs
         )
-        self.obs_delay = 0.2     # 200ms for aggregated observations
-        self.act_delay = 0.5     # 500ms for coordinated actions
 ```
 
-### 7.4 Using TickConfig for Realistic Timing
-
-HERON provides `TickConfig` for configurable timing with jitter:
+### 7.4 Timing Presets
 
 ```python
-from heron.scheduling.tick_config import TickConfig, JitterType
+from heron.scheduling import TickConfig, JitterType
 
 # Training: deterministic timing (fast, reproducible)
 training_timing = TickConfig.deterministic(
     tick_interval=1.0,
     obs_delay=0.0,
     act_delay=0.0,
+    msg_delay=0.0,
 )
 
 # Testing: realistic timing with jitter
@@ -1587,6 +1742,7 @@ testing_timing = TickConfig.with_jitter(
     tick_interval=1.0,
     obs_delay=0.1,       # 100ms base delay
     act_delay=0.2,       # 200ms base delay
+    msg_delay=0.05,      # 50ms message delay
     jitter_type=JitterType.GAUSSIAN,
     jitter_ratio=0.2,    # 20% standard deviation
     seed=42,
@@ -1597,9 +1753,15 @@ scada_timing = TickConfig.with_jitter(
     tick_interval=60.0,   # SCADA poll interval
     obs_delay=2.0,        # ~2s SCADA latency
     act_delay=1.5,        # ~1.5s command latency
+    msg_delay=0.5,        # 500ms message delay
     jitter_type=JitterType.GAUSSIAN,
     jitter_ratio=0.4,     # High variance for SCADA
 )
+
+# Get jittered values at runtime
+next_tick = testing_timing.next_tick_interval()
+obs_delay = testing_timing.next_obs_delay()
+act_delay = testing_timing.next_act_delay()
 ```
 
 ### 7.5 Running Event-Driven Simulation
@@ -1615,7 +1777,7 @@ def step(self, actions):
 
 def _step_event_driven(self, actions):
     """Event-driven step using HERON's scheduler."""
-    # Store actions for agents
+    # Store actions for agents (HERON will schedule effects)
     for agent_id, action in actions.items():
         self._pending_actions[agent_id] = action
 
@@ -1624,14 +1786,18 @@ def _step_event_driven(self, actions):
     end_time = self.scheduler.current_time + step_duration
 
     # HERON's built-in method runs the event loop
-    self.run_event_driven(t_end=end_time)
+    num_events = self.run_event_driven(t_end=end_time)
 
-    # Collect results
-    observations = {aid: agent.get_observation()
-                   for aid, agent in self.agent_dict.items()}
+    # Get observations using HERON helper
+    observations = self.get_observations()
+    obs_dict = {
+        agent_id: obs.vector() if hasattr(obs, 'vector') else obs
+        for agent_id, obs in observations.items()
+    }
+
     # ... compute rewards, terminateds, etc.
 
-    return observations, rewards, terminateds, truncateds, infos
+    return obs_dict, rewards, terminateds, truncateds, infos
 ```
 
 ### 7.6 Testing Workflow
@@ -1936,24 +2102,38 @@ device_state_config = {
 
 ## Summary
 
-Building a power grid case study from scratch involves six main steps:
+Building a power grid case study from scratch involves seven main steps:
 
-| Step | Component | Key Classes | Time Estimate |
-|------|-----------|-------------|---------------|
-| 1 | [Define Features](#step-1-define-domain-features) | `ElectricalBasePh`, `StorageBlock`, `BusVoltages` | 1-2 hours |
-| 2 | [Create Device Agents](#step-2-create-device-agents) | `Generator`, `ESS`, extending `DeviceAgent` | 2-3 hours |
-| 3 | [Build Grid Agent](#step-3-build-the-grid-agent-coordinator) | `PowerGridAgent`, extending `CoordinatorAgent` | 2-3 hours |
-| 4 | [Create Environment](#step-4-create-the-environment) | `NetworkedGridEnv`, `MultiAgentMicrogrids` | 2-3 hours |
-| 5 | [Configure Setups](#step-5-configure-setups-and-datasets) | `config.yml`, `data.pkl`, `loader.py` | 1 hour |
-| 6 | [Run Training](#step-6-run-rl-training) | RLlib PPO, MAPPO/IPPO | Varies |
+| Step | Component | Key HERON Classes |
+|------|-----------|-------------------|
+| 1 | [Define Features](#step-1-define-domain-features) | `FeatureProvider` → `ElectricalBasePh`, `StorageBlock`, `BusVoltages` |
+| 2 | [Create Device Agents](#step-2-create-device-agents) | `FieldAgent` → `DeviceAgent` → `Generator`, `ESS` |
+| 3 | [Build Grid Agent](#step-3-build-the-grid-agent-coordinator) | `CoordinatorAgent` → `GridAgent` → `PowerGridAgent` |
+| 4 | [Create Environment](#step-4-create-the-environment) | `PettingZooParallelEnv` → `NetworkedGridEnv` |
+| 5 | [Configure Setups](#step-5-configure-setups-and-datasets) | `config.yml`, `data.pkl`, `loader.py` |
+| 6 | [Run Training](#step-6-run-rl-training) | RLlib PPO, MAPPO/IPPO |
+| 7 | [Event-Driven Testing](#step-7-event-driven-testing-key-heron-differentiator) | `EventScheduler`, `TickConfig`, `JitterType` |
+
+### Key HERON Patterns
+
+| Pattern | Description |
+|---------|-------------|
+| `set_state()` | Override to add features to agent state |
+| `set_action()` | Override to define action space via `self.action.set_specs()` |
+| `_build_subordinates()` | Override in CoordinatorAgent to create child agents |
+| `register_agent()` | Call in environment to register agents with HeronEnvCore |
+| `setup_event_driven()` | Call to enable event-driven mode |
+| `TickConfig.with_jitter()` | Configure realistic timing with variance |
 
 ### Key Takeaways
 
 1. **Start with examples**: Always run existing examples before building custom components
-2. **Test incrementally**: Verify each component works before integration
-3. **Use centralized mode for training**: Distributed mode is for deployment
-4. **MAPPO for cooperation**: Use shared policy and shared rewards for cooperative microgrids
-5. **Monitor safety violations**: High violations indicate unrealistic configurations
+2. **Extend, don't modify**: PowerGrid classes extend HERON classes, inheriting all functionality
+3. **Use TickConfig**: Configure timing via `TickConfig` instead of individual parameters
+4. **Register agents**: Always call `register_agent()` for each agent in your environment
+5. **Use centralized mode for training**: Distributed/event-driven mode is for testing
+6. **MAPPO for cooperation**: Use shared policy and shared rewards for cooperative microgrids
+7. **Monitor safety violations**: High violations indicate unrealistic configurations
 
 ### Recommended Learning Path
 
@@ -1982,7 +2162,8 @@ Building a power grid case study from scratch involves six main steps:
 
 ### Further Reading
 
-- [HERON Framework Documentation](../../docs/) - Core agent architecture
+- [HERON Framework Documentation](../../../docs/) - Core agent architecture
+- [HERON Integration Guide](./HERON_INTEGRATION.md) - Detailed integration patterns
 - [PandaPower Documentation](https://pandapower.readthedocs.io/) - Power flow simulation
 - [RLlib Multi-Agent Training](https://docs.ray.io/en/latest/rllib/rllib-env.html) - RL algorithms
 - [PettingZoo Documentation](https://pettingzoo.farama.org/) - Multi-agent environments

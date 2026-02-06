@@ -30,13 +30,13 @@ from heron.core.policies import Policy, RandomPolicy
 
 # Agents
 from heron.agents.base import Agent
-from heron.agents.field_agent import FieldAgent, FieldConfig
+from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.agents.system_agent import SystemAgent
 from heron.agents.proxy_agent import ProxyAgent
 
 # Environments
-from heron.envs.base import HeronEnvCore, BaseEnv, MultiAgentEnv
+from heron.envs.base import EnvCore, BaseEnv, MultiAgentEnv
 from heron.envs.adapters import (
     PettingZooParallelEnv,
     RLlibMultiAgentEnv,
@@ -84,12 +84,11 @@ __all__ = [
     # Agents
     "Agent",
     "FieldAgent",
-    "FieldConfig",
     "CoordinatorAgent",
     "SystemAgent",
     "ProxyAgent",
     # Environments
-    "HeronEnvCore",
+    "EnvCore",
     "BaseEnv",
     "MultiAgentEnv",
     "PettingZooParallelEnv",

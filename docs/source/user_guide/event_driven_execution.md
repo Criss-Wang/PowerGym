@@ -273,7 +273,7 @@ env.setup_default_handlers(
 )
 
 # Configure realistic timing
-for agent_id, agent in env.heron_agents.items():
+for agent_id, agent in env.registered_agents.items():
     config = TickConfig.with_jitter(
         tick_interval=agent.tick_interval,
         obs_delay=0.1,

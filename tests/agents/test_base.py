@@ -272,5 +272,238 @@ class TestRandomPolicy:
         policy.reset()  # Should not raise
 
 
+# =============================================================================
+# Async Observation Tests (for event-driven mode)
+# =============================================================================
+
+class TestAsyncObservationHelpers:
+    """Test async observation helpers for event-driven mode.
+
+    These methods are used in fully async event-driven mode (Option B with
+    async_observations=True) where subordinates push observations to
+    coordinators via message broker.
+    """
+
+    def test_send_observation_to_upstream_no_broker(self):
+        """Test send_observation does nothing when no broker configured."""
+        agent = ConcreteAgent(agent_id="field1", upstream_id="coord1")
+        obs = Observation(local={"value": 10.0}, timestamp=5.0)
+
+        # Should not raise, just return silently
+        agent.send_observation_to_upstream(obs)
+
+    def test_send_observation_to_upstream_no_upstream(self):
+        """Test send_observation does nothing when no upstream agent."""
+        broker = InMemoryBroker()
+        agent = ConcreteAgent(agent_id="field1", env_id="test_env")
+        agent.set_message_broker(broker)
+        obs = Observation(local={"value": 10.0}, timestamp=5.0)
+
+        # Should not raise, just return silently
+        agent.send_observation_to_upstream(obs)
+
+    def test_send_observation_to_upstream_basic(self):
+        """Test sending observation to upstream agent via broker."""
+        broker = InMemoryBroker()
+        subordinate = ConcreteAgent(
+            agent_id="field1",
+            env_id="test_env",
+            upstream_id="coord1"
+        )
+        coordinator = ConcreteAgent(
+            agent_id="coord1",
+            env_id="test_env"
+        )
+        # Register subordinate with coordinator (for receive method)
+        coordinator.subordinates = {"field1": subordinate}
+
+        subordinate.set_message_broker(broker)
+        coordinator.set_message_broker(broker)
+
+        # Send observation (without scheduler = immediate delivery)
+        obs = Observation(
+            local={"power": 100.0, "voltage": 1.02},
+            timestamp=5.0
+        )
+        subordinate.send_observation_to_upstream(obs)
+
+        # Receive observation on coordinator side
+        received = coordinator.receive_observations_from_subordinates()
+
+        assert "field1" in received
+        recv_obs = received["field1"]
+        assert isinstance(recv_obs, Observation)
+        assert recv_obs.timestamp == 5.0
+        assert recv_obs.local["power"] == 100.0
+        assert recv_obs.local["voltage"] == 1.02
+
+    def test_send_observation_with_numpy_array(self):
+        """Test sending observation containing numpy arrays."""
+        broker = InMemoryBroker()
+        subordinate = ConcreteAgent(
+            agent_id="field1",
+            env_id="test_env",
+            upstream_id="coord1"
+        )
+        coordinator = ConcreteAgent(
+            agent_id="coord1",
+            env_id="test_env"
+        )
+        coordinator.subordinates = {"field1": subordinate}
+
+        subordinate.set_message_broker(broker)
+        coordinator.set_message_broker(broker)
+
+        # Send observation with numpy array
+        obs = Observation(
+            local={"states": np.array([1.0, 2.0, 3.0], dtype=np.float32)},
+            timestamp=10.0
+        )
+        subordinate.send_observation_to_upstream(obs)
+
+        # Receive and verify
+        received = coordinator.receive_observations_from_subordinates()
+        recv_obs = received["field1"]
+
+        assert isinstance(recv_obs.local["states"], np.ndarray)
+        np.testing.assert_array_equal(recv_obs.local["states"], [1.0, 2.0, 3.0])
+
+    def test_receive_observations_multiple_subordinates(self):
+        """Test receiving observations from multiple subordinates."""
+        broker = InMemoryBroker()
+
+        # Create coordinator with multiple subordinates
+        coordinator = ConcreteAgent(agent_id="coord1", env_id="test_env")
+        sub1 = ConcreteAgent(agent_id="field1", env_id="test_env", upstream_id="coord1")
+        sub2 = ConcreteAgent(agent_id="field2", env_id="test_env", upstream_id="coord1")
+        coordinator.subordinates = {"field1": sub1, "field2": sub2}
+
+        coordinator.set_message_broker(broker)
+        sub1.set_message_broker(broker)
+        sub2.set_message_broker(broker)
+
+        # Send observations from both
+        obs1 = Observation(local={"value": 100.0}, timestamp=5.0)
+        obs2 = Observation(local={"value": 200.0}, timestamp=5.5)
+        sub1.send_observation_to_upstream(obs1)
+        sub2.send_observation_to_upstream(obs2)
+
+        # Receive all
+        received = coordinator.receive_observations_from_subordinates()
+
+        assert len(received) == 2
+        assert received["field1"].local["value"] == 100.0
+        assert received["field2"].local["value"] == 200.0
+
+    def test_receive_observations_partial(self):
+        """Test receiving when only some subordinates have sent."""
+        broker = InMemoryBroker()
+
+        coordinator = ConcreteAgent(agent_id="coord1", env_id="test_env")
+        sub1 = ConcreteAgent(agent_id="field1", env_id="test_env", upstream_id="coord1")
+        sub2 = ConcreteAgent(agent_id="field2", env_id="test_env", upstream_id="coord1")
+        coordinator.subordinates = {"field1": sub1, "field2": sub2}
+
+        coordinator.set_message_broker(broker)
+        sub1.set_message_broker(broker)
+        sub2.set_message_broker(broker)
+
+        # Only sub1 sends
+        obs1 = Observation(local={"value": 100.0}, timestamp=5.0)
+        sub1.send_observation_to_upstream(obs1)
+
+        # Receive - should only have sub1
+        received = coordinator.receive_observations_from_subordinates()
+
+        assert "field1" in received
+        assert "field2" not in received
+
+    def test_receive_observations_with_clear(self):
+        """Test that clear=True removes messages after consuming."""
+        broker = InMemoryBroker()
+
+        coordinator = ConcreteAgent(agent_id="coord1", env_id="test_env")
+        sub1 = ConcreteAgent(agent_id="field1", env_id="test_env", upstream_id="coord1")
+        coordinator.subordinates = {"field1": sub1}
+
+        coordinator.set_message_broker(broker)
+        sub1.set_message_broker(broker)
+
+        # Send observation
+        obs = Observation(local={"value": 100.0}, timestamp=5.0)
+        sub1.send_observation_to_upstream(obs)
+
+        # First receive with clear=True (default)
+        received1 = coordinator.receive_observations_from_subordinates(clear=True)
+        assert len(received1) == 1
+
+        # Second receive should be empty
+        received2 = coordinator.receive_observations_from_subordinates()
+        assert len(received2) == 0
+
+    def test_receive_observations_without_clear(self):
+        """Test that clear=False keeps messages for re-read."""
+        broker = InMemoryBroker()
+
+        coordinator = ConcreteAgent(agent_id="coord1", env_id="test_env")
+        sub1 = ConcreteAgent(agent_id="field1", env_id="test_env", upstream_id="coord1")
+        coordinator.subordinates = {"field1": sub1}
+
+        coordinator.set_message_broker(broker)
+        sub1.set_message_broker(broker)
+
+        # Send observation
+        obs = Observation(local={"value": 100.0}, timestamp=5.0)
+        sub1.send_observation_to_upstream(obs)
+
+        # First receive with clear=False
+        received1 = coordinator.receive_observations_from_subordinates(clear=False)
+        assert len(received1) == 1
+
+        # Second receive should still have the message
+        received2 = coordinator.receive_observations_from_subordinates(clear=False)
+        assert len(received2) == 1
+
+    def test_receive_observations_no_broker(self):
+        """Test receive returns empty dict when no broker configured."""
+        coordinator = ConcreteAgent(agent_id="coord1", env_id="test_env")
+        coordinator.subordinates = {"field1": ConcreteAgent(agent_id="field1")}
+
+        received = coordinator.receive_observations_from_subordinates()
+
+        assert received == {}
+
+    def test_receive_observations_filter_by_subordinate_ids(self):
+        """Test filtering received observations by subordinate IDs."""
+        broker = InMemoryBroker()
+
+        coordinator = ConcreteAgent(agent_id="coord1", env_id="test_env")
+        sub1 = ConcreteAgent(agent_id="field1", env_id="test_env", upstream_id="coord1")
+        sub2 = ConcreteAgent(agent_id="field2", env_id="test_env", upstream_id="coord1")
+        sub3 = ConcreteAgent(agent_id="field3", env_id="test_env", upstream_id="coord1")
+        coordinator.subordinates = {"field1": sub1, "field2": sub2, "field3": sub3}
+
+        coordinator.set_message_broker(broker)
+        sub1.set_message_broker(broker)
+        sub2.set_message_broker(broker)
+        sub3.set_message_broker(broker)
+
+        # All send observations
+        for sub, val in [(sub1, 100), (sub2, 200), (sub3, 300)]:
+            sub.send_observation_to_upstream(
+                Observation(local={"value": float(val)}, timestamp=5.0)
+            )
+
+        # Only receive from field1 and field2
+        received = coordinator.receive_observations_from_subordinates(
+            subordinate_ids=["field1", "field2"]
+        )
+
+        assert len(received) == 2
+        assert "field1" in received
+        assert "field2" in received
+        assert "field3" not in received
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -101,7 +101,7 @@ def test_uc_shutdown_then_startup_costs_and_states():
         agent_id="G1",
         device_config=make_config(with_q=True, with_uc=True)
     )
-    dg.reset_device()
+    dg.reset_agent()
     # dg.status.state == "online"
 
     # Request OFF: d=0; set continuous c as well
@@ -137,7 +137,7 @@ def test_uc_timers_startup_shutdown():
         agent_id="G1",
         device_config=make_config(with_q=True, with_uc=True)
     )
-    dg.reset_device()
+    dg.reset_agent()
 
     # Request OFF (d=0) → enter shutdown → next step complete → offline
     dg.action.c[:] = np.array([5.0, 0.0], dtype=np.float32)

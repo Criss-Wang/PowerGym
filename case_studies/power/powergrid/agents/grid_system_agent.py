@@ -8,6 +8,26 @@ This is the top level (L3) in the HERON hierarchy for power grid applications:
 - SystemAgent (L3): GridSystemAgent - Manages multiple grids
 - CoordinatorAgent (L2): PowerGridAgent - Manages devices within a grid
 - FieldAgent (L1): DeviceAgent (Generator, ESS, etc.) - Individual devices
+
+Timing Configuration:
+    GridSystemAgent accepts a `tick_config` parameter for event-driven scheduling.
+    Use `TickConfig.deterministic()` for training (no jitter) or
+    `TickConfig.with_jitter()` for testing (realistic timing variance).
+
+    Example:
+        # Deterministic timing (training)
+        tick_config = TickConfig.deterministic(tick_interval=300.0)
+
+        # With jitter (testing)
+        tick_config = TickConfig.with_jitter(
+            tick_interval=300.0,
+            obs_delay=5.0,
+            act_delay=10.0,
+            msg_delay=2.0,
+            jitter_type=JitterType.GAUSSIAN,
+            jitter_ratio=0.1,
+            seed=42,
+        )
 """
 
 from typing import Any, Dict as DictType, List, Optional
@@ -15,10 +35,11 @@ from typing import Any, Dict as DictType, List, Optional
 import numpy as np
 from gymnasium.spaces import Box
 
-from heron.agents.system_agent import SystemAgent, SYSTEM_LEVEL
+from heron.agents.system_agent import SystemAgent
 from heron.core.observation import Observation
 from heron.core.policies import Policy
 from heron.protocols.base import Protocol, NoProtocol
+from heron.scheduling.tick_config import TickConfig, JitterType
 from heron.utils.typing import AgentID
 from powergrid.agents.power_grid_agent import PowerGridAgent
 from powergrid.core.state.state import GridSystemState
@@ -76,11 +97,8 @@ class GridSystemAgent(SystemAgent):
         grids: Optional[List[PowerGridAgent]] = None,
         system_config: Optional[DictType[str, Any]] = None,
 
-        # timing params
-        tick_interval: float = 300.0,
-        obs_delay: float = 0.0,
-        act_delay: float = 0.0,
-        msg_delay: float = 0.0,
+        # timing config (for event-driven scheduling)
+        tick_config: Optional[TickConfig] = None,
     ):
         """Initialize grid system agent.
 
@@ -91,10 +109,9 @@ class GridSystemAgent(SystemAgent):
             env_id: Environment ID
             grids: List of PowerGridAgent instances to manage
             system_config: System configuration dictionary
-            tick_interval: Time between agent ticks (default 300s)
-            obs_delay: Observation delay
-            act_delay: Action delay
-            msg_delay: Message delay
+            tick_config: Timing configuration for event-driven scheduling.
+                Defaults to TickConfig with tick_interval=300.0 (system agents tick least frequently).
+                Use TickConfig.deterministic() or TickConfig.with_jitter().
         """
         system_config = system_config or {}
         self._system_config = system_config
@@ -113,16 +130,13 @@ class GridSystemAgent(SystemAgent):
             policy=policy,
             env_id=env_id,
             config=config,
-            tick_interval=tick_interval,
-            obs_delay=obs_delay,
-            act_delay=act_delay,
-            msg_delay=msg_delay,
+            tick_config=tick_config,
         )
 
         # Use GridSystemState for power-grid domain
         self.state = GridSystemState(
             owner_id=self.agent_id,
-            owner_level=SYSTEM_LEVEL
+            owner_level=self.level
         )
 
         # If grids were provided directly, set them up now
@@ -192,8 +206,7 @@ class GridSystemAgent(SystemAgent):
         self.frequency = 60.0
 
         # Reset state features
-        if hasattr(self, 'state') and self.state:
-            self.state.reset()
+        self.state.reset()
 
     # ============================================
     # Observation Methods
@@ -213,19 +226,10 @@ class GridSystemAgent(SystemAgent):
         Returns:
             System observation dictionary
         """
-        # Aggregate generation and load from all grids
-        total_gen = 0.0
-        total_load = 0.0
-
-        for coord_id, coord in self.coordinators.items():
-            if hasattr(coord, 'cost'):
-                # PowerGridAgent aggregates device costs
-                pass
-
         return {
             "coordinator_obs": coordinator_obs,
             "grid_obs": coordinator_obs,  # Alias for backward compat
-            "system_state": self.state.vector() if self.state else None,
+            "system_state": self.state.vector(),
             "total_generation": self.total_generation,
             "total_load": self.total_load,
             "frequency": self.frequency,
@@ -252,10 +256,9 @@ class GridSystemAgent(SystemAgent):
         self.total_load = env_state.get('total_load', 0.0)
 
         # Update state features
-        if hasattr(self.state, 'update_feature'):
-            self.state.update_feature('SystemFrequency', frequency_hz=self.frequency)
-            self.state.update_feature('AggregateGeneration', total_mw=self.total_generation)
-            self.state.update_feature('AggregateLoad', total_mw=self.total_load)
+        self.state.update_feature('SystemFrequency', frequency_hz=self.frequency)
+        self.state.update_feature('AggregateGeneration', total_mw=self.total_generation)
+        self.state.update_feature('AggregateLoad', total_mw=self.total_load)
 
     def get_state_for_environment(self) -> DictType[str, Any]:
         """Get system and grid states for environment.
@@ -281,18 +284,12 @@ class GridSystemAgent(SystemAgent):
     @property
     def cost(self) -> float:
         """Aggregate cost from all grids."""
-        return sum(
-            grid.cost for grid in self.grids.values()
-            if hasattr(grid, 'cost')
-        )
+        return sum(grid.cost for grid in self.grids.values())
 
     @property
     def safety(self) -> float:
         """Aggregate safety penalty from all grids."""
-        return sum(
-            grid.safety for grid in self.grids.values()
-            if hasattr(grid, 'safety')
-        )
+        return sum(grid.safety for grid in self.grids.values())
 
     def get_reward(self) -> DictType[str, float]:
         """Get system-wide reward.
@@ -313,8 +310,7 @@ class GridSystemAgent(SystemAgent):
             net: Optional network object (passed to grids)
         """
         for grid in self.grids.values():
-            if hasattr(grid, 'update_cost_safety'):
-                grid.update_cost_safety(net)
+            grid.update_cost_safety(net)
 
     # ============================================
     # Space Construction
@@ -329,12 +325,11 @@ class GridSystemAgent(SystemAgent):
         # Aggregate from all grids
         grid_obs_size = 0
         for grid in self.grids.values():
-            if hasattr(grid, 'get_grid_observation_space'):
-                space = grid.get_grid_observation_space()
-                grid_obs_size += space.shape[0] if space.shape else 0
+            space = grid.get_grid_observation_space()
+            grid_obs_size += space.shape[0] if space.shape else 0
 
         # Add system state size
-        system_state_size = len(self.state.vector()) if self.state else 3
+        system_state_size = len(self.state.vector())
 
         return Box(
             low=-np.inf,
@@ -375,8 +370,7 @@ class GridSystemAgent(SystemAgent):
 
         # Propagate to all grids
         for grid in self.grids.values():
-            if hasattr(grid, 'configure_for_distributed'):
-                grid.configure_for_distributed(self._message_broker)
+            grid.configure_for_distributed(self._message_broker)
 
     def reset_all_grids(self, **kwargs) -> None:
         """Reset all subordinate grid agents.

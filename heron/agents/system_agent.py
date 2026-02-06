@@ -14,7 +14,6 @@ In event-driven mode (Option B - Testing), the system agent:
 3. Distributes actions via MESSAGE_DELIVERY events
 """
 
-from dataclasses import dataclass
 from typing import Any, Dict as DictType, List, Optional
 
 import numpy as np
@@ -34,22 +33,6 @@ from heron.scheduling.tick_config import TickConfig
 
 
 SYSTEM_LEVEL = 3  # Level identifier for system-level agents
-
-
-@dataclass
-class SystemConfig:
-    """Configuration for SystemAgent initialization.
-
-    Attributes:
-        name: System agent name
-        state_config: Configuration for system state features
-    """
-    name: str = "system_agent"
-    state_config: DictType[str, Any] = None
-
-    def __post_init__(self):
-        if self.state_config is None:
-            self.state_config = {}
 
 
 class SystemAgent(HierarchicalAgent):
@@ -149,7 +132,7 @@ class SystemAgent(HierarchicalAgent):
         # Initialize action
         self.action = Action()
 
-        # Cache for environment state
+        # Cache for environment state (available to subclasses)
         self._cached_env_state: DictType[str, Any] = {}
 
         # Build coordinator agents
@@ -170,21 +153,7 @@ class SystemAgent(HierarchicalAgent):
         )
 
         # Initialize state and action via hooks (subclasses override these)
-        self._init_state()
-        self._init_action()
-
-    def _init_state(self) -> None:
-        """Initialize system-specific state attributes.
-
-        Calls set_state() hook for subclass customization.
-        """
         self.set_state()
-
-    def _init_action(self) -> None:
-        """Initialize system-specific action space.
-
-        Calls set_action() hook for subclass customization.
-        """
         self.set_action()
 
     # ============================================
@@ -384,39 +353,18 @@ class SystemAgent(HierarchicalAgent):
                 self.send_message(message, recipient_id=coord_id)
 
     # ============================================
-    # Backward Compatibility (Alias)
+    # Convenience Property
     # ============================================
 
     @property
     def coordinators(self) -> DictType[AgentID, CoordinatorAgent]:
-        """Alias for subordinates (backward compatibility)."""
+        """Alias for subordinates - more descriptive for SystemAgent context."""
         return self.subordinates
 
     @coordinators.setter
     def coordinators(self, value: DictType[AgentID, CoordinatorAgent]) -> None:
-        """Set subordinates (backward compatibility)."""
+        """Set coordinators (subordinates)."""
         self.subordinates = value
-
-    def _build_coordinators(
-        self,
-        coordinator_configs: List[DictType[str, Any]],
-        env_id: Optional[str] = None,
-        upstream_id: Optional[AgentID] = None,
-    ) -> DictType[AgentID, CoordinatorAgent]:
-        """Alias for _build_subordinates (backward compatibility)."""
-        return self._build_subordinates(coordinator_configs, env_id, upstream_id)
-
-    def coordinate_coordinators(
-        self,
-        observation: Any,
-        action: Any,
-    ) -> None:
-        """Alias for coordinate_subordinates (backward compatibility)."""
-        self.coordinate_subordinates(observation, action)
-
-    def get_coordinator_action_spaces(self) -> DictType[str, Any]:
-        """Alias for get_subordinate_action_spaces (backward compatibility)."""
-        return self.get_subordinate_action_spaces()
 
     # ============================================
     # Utility Methods (Both Modes)

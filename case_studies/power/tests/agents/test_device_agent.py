@@ -31,18 +31,18 @@ class ConcreteDeviceAgent(DeviceAgent):
         self._P = 0.0  # Store P as instance var since state uses features
         super().__init__(*args, **kwargs)
 
-    def set_device_action(self):
+    def set_action(self):
         """Define simple continuous action space."""
         self.action.set_specs(
             dim_c=1,
             range=(np.array([0.0], dtype=np.float32), np.array([1.0], dtype=np.float32))
         )
 
-    def _get_obs(self) -> np.ndarray:
+    def _get_obs(self, proxy=None) -> np.ndarray:
         """Override to return simple mock observation."""
         return np.array([self._P], dtype=np.float32)
 
-    def reset_device(self, *args, **kwargs):
+    def reset_agent(self, *args, **kwargs):
         """Reset device state."""
         self._P = 0.0
         self.cost = 0.0
@@ -129,7 +129,7 @@ class TestDeviceAgent:
     def test_get_action_space_discrete(self):
         """Test discrete action space."""
         class DiscreteDeviceAgent(DeviceAgent):
-            def set_device_action(self):
+            def set_action(self):
                 self.action.set_specs(
                     dim_d=1,
                     ncats=[5]
@@ -138,7 +138,7 @@ class TestDeviceAgent:
             def _get_obs(self):
                 return np.array([0.0], dtype=np.float32)
 
-            def reset_device(self, **kwargs):
+            def reset_agent(self, **kwargs):
                 pass
 
             def update_state(self, **kwargs):
@@ -195,7 +195,7 @@ class TestDeviceAgent:
     def test_get_action_space_multidimensional_continuous(self):
         """Test multi-dimensional continuous action space."""
         class MultiDimAgent(DeviceAgent):
-            def set_device_action(self):
+            def set_action(self):
                 self.action.set_specs(
                     dim_c=2,
                     range=(
@@ -207,7 +207,7 @@ class TestDeviceAgent:
             def _get_obs(self):
                 return np.array([0.0, 0.0], dtype=np.float32)
 
-            def reset_device(self, **kwargs):
+            def reset_agent(self, **kwargs):
                 pass
 
             def update_state(self, **kwargs):

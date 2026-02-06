@@ -24,15 +24,27 @@ Usage Pattern (Option A - Synchronous):
     # Agents request state through proxy
     state = proxy.get_state_for_agent("sensor_1", requestor_level=1)
 
-Usage Pattern (Option B - Event-Driven):
-    # Agents call get_state_for_agent() in their tick() method
-    # ProxyAgent applies obs_delay by returning historical state via at_time param
+Usage Pattern (Option B - Event-Driven with Message Broker):
+    from heron.messaging.base import InMemoryBroker
+
+    broker = InMemoryBroker()
+    proxy = ProxyAgent(
+        env_id="env_1",
+        registered_agents=["grid_1", "grid_2"],
+        message_broker=broker,
+        result_channel_type="power_flow",  # Custom channel type
+    )
+
+    # Environment publishes state to proxy via broker
+    # proxy.receive_state_from_environment()  # Pull from broker
+    # proxy.distribute_state_to_agents()      # Push to agents
 """
 
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from heron.agents.base import Agent
 from heron.core.observation import Observation
+from heron.messaging.base import ChannelManager, Message, MessageBroker, MessageType
 from heron.utils.typing import AgentID
 
 if TYPE_CHECKING:
@@ -68,6 +80,8 @@ class ProxyAgent(Agent):
         registered_agents: Optional[List[AgentID]] = None,
         visibility_rules: Optional[Dict[AgentID, List[str]]] = None,
         history_length: int = 100,
+        message_broker: Optional[MessageBroker] = None,
+        result_channel_type: str = "result",
     ):
         """Initialize proxy agent.
 
@@ -78,6 +92,12 @@ class ProxyAgent(Agent):
             visibility_rules: Dict mapping agent IDs to allowed state keys.
                 If None, all agents see all state by default.
             history_length: Number of timesteps of history to maintain
+            message_broker: Optional message broker for distributed communication.
+                If provided, enables receive_state_from_environment() and
+                distribute_state_to_agents() methods.
+            result_channel_type: Channel type for receiving state from environment.
+                Default is "result". Domain-specific implementations may use
+                custom types like "power_flow".
         """
         super().__init__(
             agent_id=agent_id,
@@ -92,6 +112,12 @@ class ProxyAgent(Agent):
         self.state_cache: Dict[str, Any] = {}
         self.state_history: List[Dict[str, Any]] = []
         self.history_length = history_length
+
+        # Message broker support (Option B - Event-Driven)
+        self._result_channel_type = result_channel_type
+        if message_broker is not None:
+            self.set_message_broker(message_broker)
+            self._setup_channels()
 
     # ============================================
     # State Management
@@ -142,6 +168,12 @@ class ProxyAgent(Agent):
     # ============================================
     # State Filtering
     # ============================================
+    #
+    # Two visibility mechanisms are supported:
+    # 1. Key-based: visibility_rules dict maps agent_id -> allowed state keys
+    # 2. FeatureProvider-based: State.features with is_observable_by() for level-based rules
+    #
+    # Use key-based for simple scenarios. Use FeatureProvider for hierarchy-aware visibility.
 
     def _filter_state_by_keys(
         self,
@@ -211,21 +243,6 @@ class ProxyAgent(Agent):
             }
 
         return filtered
-
-    def get_latest_state_for_agent(self, agent_id: AgentID) -> Dict[str, Any]:
-        """Get the latest cached state for a specific agent.
-
-        Convenience method that calls get_state_for_agent with minimal params.
-
-        Args:
-            agent_id: Agent requesting the state
-
-        Returns:
-            Filtered state dict
-        """
-        agents_state = self.state_cache.get('agents', {})
-        agent_state = agents_state.get(agent_id, {})
-        return self._filter_state_by_keys(agent_id, agent_state)
 
     def get_observable_features(
         self,
@@ -317,9 +334,105 @@ class ProxyAgent(Agent):
         self.state_history = []
 
     # ============================================
+    # Message Broker Support (Option B - Event-Driven)
+    # ============================================
+
+    def _setup_channels(self) -> None:
+        """Setup message broker channels for communication.
+
+        Creates channels for:
+        - Environment -> Proxy (result channel)
+        - Proxy -> Each registered agent (info channels)
+        """
+        if self._message_broker is None:
+            return
+
+        env_id = self.env_id or "default"
+
+        # Create env->proxy channel for receiving results
+        env_channel = ChannelManager.custom_channel(
+            self._result_channel_type, env_id, self.agent_id
+        )
+        self._message_broker.create_channel(env_channel)
+
+        # Create proxy->agent channels for distributing state
+        for agent_id in self.registered_agents:
+            agent_channel = ChannelManager.info_channel(
+                self.agent_id, agent_id, env_id
+            )
+            self._message_broker.create_channel(agent_channel)
+
+    def receive_state_from_environment(self) -> Optional[Dict[str, Any]]:
+        """Receive state from environment via message broker.
+
+        Consumes messages from the result channel and updates the
+        state cache with the latest state.
+
+        Returns:
+            Latest state payload, or None if no messages or no broker configured
+        """
+        if self._message_broker is None:
+            return None
+
+        env_id = self.env_id or "default"
+        channel = ChannelManager.custom_channel(
+            self._result_channel_type, env_id, self.agent_id
+        )
+
+        messages = self._message_broker.consume(
+            channel=channel,
+            recipient_id=self.agent_id,
+            env_id=env_id,
+            clear=True,
+        )
+
+        if not messages:
+            return None
+
+        # Use the latest message
+        latest_msg = messages[-1]
+        self.update_state(latest_msg.payload)
+        return latest_msg.payload
+
+    def distribute_state_to_agents(self) -> None:
+        """Distribute cached state to registered agents via message broker.
+
+        Sends filtered state to each registered agent based on visibility rules.
+        Only works if message_broker was provided during initialization.
+        """
+        if self._message_broker is None:
+            return
+
+        if not self.state_cache:
+            return
+
+        env_id = self.env_id or "default"
+        agents_state = self.state_cache.get("agents", {})
+
+        for agent_id in self.registered_agents:
+            # Get agent-specific state from aggregated state
+            agent_state = agents_state.get(agent_id, {})
+
+            # Apply visibility filtering
+            filtered_state = self._filter_state_by_keys(agent_id, agent_state)
+
+            # Send to agent via info channel
+            channel = ChannelManager.info_channel(self.agent_id, agent_id, env_id)
+            msg = Message(
+                env_id=env_id,
+                sender_id=self.agent_id,
+                recipient_id=agent_id,
+                timestamp=self._timestep,
+                message_type=MessageType.INFO,
+                payload=filtered_state,
+            )
+            self._message_broker.publish(channel, msg)
+
+    # ============================================
     # Utility Methods
     # ============================================
 
     def __repr__(self) -> str:
         num_registered = len(self.registered_agents)
-        return f"ProxyAgent(id={self.agent_id}, registered_agents={num_registered})"
+        has_broker = self._message_broker is not None
+        return f"ProxyAgent(id={self.agent_id}, registered_agents={num_registered}, broker={has_broker})"

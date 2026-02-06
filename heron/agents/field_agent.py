@@ -21,7 +21,6 @@ Supports two execution modes:
 """
 
 from typing import Any, Dict, Optional
-from dataclasses import dataclass
 
 import numpy as np
 from gymnasium.spaces import Box, Space
@@ -42,15 +41,6 @@ from heron.scheduling.tick_config import TickConfig
 from heron.scheduling.scheduler import EventScheduler
 
 FIELD_LEVEL = 1  # Level identifier for field-level agents
-
-
-@dataclass
-class FieldConfig:
-    """Configuration for FieldAgent initialization."""
-    name: str
-    state_config: Dict[str, Any]
-    discrete_action: bool
-    discrete_action_cats: int  # Number of categories for discrete action if applicable
 
 
 class FieldAgent(Agent):
@@ -81,7 +71,6 @@ class FieldAgent(Agent):
         action: Agent's action container
         policy: Decision-making policy (learned or rule-based), optional
         protocol: Communication/action protocol, optional
-        field_config: FieldConfig with agent-specific settings
         action_space: Gymnasium Space for actions
         observation_space: Gymnasium Space for observations
 
@@ -164,16 +153,10 @@ class FieldAgent(Agent):
                 Use TickConfig.deterministic() or TickConfig.with_jitter().
         """
         config = config or {}
-
-        self.field_config = FieldConfig(
-            name=config.get("name", "field_agent"),
-            state_config=config.get("state_config", {}),
-            discrete_action=config.get("discrete_action", False),
-            discrete_action_cats=config.get("discrete_action_cats", 2),
-        )
+        default_name = config.get("name", "field_agent")
 
         self.state: FieldAgentState = FieldAgentState(
-            owner_id=agent_id or self.field_config.name,
+            owner_id=agent_id or default_name,
             owner_level=FIELD_LEVEL
         )
         self.action: Action = Action()
@@ -181,7 +164,7 @@ class FieldAgent(Agent):
         self.policy: Optional[Policy] = policy
 
         super().__init__(
-            agent_id=agent_id or self.field_config.name,
+            agent_id=agent_id or default_name,
             level=FIELD_LEVEL,
             upstream_id=upstream_id,
             env_id=env_id,
@@ -189,23 +172,16 @@ class FieldAgent(Agent):
             tick_config=tick_config or TickConfig.deterministic(tick_interval=1.0),
         )
 
-        self._init_action()
-        self._init_state()
+        # Initialize state and action via hooks (subclasses override these)
+        self.set_action()
+        self.set_state()
 
         self.action_space = self._get_action_space()
         self.observation_space = self._get_observation_space()
 
     # ============================================
-    # Initialization Methods (Both Modes)
+    # Extension Hooks (Override in subclasses)
     # ============================================
-
-    def _init_action(self) -> None:
-        """Initialize agent-specific action space. [Both Modes]"""
-        self.set_action()
-
-    def _init_state(self) -> None:
-        """Initialize agent-specific state attributes. [Both Modes]"""
-        self.set_state()
 
     def set_action(self) -> None:
         """Define/initialize the agent-specific action. [Both Modes]
@@ -360,6 +336,9 @@ class FieldAgent(Agent):
 
         self.action.set_values(action)
 
+        # Phase 1: Update action-dependent features immediately after action is set
+        self._update_action_features(action, observation)
+
     # ============================================
     # Action Handling (Both Modes)
     # ============================================
@@ -414,12 +393,12 @@ class FieldAgent(Agent):
     ) -> None:
         """Execute one tick in event-driven mode. [Testing Only]
 
-        In Option B, FieldAgent:
-        1. Updates timestep
-        2. Checks message broker for upstream action from coordinator
-        3. Gets observation (potentially delayed via ProxyAgent)
-        4. Computes action using upstream action or own policy
-        5. Schedules ACTION_EFFECT with act_delay
+        Workflow:
+        1. Check message broker for upstream action from coordinator
+        2. Get observation (potentially delayed via ProxyAgent)
+        3. Send observation to upstream coordinator (if has upstream)
+        4. Compute action using upstream action or own policy
+        5. Schedule ACTION_EFFECT with act_delay
 
         Args:
             scheduler: EventScheduler for scheduling future events
@@ -446,6 +425,10 @@ class FieldAgent(Agent):
             observation = self.observe(global_state, proxy=proxy)
         self._last_observation = observation
 
+        # Send observation to upstream coordinator
+        if self.upstream_id is not None:
+            self.send_observation_to_upstream(observation, scheduler=scheduler)
+
         # Compute action (coordinator-directed if upstream provided, else self-directed)
         if upstream_action is not None:
             action = self._handle_coordinator_action(upstream_action, observation)
@@ -456,6 +439,9 @@ class FieldAgent(Agent):
             return
 
         self.action.set_values(action)
+
+        # Phase 1: Update action-dependent features immediately after action is set
+        self._update_action_features(action, observation)
 
         # Schedule delayed action effect
         if self._tick_config.act_delay > 0:

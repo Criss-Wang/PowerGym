@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import gymnasium as gym
 
-from heron.envs.base import HeronEnvCore, BaseEnv, MultiAgentEnv
+from heron.envs.base import EnvCore, BaseEnv, MultiAgentEnv
 from heron.agents.base import Agent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.core.observation import Observation
@@ -70,8 +70,8 @@ class ConcreteMultiAgentEnv(MultiAgentEnv):
         return gym.spaces.Dict({})
 
 
-class TestHeronEnvCoreInitialization:
-    """Test HeronEnvCore initialization."""
+class TestEnvCoreInitialization:
+    """Test EnvCore initialization."""
 
     def test_init_generates_env_id(self):
         """Test that env_id is auto-generated."""
@@ -104,11 +104,11 @@ class TestHeronEnvCoreInitialization:
         """Test that agent dictionaries are initialized empty."""
         env = ConcreteMultiAgentEnv()
 
-        assert env.heron_agents == {}
-        assert env.heron_coordinators == {}
+        assert env.registered_agents == {}
+        assert env.registered_coordinators == {}
 
 
-class TestHeronEnvCoreAgentManagement:
+class TestEnvCoreAgentManagement:
     """Test agent management functionality."""
 
     def test_register_agent(self):
@@ -118,8 +118,8 @@ class TestHeronEnvCoreAgentManagement:
 
         env.register_agent(agent)
 
-        assert "agent_1" in env.heron_agents
-        assert env.heron_agents["agent_1"] is agent
+        assert "agent_1" in env.registered_agents
+        assert env.registered_agents["agent_1"] is agent
 
     def test_register_coordinator_agent(self):
         """Test registering a coordinator agent."""
@@ -128,8 +128,8 @@ class TestHeronEnvCoreAgentManagement:
 
         env.register_agent(coord)
 
-        assert "coord_1" in env.heron_agents
-        assert "coord_1" in env.heron_coordinators
+        assert "coord_1" in env.registered_agents
+        assert "coord_1" in env.registered_coordinators
 
     def test_register_agents_multiple(self):
         """Test registering multiple agents."""
@@ -142,28 +142,28 @@ class TestHeronEnvCoreAgentManagement:
 
         env.register_agents(agents)
 
-        assert len(env.heron_agents) == 3
+        assert len(env.registered_agents) == 3
 
-    def test_get_heron_agent(self):
+    def test_get_agent(self):
         """Test getting agent by ID."""
         env = ConcreteMultiAgentEnv()
         agent = MockAgent(agent_id="agent_1")
         env.register_agent(agent)
 
-        retrieved = env.get_heron_agent("agent_1")
+        retrieved = env.get_agent("agent_1")
 
         assert retrieved is agent
 
-    def test_get_heron_agent_missing(self):
+    def test_get_agent_missing(self):
         """Test getting non-existent agent returns None."""
         env = ConcreteMultiAgentEnv()
 
-        result = env.get_heron_agent("nonexistent")
+        result = env.get_agent("nonexistent")
 
         assert result is None
 
 
-class TestHeronEnvCoreObservations:
+class TestEnvCoreObservations:
     """Test observation collection."""
 
     def test_get_observations(self):
@@ -182,7 +182,7 @@ class TestHeronEnvCoreObservations:
         assert isinstance(obs["agent_1"], Observation)
 
 
-class TestHeronEnvCoreApplyActions:
+class TestEnvCoreApplyActions:
     """Test action application."""
 
     def test_apply_actions(self):
@@ -202,7 +202,7 @@ class TestHeronEnvCoreApplyActions:
         env.apply_actions(actions)
 
 
-class TestHeronEnvCoreSpaces:
+class TestEnvCoreSpaces:
     """Test action/observation space methods."""
 
     def test_get_agent_action_spaces(self):
@@ -229,7 +229,7 @@ class TestHeronEnvCoreSpaces:
         assert "agent_1" in spaces
 
 
-class TestHeronEnvCoreResetAgents:
+class TestEnvCoreResetAgents:
     """Test agent reset functionality."""
 
     def test_reset_agents(self):
@@ -247,11 +247,11 @@ class TestHeronEnvCoreResetAgents:
 
         env.reset_agents()
 
-        for agent in env.heron_agents.values():
+        for agent in env.registered_agents.values():
             assert agent._timestep == 0.0
 
 
-class TestHeronEnvCoreConfigureDistributed:
+class TestEnvCoreConfigureDistributed:
     """Test configure_agents_for_distributed method."""
 
     def test_configure_agents_for_distributed(self):
@@ -265,12 +265,12 @@ class TestHeronEnvCoreConfigureDistributed:
 
         env.configure_agents_for_distributed()
 
-        for agent in env.heron_agents.values():
+        for agent in env.registered_agents.values():
             assert agent.message_broker is env.message_broker
             assert agent.env_id == env.env_id
 
 
-class TestHeronEnvCoreSimulationTime:
+class TestEnvCoreSimulationTime:
     """Test simulation time property."""
 
     def test_simulation_time_no_scheduler(self):
@@ -281,7 +281,7 @@ class TestHeronEnvCoreSimulationTime:
         assert env.simulation_time == 5.0
 
 
-class TestHeronEnvCoreBrokerMethods:
+class TestEnvCoreBrokerMethods:
     """Test message broker methods."""
 
     def test_setup_broker_channels(self):
@@ -332,15 +332,15 @@ class TestHeronEnvCoreBrokerMethods:
         # Should not raise
 
 
-class TestHeronEnvCoreClose:
+class TestEnvCoreClose:
     """Test close functionality."""
 
-    def test_close_heron(self):
-        """Test closing HERON resources."""
+    def test_close_core(self):
+        """Test closing core resources."""
         env = ConcreteMultiAgentEnv()
 
         # Should not raise
-        env.close_heron()
+        env.close_core()
 
 
 class TestBaseEnv:

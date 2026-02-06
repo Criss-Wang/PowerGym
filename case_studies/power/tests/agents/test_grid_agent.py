@@ -162,10 +162,11 @@ class TestGridAgent:
 
         obs = grid.observe()
 
-        with pytest.raises(NotImplementedError):
-            grid.act(obs)
+        # Base class returns None when no action/policy provided
+        result = grid.act(obs)
+        assert result is None
 
-    def test_grid_agent_coordinate_device(self):
+    def test_grid_agent_coordinate_subordinates(self):
         """Test device coordination."""
         device1 = MockDeviceAgent("device1")
         protocol = NoProtocol()
@@ -182,7 +183,7 @@ class TestGridAgent:
         action = np.array([0.5])
 
         # Should not raise error
-        grid.coordinate_device(obs, action)
+        grid.coordinate_subordinates(obs, action)
 
     def test_grid_agent_repr(self):
         """Test grid agent string representation."""

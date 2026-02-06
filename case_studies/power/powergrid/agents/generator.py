@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass, fields
 from typing import Any, Dict, Optional, Sequence
 
@@ -6,6 +7,7 @@ import numpy as np
 from powergrid.agents.device_agent import DeviceAgent
 from heron.core.policies import Policy
 from heron.protocols.base import NoProtocol, Protocol
+from heron.scheduling.tick_config import TickConfig
 from powergrid.core.features.electrical import ElectricalBasePh
 from powergrid.core.features.power_limits import PowerLimits
 from powergrid.core.features.status import StatusBlock
@@ -97,11 +99,8 @@ class Generator(DeviceAgent):
         upstream_id: Optional[str] = None,
         env_id: Optional[str] = None,
         device_config: Optional[Dict[str, Any]] = None,
-        # timing params (for event-driven scheduling)
-        tick_interval: float = 1.0,
-        obs_delay: float = 0.0,
-        act_delay: float = 0.0,
-        msg_delay: float = 0.0,
+        # timing config (for event-driven scheduling)
+        tick_config: Optional[TickConfig] = None,
     ):
         if device_config is None:
             device_config = {}
@@ -147,13 +146,10 @@ class Generator(DeviceAgent):
             upstream_id=upstream_id,
             env_id=env_id,
             device_config=device_config,
-            tick_interval=tick_interval,
-            obs_delay=obs_delay,
-            act_delay=act_delay,
-            msg_delay=msg_delay,
+            tick_config=tick_config,
         )
 
-    def set_device_action(self) -> None:
+    def set_action(self) -> None:
         """
         Define Action depending on generator control model.
 
@@ -214,7 +210,6 @@ class Generator(DeviceAgent):
             elif has_pf_cap:
                 # (1c) P+Q with PF capability curve:
                 # approximate symmetric Q box from S & pf_min_abs
-                import math
                 S = cfg.s_rated_MVA * (cfg.derate_frac or 1.0)
                 pf = cfg.pf_min_abs
                 q_max_mag = S * math.sqrt(max(0.0, 1.0 - pf * pf))
@@ -258,9 +253,9 @@ class Generator(DeviceAgent):
             range=(np.asarray(lows, np.float32), np.asarray(highs, np.float32)),
         )
 
-    def set_device_state(self) -> None:
+    def set_state(self) -> None:
         # Electrical telemetry
-        eletrical_telemetry = ElectricalBasePh(
+        electrical_telemetry = ElectricalBasePh(
             phase_model=self.phase_model,
             phase_spec=self.phase_spec,
             P_MW=0.0,
@@ -295,15 +290,15 @@ class Generator(DeviceAgent):
             pf_min_abs=self._generator_config.pf_min_abs,
         )
 
-        self.state.features=[
-            eletrical_telemetry,
+        self.state.features = [
+            electrical_telemetry,
             status,
             power_limits,
         ]
         self.state.owner_id = self.agent_id
         self.state.owner_level = self.level
 
-    def reset_device(self) -> None:
+    def reset_agent(self, **kwargs) -> None:
         """Reset generator to a neutral operating point."""
         self.state.reset()
         self.action.reset()
@@ -456,6 +451,7 @@ class Generator(DeviceAgent):
             self.state.update_feature(StatusBlock.feature_name, **status_updates)
         if limits_updates:
             self.state.update_feature(PowerLimits.feature_name, **limits_updates)
+
     def update_cost_safety(self) -> None:
         """Economic cost + S/PF penalties + UC start/stop cost."""
         P = self.electrical.P_MW or 0.0
@@ -524,8 +520,7 @@ class Generator(DeviceAgent):
         return bool(self.status.in_service) if self.status else True
 
     def __repr__(self) -> str:
-        name = self.config.name
         s = self.limits.s_rated_MVA
         pmin = self.limits.p_min_MW
         pmax = self.limits.p_max_MW
-        return f"DG(name={name}, S={s}MVA, P∈[{pmin},{pmax}]MW)"
+        return f"DG(name={self.agent_id}, S={s}MVA, P∈[{pmin},{pmax}]MW)"

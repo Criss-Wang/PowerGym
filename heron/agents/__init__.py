@@ -9,7 +9,7 @@ This module provides the agent hierarchy:
 """
 
 from heron.agents.base import Agent
-from heron.agents.field_agent import FieldAgent, FieldConfig
+from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.agents.system_agent import SystemAgent
 from heron.agents.proxy_agent import ProxyAgent
@@ -17,7 +17,6 @@ from heron.agents.proxy_agent import ProxyAgent
 __all__ = [
     "Agent",
     "FieldAgent",
-    "FieldConfig",
     "CoordinatorAgent",
     "SystemAgent",
     "ProxyAgent",

@@ -5,7 +5,7 @@ This module provides environment base classes and framework adapters for buildin
 ## Architecture
 
 ```
-                          HeronEnvCore (Mixin)
+                          EnvCore (Mixin)
                     Agent management, event scheduling,
                          message broker support
                                   │
@@ -14,7 +14,7 @@ This module provides environment base classes and framework adapters for buildin
             ▼                     ▼                     ▼
        BaseEnv              MultiAgentEnv          Adapters
     (gym.Env +            (Abstract base)              │
-    HeronEnvCore)                                      │
+    EnvCore)                                      │
          │                                    ┌────────┴────────┐
          │                                    │                 │
          ▼                                    ▼                 ▼
@@ -27,7 +27,7 @@ This module provides environment base classes and framework adapters for buildin
 ```
 heron/envs/
 ├── __init__.py    # Public exports
-├── base.py        # HeronEnvCore, BaseEnv, MultiAgentEnv
+├── base.py        # EnvCore, BaseEnv, MultiAgentEnv
 └── adapters.py    # PettingZooParallelEnv, RLlibMultiAgentEnv
 ```
 
@@ -63,19 +63,19 @@ num_events = env.run_event_driven(t_end=3600.0)
 
 ## Components
 
-### HeronEnvCore (Mixin)
+### EnvCore (Mixin)
 
 Core functionality mixin that can be combined with any environment interface.
 
 ```python
 import gymnasium as gym
-from heron.envs import HeronEnvCore
+from heron.envs import EnvCore
 from heron.agents import FieldAgent
 
-class MyEnv(gym.Env, HeronEnvCore):
+class MyEnv(gym.Env, EnvCore):
     def __init__(self):
         super().__init__()
-        self._init_heron_core(env_id="my_env")
+        self._init_core(env_id="my_env")
 
         # Register agents
         agent = FieldAgent(agent_id="agent_1")
@@ -97,7 +97,7 @@ class MyEnv(gym.Env, HeronEnvCore):
 
 | Method | Mode | Description |
 |--------|------|-------------|
-| `_init_heron_core()` | Both | Initialize HERON functionality |
+| `_init_core()` | Both | Initialize core functionality |
 | `register_agent(agent)` | Both | Register an agent |
 | `get_observations()` | Training | Collect observations from all agents |
 | `apply_actions(actions)` | Training | Apply actions to agents |
@@ -168,7 +168,7 @@ class MyPettingZooEnv(PettingZooParallelEnv):
         self._build_agents()
 
         # Set PettingZoo-required attributes
-        self._set_agent_ids(list(self.heron_agents.keys()))
+        self._set_agent_ids(list(self.registered_agents.keys()))
         self._init_spaces(
             action_spaces=self.get_agent_action_spaces(),
             observation_spaces=self.get_agent_observation_spaces()
@@ -210,7 +210,7 @@ class MyRLlibEnv(RLlibMultiAgentEnv):
         self._build_agents()
 
         # Set RLlib-required attributes
-        self._set_agent_ids(list(self.heron_agents.keys()))
+        self._set_agent_ids(list(self.registered_agents.keys()))
         self._init_spaces(
             action_spaces=self.get_agent_action_spaces(),
             observation_spaces=self.get_agent_observation_spaces()
@@ -326,14 +326,14 @@ env.clear_broker_environment()
 
 ## API Reference
 
-### HeronEnvCore
+### EnvCore
 
 | Method | Description |
 |--------|-------------|
-| `_init_heron_core(env_id, scheduler, message_broker)` | Initialize core |
+| `_init_core(env_id, scheduler, message_broker)` | Initialize core |
 | `register_agent(agent)` | Register single agent |
 | `register_agents(agents)` | Register multiple agents |
-| `get_heron_agent(agent_id)` | Get agent by ID |
+| `get_agent(agent_id)` | Get agent by ID |
 | `get_observations(global_state)` | Collect all observations |
 | `apply_actions(actions, observations)` | Apply actions to agents |
 | `get_agent_action_spaces()` | Get all action spaces |
@@ -350,14 +350,14 @@ env.clear_broker_environment()
 | `update_proxy_state(state)` | Update proxy cache |
 | `step_with_system_agent(actions, global_state)` | CTDE step |
 | `run_event_driven_with_system_agent(...)` | Event-driven with hierarchy |
-| `close_heron()` | Cleanup resources |
+| `close_core()` | Cleanup resources |
 
 ### Properties
 
 | Property | Description |
 |----------|-------------|
-| `heron_agents` | Dict of registered agents |
-| `heron_coordinators` | Dict of coordinator agents |
+| `registered_agents` | Dict of registered agents |
+| `registered_coordinators` | Dict of coordinator agents |
 | `system_agent` | SystemAgent instance |
 | `proxy_agent` | ProxyAgent instance |
 | `simulation_time` | Current simulation time |

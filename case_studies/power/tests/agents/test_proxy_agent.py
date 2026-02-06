@@ -13,7 +13,7 @@ Tests cover:
 import pytest
 from typing import Dict, Any
 
-from powergrid.agents.proxy_agent import ProxyAgent, PROXY_LEVEL
+from heron.agents.proxy_agent import ProxyAgent, PROXY_LEVEL
 from heron.messaging.base import Message, MessageType, ChannelManager
 from heron.messaging.in_memory_broker import InMemoryBroker
 
@@ -74,10 +74,12 @@ class TestProxyAgentInitialization:
 
         assert proxy.visibility_rules == visibility_rules
 
-    def test_initialization_without_broker_raises_error(self):
-        """Test initialization without message broker raises error."""
-        with pytest.raises(ValueError, match="requires a message broker"):
-            ProxyAgent(agent_id="proxy", message_broker=None)
+    def test_initialization_without_broker_allowed(self):
+        """Test initialization without message broker is allowed (synchronous mode)."""
+        # Base ProxyAgent allows no broker for synchronous mode (Option A)
+        proxy = ProxyAgent(agent_id="proxy", message_broker=None)
+        assert proxy.agent_id == "proxy"
+        assert proxy._message_broker is None
 
     def test_channel_setup(self):
         """Test proxy channels are created correctly."""
@@ -88,7 +90,8 @@ class TestProxyAgentInitialization:
             agent_id="proxy",
             message_broker=broker,
             env_id="env_0",
-            registered_agents=agents_list
+            registered_agents=agents_list,
+            result_channel_type="power_flow",  # Use power_flow channel
         )
 
         # Check env->proxy channel exists
@@ -129,7 +132,8 @@ class TestNetworkStateReception:
         proxy = ProxyAgent(
             agent_id="proxy",
             message_broker=broker,
-            env_id="env_0"
+            env_id="env_0",
+            result_channel_type="power_flow",
         )
 
         # Simulate environment sending network state
@@ -163,7 +167,8 @@ class TestNetworkStateReception:
         proxy = ProxyAgent(
             agent_id="proxy",
             message_broker=broker,
-            env_id="env_0"
+            env_id="env_0",
+            result_channel_type="power_flow",
         )
 
         channel = ChannelManager.custom_channel("power_flow", "env_0", "proxy")
@@ -196,7 +201,8 @@ class TestNetworkStateReception:
         proxy = ProxyAgent(
             agent_id="proxy",
             message_broker=broker,
-            env_id="env_0"
+            env_id="env_0",
+            result_channel_type="power_flow",
         )
 
         received_state = proxy.receive_state_from_environment()
@@ -209,7 +215,8 @@ class TestNetworkStateReception:
         proxy = ProxyAgent(
             agent_id="proxy",
             message_broker=broker,
-            env_id="env_0"
+            env_id="env_0",
+            result_channel_type="power_flow",
         )
 
         channel = ChannelManager.custom_channel("power_flow", "env_0", "proxy")
@@ -470,8 +477,8 @@ class TestVisibilityFiltering:
 class TestOnDemandStateRetrieval:
     """Test on-demand state retrieval by agents."""
 
-    def test_get_latest_state_for_agent(self):
-        """Test getting latest state for specific agent."""
+    def test_get_state_for_agent(self):
+        """Test getting state for specific agent."""
         broker = InMemoryBroker()
         proxy = ProxyAgent(
             agent_id="proxy",
@@ -487,13 +494,13 @@ class TestOnDemandStateRetrieval:
             }
         }
 
-        state1 = proxy.get_latest_state_for_agent("agent_1")
+        state1 = proxy.get_state_for_agent("agent_1", requestor_level=1)
         assert state1 == {"voltage": 1.0, "power": 100.0}
 
-        state2 = proxy.get_latest_state_for_agent("agent_2")
+        state2 = proxy.get_state_for_agent("agent_2", requestor_level=1)
         assert state2 == {"voltage": 0.98, "power": 110.0}
 
-    def test_get_latest_state_with_visibility_rules(self):
+    def test_get_state_with_visibility_rules(self):
         """Test on-demand retrieval applies visibility rules."""
         broker = InMemoryBroker()
         visibility_rules = {"agent_1": ["voltage"]}
@@ -512,10 +519,10 @@ class TestOnDemandStateRetrieval:
             }
         }
 
-        state = proxy.get_latest_state_for_agent("agent_1")
+        state = proxy.get_state_for_agent("agent_1", requestor_level=1)
         assert state == {"voltage": 1.0}
 
-    def test_get_latest_state_agent_not_in_cache(self):
+    def test_get_state_agent_not_in_cache(self):
         """Test retrieving state for agent not in cache."""
         broker = InMemoryBroker()
         proxy = ProxyAgent(
@@ -529,7 +536,7 @@ class TestOnDemandStateRetrieval:
             "agents": {}
         }
 
-        state = proxy.get_latest_state_for_agent("nonexistent_agent")
+        state = proxy.get_state_for_agent("nonexistent_agent", requestor_level=1)
         assert state == {}
 
 
@@ -548,14 +555,16 @@ class TestMultiEnvironmentIsolation:
             agent_id="proxy",
             message_broker=broker,
             env_id="env_0",
-            registered_agents=["agent_1"]
+            registered_agents=["agent_1"],
+            result_channel_type="power_flow",
         )
 
         proxy2 = ProxyAgent(
             agent_id="proxy",
             message_broker=broker,
             env_id="env_1",
-            registered_agents=["agent_1"]
+            registered_agents=["agent_1"],
+            result_channel_type="power_flow",
         )
 
         # Send state to both proxies

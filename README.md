@@ -1,707 +1,253 @@
 # HERON: Hierarchical Environments for Realistic Observability in Networks
 
-A **domain-agnostic Multi-Agent Reinforcement Learning (MARL) framework** with a power systems case study. HERON provides modular abstractions for hierarchical agents, coordination protocols, and realistic observability constraints.
+A **domain-agnostic Multi-Agent Reinforcement Learning (MARL) framework** for hierarchical control systems with realistic observability constraints.
 
 ---
 
-## Table of Contents
+## Why HERON?
 
-- [Features](#features)
-- [Architecture Overview](#architecture-overview)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Setting Up Your Own Project](#setting-up-your-own-project)
-- [Included Case Study](#included-case-study)
-- [Documentation](#documentation)
-- [Development](#development)
+| Challenge | HERON Solution |
+|-----------|----------------|
+| Flat agent structures don't scale | **3-level hierarchy**: Field → Coordinator → System |
+| Full observability is unrealistic | **Visibility rules** control what each agent sees |
+| Training ≠ deployment timing | **Dual-mode execution**: sync training, async testing |
+| Domain-specific code everywhere | **Pluggable protocols** for any coordination pattern |
 
 ---
 
-## Features
-
-### Core Framework
-- **Hierarchical Agent System**: Multi-level hierarchy with configurable depth (e.g., Field → Coordinator → System)
-- **Feature-based State**: Composable `FeatureProvider` system with extensible visibility tags (defaults: `owner`, `coordinator`, `system`, `global`)
-- **Coordination Protocols**: Vertical (Setpoint, Price Signal) and Horizontal (P2P Trading, Consensus)
-- **Message Broker System**: `InMemoryBroker` with extensible interface for Kafka/RabbitMQ
-- **Dual-mode Execution**: Support centralized and de-centralized execution modes with easy configurations
-
-### RL Integration
-- Works with canonical RL algorithm libraries like **RLlib** and **Stable-Baselines3**
-- Support plugin-and-play for canonical MARL environments like **PettingZoo**, **MAgent** and **SMAC**
-
----
-
-## Architecture Overview
-
-HERON provides a layered architecture with clear separation of concerns:
+## Architecture at a Glance
 
 ```
-heron/                          # Domain-agnostic MARL framework
-├── agents/                     # Hierarchical agent abstractions
-│   ├── base.py                 # Agent base class with level property
-│   ├── field_agent.py          # Leaf-level agents (local sensing/actuation)
-│   ├── coordinator_agent.py    # Mid-level agents (manages child agents)
-│   ├── system_agent.py         # Top-level agents (global coordination)
-│   └── proxy_agent.py          # Proxy agent for distributed execution
-│
-├── core/                       # Core abstractions
-│   ├── action.py               # Action with continuous/discrete support
-│   ├── observation.py          # Observation with local/global/messages
-│   ├── state.py                # State with FeatureProvider composition
-│   ├── feature.py              # FeatureProvider with extensible visibility tags
-│   └── policies.py             # Policy abstractions (random, rule-based)
-│
-├── protocols/                  # Coordination protocols
-│   ├── base.py                 # Protocol, CommunicationProtocol interfaces
-│   ├── vertical.py             # SetpointProtocol, PriceSignalProtocol
-│   └── horizontal.py           # P2PTradingProtocol, ConsensusProtocol
-│
-├── messaging/                  # Message broker system
-│   ├── base.py                 # MessageBroker interface, ChannelManager
-│   └── memory.py               # InMemoryBroker implementation
-│
-├── envs/                       # Base environment interfaces
-│   └── base.py                 # Abstract environment classes
-│
-└── utils/                      # Common utilities
-    ├── typing.py               # Type definitions
-    ├── array_utils.py          # Array manipulation utilities
-    └── registry.py             # Feature registry
+                    ┌─────────────────┐
+         L3        │   SystemAgent    │        System-wide coordination
+                    └────────┬────────┘
+                             │
+            ┌────────────────┼────────────────┐
+            ▼                ▼                ▼
+    ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
+ L2 │ Coordinator A │ │ Coordinator B │ │ Coordinator C │   Regional coordination
+    └───────┬───────┘ └───────┬───────┘ └───────┬───────┘
+            │                 │                 │
+      ┌─────┴─────┐     ┌─────┴─────┐     ┌─────┴─────┐
+      ▼     ▼     ▼     ▼     ▼     ▼     ▼     ▼     ▼
+ L1 ┌───┐ ┌───┐ ┌───┐ ┌───┐ ┌───┐ ┌───┐ ┌───┐ ┌───┐ ┌───┐   Local units
+    │F1 │ │F2 │ │F3 │ │F4 │ │F5 │ │F6 │ │F7 │ │F8 │ │F9 │
+    └───┘ └───┘ └───┘ └───┘ └───┘ └───┘ └───┘ └───┘ └───┘
 ```
 
-### Key Design Principles
-
-1. **Hierarchical Agents**: Multi-level hierarchy with configurable depth; agents at each level have distinct responsibilities
-2. **Feature-based State**: Composable `FeatureProvider` with extensible visibility tags for information sharing control
-3. **Protocol-driven Coordination**: Vertical protocols for top-down control, horizontal protocols for peer coordination
-4. **Message Broker Abstraction**: Decoupled communication via `MessageBroker` interface
+```
+heron/
+├── agents/      # Agent hierarchy (Field, Coordinator, System, Proxy)
+├── core/        # Action, Observation, State, FeatureProvider, Policy
+├── protocols/   # Vertical (Setpoint, Price) & Horizontal (Trading, Consensus)
+├── envs/        # Environment base classes & framework adapters
+├── messaging/   # Message broker (InMemoryBroker, extensible to Kafka/RabbitMQ)
+└── scheduling/  # Event-driven simulation (TickConfig, EventScheduler)
+```
 
 ---
 
 ## Installation
 
-### Prerequisites
-
-- Python 3.10 or higher
-- pip (Python package manager)
-
-### Step 1: Clone the Repository
-
 ```bash
+# Clone and setup
 git clone https://github.com/Criss-Wang/PowerGym.git
 cd PowerGym
-```
+python3 -m venv .venv && source .venv/bin/activate
 
-### Step 2: Create Virtual Environment
-
-```bash
-# Create a new virtual environment
-python3 -m venv .venv
-
-# Activate it
-# On macOS/Linux:
-source .venv/bin/activate
-# On Windows:
-# .venv\Scripts\activate
-
-# Upgrade pip
-pip install -U pip
-```
-
-### Step 3: Install the Package
-
-Choose the installation option that fits your needs:
-
-```bash
-# Basic installation (core framework only)
-pip install -e .
-
-# With power grid domain support
-pip install -e ".[powergrid]"
-
-# With multi-agent RL support (RLlib, PettingZoo)
-pip install -e ".[multi_agent]"
-
-# Full installation (all features)
-pip install -e ".[all]"
-
-# For development (includes testing and linting tools)
-pip install -e ".[dev,all]"
-```
-
-### Step 4: Verify Installation
-
-```bash
-# Test the installation
-python -c "import heron; import powergrid; print('Installation successful')"
-
-# Run tests (optional)
-pytest tests/ -v
+# Choose your installation
+pip install -e .                    # Core framework only
+pip install -e ".[powergrid]"       # + Power grid case study
+pip install -e ".[multi_agent]"     # + RLlib, PettingZoo
+pip install -e ".[all]"             # Everything
+pip install -e ".[dev,all]"         # + dev tools (pytest, ruff)
 ```
 
 ---
 
-## Quick Start
+## Quick Start (5 minutes)
 
-### Core Concepts
-
-HERON provides a hierarchical agent framework with configurable levels:
+### 1. Create an Agent with Visibility-Controlled State
 
 ```python
-from heron.agents.base import Agent
-from heron.core.observation import Observation
-from heron.core.action import Action
-from heron.core.feature import FeatureProvider
+from heron.agents import FieldAgent
+from heron.core import FeatureProvider
+import numpy as np
 
-# 1. Define Features with visibility levels
 class TemperatureFeature(FeatureProvider):
-    """A feature visible only to its owner."""
+    visibility = ["owner", "upper_level"]  # Only owner and coordinator can see
 
-    def __init__(self, value: float = 20.0):
-        self.value = value
+    def __init__(self):
+        self.temp = 20.0
 
-    def to_array(self) -> np.ndarray:
-        return np.array([self.value], dtype=np.float32)
+    def vector(self):
+        return np.array([self.temp], dtype=np.float32)
 
-    @property
-    def visibility(self) -> list[str]:
-        return ["owner"]  # Default tags: "owner", "coordinator", "system", "global" (extensible)
+    def names(self):
+        return ["temperature"]
 
-# 2. Create Agents at different hierarchy levels
-class SensorAgent(Agent):
-    """Field agent at level 1 - collects local observations."""
-    level = 1  # Configurable: can be any positive integer
+    def to_dict(self):
+        return {"temp": self.temp}
 
-    def observe(self) -> Observation:
-        return Observation(local={"temp": self.temperature.to_array()})
+    @classmethod
+    def from_dict(cls, d):
+        f = cls()
+        f.temp = d.get("temp", 20.0)
+        return f
 
-    def act(self, obs: Observation, action: Action) -> Action:
-        # Process action from coordinator
-        return action
+    def set_values(self, **kwargs):
+        if "temp" in kwargs:
+            self.temp = kwargs["temp"]
 
-# 3. Use Protocols for coordination
-from heron.protocols.vertical import SetpointProtocol
-from heron.protocols.horizontal import ConsensusProtocol
+class ThermostatAgent(FieldAgent):
+    def set_action(self):
+        self.action.set_specs(dim_c=1, range=(np.array([18.0]), np.array([26.0])))
 
-# Vertical: coordinator sends setpoints to field agents
-vertical_protocol = SetpointProtocol()
-
-# Horizontal: peer agents reach consensus
-horizontal_protocol = ConsensusProtocol(max_iterations=10, tolerance=0.01)
+    def set_state(self):
+        self.state.features.append(TemperatureFeature())
 ```
 
-> 💡 The code above shows **direct execution** (`observe()` → `act()`). For distributed hierarchical control with message passing, agents can use `await agent.step_distributed()` which recursively coordinates through the agent tree via the message broker.
-
-### Agent Hierarchy
-
-Agents are organized in a tree structure where each level has distinct responsibilities:
-
-| Level | Role | Example |
-|-------|------|---------|
-| Leaf | **Field Agent** - Local sensing and actuation | Sensor, Device |
-| Mid | **Coordinator** - Manages child agents in a subtree | Zone Controller |
-| Root | **System Agent** - Global coordination | System Operator |
-
-The hierarchy depth is configurable. A simple setup might use 2 levels (Field + Coordinator), while complex systems can use 4+ levels.
-
-### Visibility Levels
-
-Features use string-based visibility tags to control information sharing. HERON provides 4 default tags, but you can define custom tags for your domain:
+### 2. Build a Hierarchy with Protocols
 
 ```python
-# Default visibility tags
-local_feature.visibility = ["owner"]                    # Only the owning agent
-shared_feature.visibility = ["owner", "coordinator"]    # Owner and its coordinator
-system_feature.visibility = ["system"]                  # System-level agents only
-public_feature.visibility = ["global"]                  # Everyone
+from heron.agents import CoordinatorAgent, SystemAgent
+from heron.protocols import SetpointProtocol, SystemProtocol
 
-# Custom visibility tags (domain-specific)
-neighbor_feature.visibility = ["owner", "neighbor"]     # Owner and neighboring agents
-region_feature.visibility = ["region_a"]                # Agents in region A only
-```
+# Create field agents
+thermostats = [ThermostatAgent(f"thermo_{i}") for i in range(3)]
 
-The visibility system is tag-based: an agent can see a feature if it holds any of the feature's visibility tags.
-
-### Message Broker
-
-For hierarchical execution with `step_distributed()`, agents communicate through a `MessageBroker`:
-
-```python
-from heron.messaging.memory import InMemoryBroker
-from heron.messaging.base import ChannelManager
-
-# Create broker
-broker = InMemoryBroker()
-
-# Create agents with broker
+# Coordinator manages field agents
 coordinator = CoordinatorAgent(
-    agent_id="coordinator",
-    message_broker=broker,
-    subordinates={"field_1": field_agent_1, "field_2": field_agent_2}
-)
-field_agent = FieldAgent(
-    agent_id="field_1",
-    message_broker=broker,
-    upstream_id="coordinator"
+    agent_id="zone_controller",
+    protocol=SetpointProtocol(),
+    subordinates={a.agent_id: a for a in thermostats}
 )
 
-# Hierarchical execution (async)
-await coordinator.step_distributed()  # Recursively coordinates all subordinates
+# System manages coordinators
+system = SystemAgent(
+    agent_id="building_system",
+    protocol=SystemProtocol(),
+    coordinators={"zone_controller": coordinator}
+)
 ```
 
-The `MessageBroker` interface can be extended for distributed systems (e.g., Kafka, RabbitMQ) by implementing `publish()`, `consume()`, and `create_channel()`.
+### 3. Run Training (Synchronous) or Testing (Event-Driven)
+
+```python
+# Option A: Synchronous (Training)
+obs = coordinator.observe(global_state)
+coordinator.act(obs, upstream_action=joint_action)
+
+# Option B: Event-Driven (Testing)
+from heron.scheduling import TickConfig, JitterType
+
+coordinator.tick_config = TickConfig.with_jitter(
+    tick_interval=5.0,
+    obs_delay=0.1,
+    act_delay=0.2,
+    jitter_type=JitterType.GAUSSIAN,
+    jitter_ratio=0.1,
+)
+env.run_event_driven(t_end=3600.0)  # 1 hour simulation
+```
+
+---
+
+## Module Documentation
+
+Each module has detailed documentation with examples and API reference:
+
+| Module | Description | README |
+|--------|-------------|--------|
+| **agents** | Hierarchical agents (Field, Coordinator, System, Proxy) | [heron/agents/README.md](heron/agents/README.md) |
+| **core** | Action, Observation, State, FeatureProvider, Policy | [heron/core/README.md](heron/core/README.md) |
+| **protocols** | Vertical & horizontal coordination protocols | [heron/protocols/README.md](heron/protocols/README.md) |
+| **envs** | Environment bases & framework adapters (PettingZoo, RLlib) | [heron/envs/README.md](heron/envs/README.md) |
+| **messaging** | Message broker for distributed execution | [heron/messaging/README.md](heron/messaging/README.md) |
+| **scheduling** | Event-driven simulation with timing/jitter | [heron/scheduling/README.md](heron/scheduling/README.md) |
+
+---
+
+## Execution Modes
+
+HERON supports two execution modes for the **same** agents and environments:
+
+| Mode | Use Case | Timing | API |
+|------|----------|--------|-----|
+| **Synchronous (Option A)** | RL Training | All agents step together | `agent.observe()` → `agent.act()` |
+| **Event-Driven (Option B)** | Realistic Testing | Heterogeneous tick rates + delays | `agent.tick()` via `EventScheduler` |
+
+**Why does this matter?**
+
+RL training assumes all agents observe and act simultaneously with zero latency. Real systems don't work that way:
+- A field sensor ticks every 100ms, a coordinator every 5s
+- Observations are delayed (sensor latency, network)
+- Actions take time to execute (actuator response)
+
+Event-driven mode tests your trained policy under these realistic conditions without retraining. Configure `TickConfig` with timing parameters and optional jitter, then run the same environment with `EventScheduler`.
+
+See [heron/scheduling/README.md](heron/scheduling/README.md) for full details.
+
+---
+
+## Case Study: Power Grid
+
+A complete multi-agent microgrid control case study with PandaPower integration.
+
+```bash
+pip install -e ".[powergrid]"
+```
+
+**Includes:** IEEE 13/34/123-bus networks, device models (Generator, ESS, Transformer), MAPPO training examples.
+
+**Full documentation:** [case_studies/power/README.md](case_studies/power/README.md)
 
 ---
 
 ## Setting Up Your Own Project
 
-This section guides you through creating a new project that uses HERON as a dependency.
-
-### Project Structure
-
-Your new project will have this minimal structure:
-
-```
-my_project/
-├── .venv/                      # Virtual environment (created by python -m venv)
-├── my_domain/                  # Your domain-specific code
-│   ├── __init__.py
-│   ├── agents/                 # Your custom agents
-│   │   ├── __init__.py
-│   │   └── my_agent.py
-│   ├── envs/                   # Your custom environments
-│   │   ├── __init__.py
-│   │   └── my_env.py
-│   └── utils/                  # Your utilities
-│       └── __init__.py
-├── examples/                   # Your example scripts
-│   └── train_my_agent.py
-├── tests/                      # Your tests
-│   └── test_my_env.py
-├── pyproject.toml              # Project configuration
-└── README.md
-```
-
-**Optional directories** (add as needed for your domain):
-- `my_domain/core/` - Only needed when extending `heron.core` classes (e.g., custom features, state management)
-- `my_domain/setups/` or `data/` - For environment configuration and data files (structure is flexible)
-
-### Quick Setup (Recommended)
-
-From the cloned PowerGym repository:
+For new domains, HERON provides a project generator:
 
 ```bash
 make new-project NAME=my_project DOMAIN=my_domain
+cd my_project && pip install -e ".[heron,dev]"
 ```
 
-This creates the entire project structure with `pyproject.toml` and `README.md`. Then:
+Or manually create your domain package that imports from `heron.*`:
 
-```bash
-cd my_project
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[heron,dev]"
 ```
-
-Then create the `pyproject.toml` manually (see Step 3 below).
-
----
-
-### Manual Step-by-Step Setup
-
-#### 1. Create Project Directory
-
-```bash
-mkdir my_project
-cd my_project
+my_project/
+├── my_domain/
+│   ├── agents/      # Your custom agents extending FieldAgent, etc.
+│   ├── envs/        # Your environments using HeronEnvCore
+│   └── features/    # Your FeatureProviders
+├── experiments/
+└── pyproject.toml   # Depends on heron-marl
 ```
-
-#### 2. Create Virtual Environment
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-pip install -U pip
-```
-
-#### 3. Create pyproject.toml
-
-Create `pyproject.toml` with your project configuration:
-
-```toml
-[build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "my-domain"
-version = "0.1.0"
-description = "My custom domain using HERON framework"
-requires-python = ">=3.10"
-dependencies = [
-    "gymnasium>=1.0.0",
-    "numpy>=1.21.0",
-    "pandas>=1.3.0",
-]
-
-[project.optional-dependencies]
-heron = [
-    # Install HERON from GitHub
-    "heron-marl @ git+https://github.com/Criss-Wang/PowerGym.git",
-]
-dev = [
-    "pytest>=7.0.0",
-]
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["my_domain*"]
-```
-
-#### 4. Create Directory Structure
-
-```bash
-mkdir -p my_domain/{agents,envs,utils}
-mkdir -p examples tests
-
-# Create __init__.py files
-touch my_domain/__init__.py
-touch my_domain/agents/__init__.py
-touch my_domain/envs/__init__.py
-touch my_domain/utils/__init__.py
-```
-
-#### 5. Install Dependencies
-
-```bash
-# Install your project with HERON
-pip install -e ".[heron,dev]"
-
-# Or install HERON directly from source (for development)
-pip install -e /path/to/PowerGym[all]
-```
-
-#### 6. Create a Custom Agent
-
-Create `my_domain/agents/my_agent.py`:
-
-```python
-"""Example custom agent using HERON framework."""
-
-import numpy as np
-from heron.agents.base import Agent
-from heron.core.action import Action
-from heron.core.observation import Observation
-from heron.core.state import FieldAgentState
-from heron.core.feature import FeatureProvider
-
-
-class MyCustomFeature(FeatureProvider):
-    """Custom feature for your domain."""
-
-    def __init__(self, value: float = 0.0):
-        super().__init__(visibility=["owner"])
-        self.value = value
-
-    def vector(self) -> np.ndarray:
-        return np.array([self.value], dtype=np.float32)
-
-    def dim(self) -> int:
-        return 1
-
-
-class MyAgent(Agent):
-    """Custom agent for your domain."""
-
-    def __init__(self, agent_id: str, initial_value: float = 0.0):
-        super().__init__(agent_id, level=1)
-
-        # Initialize state with custom features
-        self.state = FieldAgentState()
-        self.my_feature = MyCustomFeature(initial_value)
-        self.state.add_feature("my_feature", self.my_feature)
-
-        # Initialize action space
-        self.action = Action()
-        lb = np.array([-1.0], dtype=np.float32)
-        ub = np.array([1.0], dtype=np.float32)
-        self.action.set_specs(dim_c=1, range=(lb, ub))
-
-    def observe(self) -> Observation:
-        """Generate observation from current state."""
-        return Observation(
-            local={"state": self.state.vector()},
-            timestamp=0.0
-        )
-
-    def act(self, observation: Observation, **kwargs):
-        """Process observation and return action."""
-        # Your control logic here
-        self.action.sample()
-        return self.action
-
-    def update_state(self):
-        """Update internal state based on action."""
-        # Update your feature based on action
-        self.my_feature.value += self.action.c[0] * 0.1
-
-    def reset(self, seed=None):
-        """Reset agent state."""
-        self.my_feature.value = 0.0
-        self.action.reset()
-```
-
-#### 7. Create a Custom Environment
-
-Create `my_domain/envs/my_env.py`:
-
-```python
-"""Example custom environment using HERON framework."""
-
-import numpy as np
-from gymnasium import spaces
-from pettingzoo import ParallelEnv
-
-from my_domain.agents.my_agent import MyAgent
-
-
-class MyEnvironment(ParallelEnv):
-    """Custom multi-agent environment."""
-
-    metadata = {"name": "my_environment_v0"}
-
-    def __init__(self, config: dict = None):
-        config = config or {}
-        self.max_steps = config.get("max_steps", 100)
-        self._step = 0
-
-        # Create agents
-        self.possible_agents = ["agent_0", "agent_1"]
-        self.agents = self.possible_agents.copy()
-
-        self._agents = {
-            agent_id: MyAgent(agent_id, initial_value=0.0)
-            for agent_id in self.possible_agents
-        }
-
-        # Define spaces
-        self.observation_spaces = {
-            agent_id: spaces.Box(low=-np.inf, high=np.inf, shape=(1,), dtype=np.float32)
-            for agent_id in self.possible_agents
-        }
-        self.action_spaces = {
-            agent_id: spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-            for agent_id in self.possible_agents
-        }
-
-    def reset(self, seed=None, options=None):
-        """Reset environment."""
-        self._step = 0
-        self.agents = self.possible_agents.copy()
-
-        for agent in self._agents.values():
-            agent.reset(seed=seed)
-
-        observations = {
-            agent_id: agent.observe().local["state"]
-            for agent_id, agent in self._agents.items()
-        }
-        infos = {agent_id: {} for agent_id in self.agents}
-
-        return observations, infos
-
-    def step(self, actions):
-        """Execute one step."""
-        self._step += 1
-
-        # Apply actions
-        for agent_id, action in actions.items():
-            self._agents[agent_id].action.c[:] = action
-            self._agents[agent_id].update_state()
-
-        # Get observations
-        observations = {
-            agent_id: agent.observe().local["state"]
-            for agent_id, agent in self._agents.items()
-        }
-
-        # Compute rewards (example: minimize absolute value)
-        rewards = {
-            agent_id: -abs(agent.my_feature.value)
-            for agent_id, agent in self._agents.items()
-        }
-
-        # Check termination
-        terminated = self._step >= self.max_steps
-        terminateds = {agent_id: terminated for agent_id in self.agents}
-        terminateds["__all__"] = terminated
-
-        truncateds = {agent_id: False for agent_id in self.agents}
-        truncateds["__all__"] = False
-
-        infos = {agent_id: {} for agent_id in self.agents}
-
-        return observations, rewards, terminateds, truncateds, infos
-
-    def observation_space(self, agent_id):
-        return self.observation_spaces[agent_id]
-
-    def action_space(self, agent_id):
-        return self.action_spaces[agent_id]
-```
-
-#### 8. Create an Example Script
-
-Create `examples/train_my_agent.py`:
-
-```python
-"""Example training script."""
-
-from my_domain.envs.my_env import MyEnvironment
-
-
-def main():
-    print("Creating environment...")
-    env = MyEnvironment({"max_steps": 100})
-
-    print("Running random policy...")
-    obs, info = env.reset(seed=42)
-
-    total_rewards = {agent_id: 0.0 for agent_id in env.possible_agents}
-
-    for step in range(100):
-        # Random actions
-        actions = {
-            agent_id: env.action_space(agent_id).sample()
-            for agent_id in env.agents
-        }
-
-        obs, rewards, terminateds, truncateds, infos = env.step(actions)
-
-        for agent_id, reward in rewards.items():
-            total_rewards[agent_id] += reward
-
-        if terminateds["__all__"]:
-            break
-
-    print(f"\nTotal rewards: {total_rewards}")
-    print("Done!")
-
-
-if __name__ == "__main__":
-    main()
-```
-
-#### 9. Run Your Example
-
-```bash
-python examples/train_my_agent.py
-```
-
----
-
-## Included Case Study
-
-The repository includes a complete **Power Grid** case study demonstrating HERON applied to multi-agent microgrid control with PandaPower integration.
-
-📖 **See [case_studies/power/README.md](case_studies/power/README.md) for full documentation**, including:
-- IEEE 13, 34, 123-bus test networks
-- Device models (Generator, ESS, Transformer)
-- Multi-agent environments with pre-configured setups
-- MAPPO training examples with RLlib
-
-Quick install:
-```bash
-pip install -e ".[powergrid]"      # Power grid support
-pip install -e ".[all]"            # Full installation with RL
-```
-
-### Adding a New Case Study to This Repo
-
-To contribute a new domain case study (e.g., robotics, traffic):
-
-1. Copy the `case_studies/power/` structure as a template
-2. Update `pyproject.toml` to include your package path:
-   ```toml
-   [tool.setuptools.packages.find]
-   where = [".", "case_studies/power", "case_studies/your_domain"]
-   ```
-3. Add optional dependencies under `[project.optional-dependencies]` if needed
-
-> 💡 **For standalone projects** (separate repository), use `make new-project` or follow [Setting Up Your Own Project](#setting-up-your-own-project).
-
----
-
-## Documentation
-
-HERON provides comprehensive documentation for different learning paths:
-
-### Getting Started
-- **[Hello World Example](examples/00_hello_world.py)**: Minimal runnable example without domain dependencies
-- **[Getting Started Guide](docs/source/getting_started.md)**: Installation and first steps
-- **[Key Concepts](docs/source/key_concepts.md)**: Core abstractions with code examples
-
-### User Guides
-- **[Basic Concepts](docs/source/user_guide/basic_concepts.md)**: Agent hierarchy, features, protocols
-- **[Event-Driven Execution](docs/source/user_guide/event_driven_execution.md)**: Testing with realistic timing
-- **[Centralized vs Distributed](docs/source/user_guide/centralized_vs_distributed.md)**: Execution mode comparison
-
-### Developer Guides
-- **[Architecture](docs/source/developer_guide/architecture.md)**: System design and components
-- **[Extending Agents](docs/source/developer_guide/extending_agents.md)**: Creating custom agents
-- **[Custom Protocols](docs/source/developer_guide/custom_protocols.md)**: Building coordination protocols
-
-### Reference
-- **[Glossary](docs/source/glossary.md)**: Definitions of HERON terminology
-- **[Scheduling Module](heron/scheduling/README.md)**: Event-driven scheduling details
 
 ---
 
 ## Development
 
-### Running Tests
-
 ```bash
-# Install dev dependencies
-pip install -e ".[dev,all]"
+# Tests
+pytest tests/ -v                              # Core tests
+pytest case_studies/power/tests/ -v           # Case study tests
 
-# Run heron core tests
-pytest tests/ -v
-
-# Run power grid case study tests
-pytest case_studies/power/tests/ -v
-
-# Run all tests
-pytest tests/ case_studies/power/tests/ -v
-
-# Run with coverage
-pytest tests/ case_studies/power/tests/ --cov=heron --cov=powergrid --cov-report=html
-```
-
-### Code Style
-
-```bash
-# Format code
-black heron/ case_studies/ tests/
-
-# Lint code
-ruff check heron/ case_studies/ tests/
-
-# Type check
-mypy heron/ case_studies/power/powergrid/
+# Code quality
+black heron/ && ruff check heron/             # Format & lint
+mypy heron/                                   # Type check
 ```
 
 ---
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE.txt](LICENSE.txt) file for details.
+MIT License - see [LICENSE.txt](LICENSE.txt)
 
 ## Citation
 
-If you use HERON in your research, please cite:
-TBD
+If you use HERON in your research, please cite: TBD
 
 ## Contact
 
