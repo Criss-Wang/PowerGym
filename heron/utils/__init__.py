@@ -2,11 +2,13 @@
 
 This module provides:
 - Array utilities: cat_f32, as_f32, one_hot
+- Dict utilities: flatten_dict, unflatten_dict
 - Registry: ProviderRegistry, provider decorator
 - Type aliases: AgentID
 """
 
 from heron.utils.array_utils import cat_f32, as_f32, one_hot
+from heron.utils.dict_utils import flatten_dict, unflatten_dict
 from heron.utils.registry import ProviderRegistry, provider
 from heron.utils.typing import AgentID, float_if_not_none
 
@@ -15,6 +17,9 @@ __all__ = [
     "cat_f32",
     "as_f32",
     "one_hot",
+    # Dict utilities
+    "flatten_dict",
+    "unflatten_dict",
     # Registry
     "ProviderRegistry",
     "provider",

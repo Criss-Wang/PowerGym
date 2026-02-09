@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import gymnasium as gym
 
-from heron.envs.base import EnvCore, BaseEnv, MultiAgentEnv
+from heron.envs.base import EnvCore, MultiAgentEnv
 from heron.agents.base import Agent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.core.observation import Observation
@@ -39,21 +39,6 @@ class MockCoordinator(CoordinatorAgent):
         return {}
 
 
-class ConcreteBaseEnv(BaseEnv):
-    """Concrete implementation of BaseEnv for testing."""
-
-    def __init__(self, env_id=None):
-        super().__init__(env_id=env_id)
-        self.observation_space = gym.spaces.Box(low=-1, high=1, shape=(2,))
-        self.action_space = gym.spaces.Box(low=-1, high=1, shape=(1,))
-
-    def reset(self, *, seed=None, options=None):
-        return np.zeros(2), {}
-
-    def step(self, action):
-        return np.zeros(2), 0.0, False, False, {}
-
-
 class ConcreteMultiAgentEnv(MultiAgentEnv):
     """Concrete implementation of MultiAgentEnv for testing."""
 
@@ -62,12 +47,6 @@ class ConcreteMultiAgentEnv(MultiAgentEnv):
 
     def step(self, actions):
         return {}, {}, {"__all__": False}, {"__all__": False}, {}
-
-    def get_joint_observation_space(self):
-        return gym.spaces.Dict({})
-
-    def get_joint_action_space(self):
-        return gym.spaces.Dict({})
 
 
 class TestEnvCoreInitialization:
@@ -341,45 +320,6 @@ class TestEnvCoreClose:
 
         # Should not raise
         env.close_core()
-
-
-class TestBaseEnv:
-    """Test BaseEnv class."""
-
-    def test_base_env_initialization(self):
-        """Test BaseEnv initialization."""
-        env = ConcreteBaseEnv(env_id="test_env")
-
-        assert env.env_id == "test_env"
-        assert isinstance(env, gym.Env)
-
-    def test_base_env_reset(self):
-        """Test BaseEnv reset."""
-        env = ConcreteBaseEnv()
-
-        obs, info = env.reset()
-
-        assert isinstance(obs, np.ndarray)
-        assert isinstance(info, dict)
-
-    def test_base_env_step(self):
-        """Test BaseEnv step."""
-        env = ConcreteBaseEnv()
-        env.reset()
-
-        obs, reward, terminated, truncated, info = env.step(np.array([0.5]))
-
-        assert isinstance(obs, np.ndarray)
-        assert isinstance(reward, float)
-        assert isinstance(terminated, bool)
-        assert isinstance(truncated, bool)
-
-    def test_base_env_close(self):
-        """Test BaseEnv close."""
-        env = ConcreteBaseEnv()
-
-        # Should not raise
-        env.close()
 
 
 class TestMultiAgentEnv:

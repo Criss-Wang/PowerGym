@@ -1,29 +1,13 @@
-"""Coordinator-level agents (L2) for the HERON framework.
 
-CoordinatorAgent manages a set of field agents, implementing coordination
-protocols like price signals, setpoints, or consensus algorithms. It aggregates
-observations from subordinates and distributes coordinated actions.
 
-Supports two execution modes:
+from typing import Any, Dict, List, Optional
 
-**Synchronous Mode (Option A - Training)**:
-    - Collect observations from subordinates via observe()
-    - Compute joint action using centralized policy
-    - Distribute actions via coordinate_subordinates()
-    - Suitable for centralized RL training
-
-**Event-Driven Mode (Option B - Testing)**:
-    - Execute via tick() with EventScheduler integration
-    - Receive upstream actions from SystemAgent via message broker
-    - Schedule MESSAGE_DELIVERY events to subordinates with msg_delay
-    - Models realistic async communication patterns
-"""
-
-from typing import Any, Dict as DictType, List, Optional
-
-from heron.agents.hierarchical_agent import HierarchicalAgent
+from heron.agents.base import Agent
 from heron.agents.field_agent import FieldAgent
+from heron.agents.proxy_agent import ProxyAgent, PROXY_AGENT_ID
+from heron.core.action import Action
 from heron.core.observation import (
+    Observation,
     OBS_KEY_SUBORDINATE_OBS,
     OBS_KEY_COORDINATOR_STATE,
 )
@@ -32,112 +16,31 @@ from heron.core.policies import Policy
 from heron.utils.typing import AgentID
 from heron.protocols.base import Protocol
 from heron.scheduling.tick_config import TickConfig
+from heron.scheduling.scheduler import EventScheduler, Event
 
 
 COORDINATOR_LEVEL = 2  # Level identifier for coordinator-level agents
 
 
-class CoordinatorAgent(HierarchicalAgent):
-    """Coordinator-level agent for managing field agents.
-
-    CoordinatorAgent coordinates multiple field agents using specified protocols
-    and optionally a centralized policy for joint decision-making.
-
-    Supports two execution modes:
-
-    **Synchronous Mode (Option A - Training)**:
-        Call observe() to aggregate subordinate observations, then act() or
-        coordinate_subordinates() to distribute actions. Suitable for centralized
-        RL training where all agents step synchronously.
-
-    **Event-Driven Mode (Option B - Testing)**:
-        Call tick() with an EventScheduler. Schedules MESSAGE_DELIVERY events to
-        subordinates with configurable msg_delay. Models realistic async communication
-        where subordinates process messages on their own tick schedule.
-
-    Attributes:
-        subordinates: Dictionary mapping agent IDs to FieldAgent instances
-        state: Coordinator's aggregated state (CoordinatorAgentState)
-        protocol: Coordination protocol for managing subordinate agents
-        policy: Optional centralized policy for joint action computation
-
-    Example:
-        Create a coordinator managing field agents::
-
-            from heron.agents import CoordinatorAgent
-            from heron.protocols import SetpointProtocol
-
-            # Create coordinator with setpoint-based control
-            coordinator = CoordinatorAgent(
-                agent_id="grid_coordinator",
-                protocol=SetpointProtocol(),
-            )
-
-            # Subordinates can be added via config or directly
-            # coordinator.subordinates = {a.agent_id: a for a in agents}
-
-        Collect observations and distribute actions::
-
-            # Coordinator aggregates subordinate observations
-            obs = coordinator.observe(global_state={"time": 0})
-
-            # Distribute joint action to subordinates
-            import numpy as np
-            joint_action = np.array([0.5, 0.3, 0.2])
-            coordinator.act(obs, upstream_action=joint_action)
-
-        Get joint action space for RL training::
-
-            joint_space = coordinator.get_joint_action_space()
-            # Returns Box, MultiDiscrete, or Dict space
-    """
-
+class CoordinatorAgent(Agent):
     def __init__(
         self,
         agent_id: Optional[AgentID] = None,
-        policy: Optional[Policy] = None,
-        protocol: Optional[Protocol] = None,
-
-        # hierarchy params
         upstream_id: Optional[AgentID] = None,
+        # hierarchy params
+        subordinates: Optional[Dict[AgentID, "Agent"]] = None,
         env_id: Optional[str] = None,
-
-        # CoordinatorAgent specific params
-        config: Optional[DictType[str, Any]] = None,
-
         # timing config (for event-driven scheduling)
         tick_config: Optional[TickConfig] = None,
+        # execution params
+        policy: Optional[Policy] = None,
+        # coordination params
+        protocol: Optional[Protocol] = None
     ):
-        """Initialize coordinator agent.
-
-        Args:
-            agent_id: Unique identifier
-            policy: Optional centralized policy for joint action computation
-            protocol: Protocol for coordinating subordinate agents
-            upstream_id: Optional parent agent ID for hierarchy structure
-            env_id: Optional environment ID for multi-environment isolation
-            config: Coordinator configuration dictionary
-            tick_config: Timing configuration. Defaults to TickConfig with
-                tick_interval=60.0 (coordinators tick less frequently than field agents).
-                Use TickConfig.deterministic() or TickConfig.with_jitter().
-        """
-        config = config or {}
 
         self.protocol = protocol
         self.policy = policy
-        self.state = CoordinatorAgentState(
-            owner_id=agent_id,
-            owner_level=COORDINATOR_LEVEL
-        )
-
-        # Build subordinate agents
-        agent_configs = config.get('agents', [])
-        subordinates = self._build_subordinates(
-            agent_configs,
-            env_id=env_id,
-            upstream_id=agent_id  # Subordinates' upstream is this coordinator
-        )
-
+       
         super().__init__(
             agent_id=agent_id,
             level=COORDINATOR_LEVEL,
@@ -147,56 +50,124 @@ class CoordinatorAgent(HierarchicalAgent):
             tick_config=tick_config or TickConfig.deterministic(tick_interval=60.0),
         )
 
-    # ============================================
-    # Abstract Method Implementations
-    # ============================================
+    def init_state(self) -> None:
+        self.state = CoordinatorAgentState(
+            owner_id=self.agent_id,
+            owner_level=COORDINATOR_LEVEL
+        )
 
-    def _build_subordinates(
+    def init_action(self) -> None:
+        self.action = Action()
+
+    def set_state(self, *args, **kwargs) -> None:
+        pass
+
+    def set_action(self, *args, **kwargs) -> None:
+        pass
+
+    # ============================================
+    # Core Lifecycle Methods Overrides (see heron/agents/base.py for more details)
+    # ============================================
+    def execute(self, actions: Dict[AgentID, Any], proxy: Optional[ProxyAgent] = None) -> None:
+        self.act(actions, proxy)
+
+    def tick(
         self,
-        configs: List[DictType[str, Any]],
-        env_id: Optional[str] = None,
-        upstream_id: Optional[AgentID] = None,
-    ) -> DictType[AgentID, FieldAgent]:
-        """Build subordinate agents from configuration.
-
-        Override this in domain-specific subclasses to create appropriate
-        agent types based on configuration.
-
-        Args:
-            configs: List of agent configuration dictionaries
-            env_id: Environment ID for multi-environment isolation
-            upstream_id: Upstream agent ID (this coordinator)
-
-        Returns:
-            Dictionary mapping agent IDs to FieldAgent instances
+        scheduler: EventScheduler,
+        current_time: float,
+    ) -> None:
         """
-        # Default implementation - override in subclasses
-        return {}
+        Action phase - equivalent to `self.act`
 
-    def _get_subordinate_obs_key(self) -> str:
-        """Get the observation key for subordinate observations."""
-        return OBS_KEY_SUBORDINATE_OBS
+        Note: CoordinatorAgent ticks only upon SystemAgent.tick (see heron/agents/system_agent.py)
 
-    def _get_state_obs_key(self) -> str:
-        """Get the observation key for coordinator state."""
-        return OBS_KEY_COORDINATOR_STATE
-
-    def _get_subordinate_action_dim(self, subordinate: FieldAgent) -> int:
-        """Get the action dimension for a subordinate field agent.
-
-        Args:
-            subordinate: FieldAgent instance
-
-        Returns:
-            Total action dimension (continuous + discrete)
+        Currently, we assume NO upstream action passed down, coodinator computes its own action
+        If we receive upstream actions in the future, do it via self.receive_upstream_action
         """
-        return subordinate.action.dim_c + subordinate.action.dim_d
+        self._timestep = current_time
 
-    def _get_env_state_key(self) -> str:
-        """Get the key for coordinator state in env_state dict."""
-        return 'coordinator'
+        # Schedule subordinate ticks
+        for subordinate_id in self.subordinates:
+            scheduler.schedule_agent_tick(subordinate_id)
+        
+        if self.policy:
+            # Compute & execute self action
+            # Ask proxy_agent for global state to compute local action
+            scheduler.schedule_message_delivery(
+                sender_id=self.agent_id,
+                recipient_id=PROXY_AGENT_ID,
+                message={"get_info": "obs", "protocol": self.protocol},
+                delay=self._tick_config.msg_delay,
+            )
+        else:
+            print(f"{self} doesn't act iself, becase there's no action policy")
 
-    def _get_env_subordinate_key(self) -> str:
-        """Get the key for subordinate updates in env_state dict."""
-        return 'subordinates'
+    # ============================================
+    # Custom Handlers for Event-Driven Execution
+    # ============================================
+    @Agent.handler("message_delivery")
+    def message_delivery_handler(self, event: Event, scheduler: EventScheduler) -> None:
+        """Deliver message via message broker."""
+        recipient_id = event.agent_id
+        assert recipient_id == self.agent_id
+        message_content = event.payload.get("message", {})
 
+        # Publish message via broker
+        if "get_obs_response" in message_content:
+            assert isinstance(message_content, dict)
+            obs = message_content['body']
+            self.compute_action(obs, scheduler)
+        elif "get_local_state_response" in message_content:
+            local_state = message_content['body']
+            local_reward = self.compute_local_reward(local_state)
+            scheduler.schedule_message_delivery(
+                sender_id=self.agent_id,
+                recipient_id=PROXY_AGENT_ID,
+                message={"set_reward": "local", "body": local_reward},
+                delay=self._tick_config.msg_delay,
+            )
+        elif "set_state_completion" in message_content:
+            if message_content["set_state_completion"] != "success":
+                raise ValueError(f"State update failed in proxy, cannot proceed with reward computation")
+            # Initiate reward computation after state update by retrieving local states from proxy agent
+
+            # Note: Parent agent will help initiate reward computation for subordinates.
+            # The alternative options is to let proxy agent directly send reward computation message to subordinates,
+            # but we want to keep the logic of "when to compute rewards" in the agent itself for better modularity and 
+            # flexibility (e.g. parent agent may choose to delay subordinate reward computation until certain 
+            # conditions are met, instead of immediately after state update)
+            for subordinate_id in self.subordinates:
+                scheduler.schedule_message_delivery(
+                    sender_id=subordinate_id,
+                    recipient_id=PROXY_AGENT_ID,
+                    message={"get_info": "local_state", "protocol": self.protocol},
+                    delay=self._tick_config.msg_delay,
+                )
+
+            scheduler.schedule_message_delivery(
+                sender_id=self.agent_id,
+                recipient_id=PROXY_AGENT_ID,
+                message={"get_info": "local_state", "protocol": self.protocol},
+                delay=self._tick_config.msg_delay,
+            )
+        else:
+            raise NotImplementedError
+    
+
+    # ============================================
+    # Convenience Property
+    # ============================================
+    @property
+    def field_agents(self) -> Dict[AgentID, FieldAgent]:
+        """Alias for subordinates - more descriptive for CoordinatorAgent context."""
+        return self.subordinates
+
+    @field_agents.setter
+    def field_agents(self, value: Dict[AgentID, FieldAgent]) -> None:
+        """Set field_agents (subordinates)."""
+        self.subordinates = value
+
+    def __repr__(self) -> str:
+        num_fields = len(self.subordinates)
+        protocol_name = self.protocol.__class__.__name__ if self.protocol else "None"
+        return f"CoordinatorAgent(id={self.agent_id}, field_agents={num_fields}, protocol={protocol_name})"

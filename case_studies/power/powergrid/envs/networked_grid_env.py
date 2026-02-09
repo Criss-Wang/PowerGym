@@ -16,9 +16,9 @@ from gymnasium.spaces import Box, Dict as SpaceDict, Discrete, MultiDiscrete
 
 from powergrid.agents.power_grid_agent import PowerGridAgent
 from heron.agents.proxy_agent import ProxyAgent
-from heron.envs.adapters import PettingZooParallelEnv
+from heron.envs.archive.adapters import PettingZooParallelEnv
 from heron.protocols.base import NoProtocol, Protocol
-from heron.messaging.base import ChannelManager, Message, MessageBroker, MessageType
+from heron.messaging import ChannelManager, Message, MessageBroker, MessageType
 from heron.messaging.in_memory_broker import InMemoryBroker
 from heron.utils.typing import AgentID
 

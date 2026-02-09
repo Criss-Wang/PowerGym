@@ -8,11 +8,13 @@ This module provides pub/sub messaging:
 - ChannelManager: Channel lifecycle management
 """
 
-from heron.messaging.base import (
+from heron.messaging.messages import (
     Message,
     MessageType,
     MessageTypeRegistry,
-    MessageBroker,
+)
+from heron.messaging.broker_base import MessageBroker
+from heron.messaging.channels import (
     ChannelRegistry,
     ChannelManager,
 )

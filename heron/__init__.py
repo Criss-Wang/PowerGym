@@ -36,8 +36,8 @@ from heron.agents.system_agent import SystemAgent
 from heron.agents.proxy_agent import ProxyAgent
 
 # Environments
-from heron.envs.base import EnvCore, BaseEnv, MultiAgentEnv
-from heron.envs.adapters import (
+from heron.envs.base import EnvCore, MultiAgentEnv
+from heron.envs.archive.adapters import (
     PettingZooParallelEnv,
     RLlibMultiAgentEnv,
 )
@@ -57,7 +57,7 @@ from heron.protocols.horizontal import (
 )
 
 # Messaging
-from heron.messaging.base import Message, MessageType, MessageBroker
+from heron.messaging import Message, MessageType, MessageBroker
 from heron.messaging.in_memory_broker import InMemoryBroker
 
 # Scheduling
@@ -89,7 +89,6 @@ __all__ = [
     "ProxyAgent",
     # Environments
     "EnvCore",
-    "BaseEnv",
     "MultiAgentEnv",
     "PettingZooParallelEnv",
     "RLlibMultiAgentEnv",

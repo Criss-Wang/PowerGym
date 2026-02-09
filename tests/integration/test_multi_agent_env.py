@@ -297,22 +297,6 @@ class MicrogridEnv(MultiAgentEnv):
                 total += agent.state.features[0].power
         return total
 
-    def get_joint_observation_space(self) -> DictSpace:
-        """Get joint observation space."""
-        spaces = {}
-        for coord in self.grid_system.coordinators.values():
-            for agent_id, agent in coord.subordinates.items():
-                spaces[agent_id] = Box(low=-np.inf, high=np.inf, shape=(1,))
-        return DictSpace(spaces)
-
-    def get_joint_action_space(self) -> DictSpace:
-        """Get joint action space."""
-        spaces = {}
-        for coord in self.grid_system.coordinators.values():
-            for agent_id, agent in coord.subordinates.items():
-                spaces[agent_id] = agent.action_space
-        return DictSpace(spaces)
-
 
 # =============================================================================
 # Integration Tests - Option A: Synchronous Training
@@ -592,41 +576,6 @@ class TestDualModeCompatibility:
 
         # Battery should have ticked 6 times (0,1,2,3,4,5)
         assert len(observations_made) == 6
-
-
-class TestEnvironmentSpaces:
-    """Test observation and action spaces."""
-
-    def test_joint_observation_space(self):
-        """Test joint observation space construction."""
-        env = MicrogridEnv()
-
-        obs_space = env.get_joint_observation_space()
-
-        assert isinstance(obs_space, DictSpace)
-        assert "battery_1" in obs_space.spaces
-        assert "battery_2" in obs_space.spaces
-
-    def test_joint_action_space(self):
-        """Test joint action space construction."""
-        env = MicrogridEnv()
-
-        action_space = env.get_joint_action_space()
-
-        assert isinstance(action_space, DictSpace)
-        assert "battery_1" in action_space.spaces
-        assert "battery_2" in action_space.spaces
-
-    def test_space_sampling(self):
-        """Test that spaces can be sampled."""
-        env = MicrogridEnv()
-
-        action_space = env.get_joint_action_space()
-        sample = action_space.sample()
-
-        assert "battery_1" in sample
-        assert "battery_2" in sample
-        assert -1 <= sample["battery_1"][0] <= 1
 
 
 if __name__ == "__main__":

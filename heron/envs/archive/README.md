@@ -9,17 +9,16 @@ This module provides environment base classes and framework adapters for buildin
                     Agent management, event scheduling,
                          message broker support
                                   │
-            ┌─────────────────────┼─────────────────────┐
-            │                     │                     │
-            ▼                     ▼                     ▼
-       BaseEnv              MultiAgentEnv          Adapters
-    (gym.Env +            (Abstract base)              │
-    EnvCore)                                      │
-         │                                    ┌────────┴────────┐
-         │                                    │                 │
-         ▼                                    ▼                 ▼
-   Single-agent                    PettingZooParallelEnv  RLlibMultiAgentEnv
-   environments                      (pettingzoo.ParallelEnv)  (ray.rllib)
+                    ┌─────────────┴─────────────┐
+                    │                           │
+                    ▼                           ▼
+             MultiAgentEnv                  Adapters
+            (Abstract base)                     │
+                                    ┌───────────┴───────────┐
+                                    │                       │
+                                    ▼                       ▼
+                         PettingZooParallelEnv    RLlibMultiAgentEnv
+                        (pettingzoo.ParallelEnv)     (ray.rllib)
 ```
 
 ## File Structure
@@ -27,7 +26,7 @@ This module provides environment base classes and framework adapters for buildin
 ```
 heron/envs/
 ├── __init__.py    # Public exports
-├── base.py        # EnvCore, BaseEnv, MultiAgentEnv
+├── base.py        # EnvCore, MultiAgentEnv
 └── adapters.py    # PettingZooParallelEnv, RLlibMultiAgentEnv
 ```
 
@@ -105,27 +104,6 @@ class MyEnv(gym.Env, EnvCore):
 | `setup_event_driven()` | Testing | Initialize event scheduler |
 | `setup_default_handlers()` | Testing | Configure event callbacks |
 | `run_event_driven(t_end)` | Testing | Run simulation |
-
-### BaseEnv
-
-Single-agent Gymnasium environment with HERON support.
-
-```python
-from heron.envs import BaseEnv
-
-class MySingleAgentEnv(BaseEnv):
-    def __init__(self):
-        super().__init__(env_id="single_agent_env")
-        # Setup agent...
-
-    def reset(self, *, seed=None, options=None):
-        self.reset_agents()
-        return observation, {}
-
-    def step(self, action):
-        # Apply action, run physics, compute reward
-        return obs, reward, terminated, truncated, info
-```
 
 ### MultiAgentEnv
 

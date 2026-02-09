@@ -24,6 +24,7 @@ class EventType(Enum):
     MESSAGE_DELIVERY = "message_delivery"
     OBSERVATION_READY = "observation_ready"
     ENV_UPDATE = "env_update"
+    SIMULATION = "simulation"
     CUSTOM = "custom"
 
 
@@ -56,3 +57,5 @@ class Event:
             f"Event(t={self.timestamp:.3f}, type={self.event_type.value}, "
             f"agent={self.agent_id}, prio={self.priority})"
         )
+
+EVENT_TYPE_FROM_STRING = {e.value: e for e in EventType}

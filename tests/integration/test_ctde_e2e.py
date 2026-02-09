@@ -687,23 +687,6 @@ class GridMicrogridEnv(MultiAgentEnv):
             "system_state": self._grid_system.get_state_for_environment(),
         }
 
-    def get_joint_observation_space(self) -> DictSpace:
-        """Get joint observation space."""
-        spaces = {}
-        for coord in self._grid_system.coordinators.values():
-            for agent_id, agent in coord.subordinates.items():
-                obs_dim = agent.observe().vector().shape[0]
-                spaces[agent_id] = Box(low=-np.inf, high=np.inf, shape=(obs_dim,))
-        return DictSpace(spaces)
-
-    def get_joint_action_space(self) -> DictSpace:
-        """Get joint action space."""
-        spaces = {}
-        for coord in self._grid_system.coordinators.values():
-            for agent_id, agent in coord.subordinates.items():
-                spaces[agent_id] = agent.action_space
-        return DictSpace(spaces)
-
 
 # =============================================================================
 # Integration Tests

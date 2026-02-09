@@ -14,7 +14,7 @@ import pytest
 from typing import Dict, Any
 
 from heron.agents.proxy_agent import ProxyAgent, PROXY_LEVEL
-from heron.messaging.base import Message, MessageType, ChannelManager
+from heron.messaging import Message, MessageType, ChannelManager
 from heron.messaging.in_memory_broker import InMemoryBroker
 
 
