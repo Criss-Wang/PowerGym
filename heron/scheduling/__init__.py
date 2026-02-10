@@ -5,10 +5,23 @@ This module provides discrete-event simulation capabilities with:
 - Configurable latency modeling
 - Heterogeneous agent tick rates
 - Tick configuration with optional jitter for testing
+- Event analysis and episode result tracking
 """
 
 from heron.scheduling.event import Event, EventType, EVENT_TYPE_FROM_STRING
 from heron.scheduling.scheduler import DefaultScheduler, EventScheduler
 from heron.scheduling.tick_config import JitterType, TickConfig
+from heron.scheduling.analysis import EventAnalyzer, EpisodeResult, EventAnalysis
 
-__all__ = ["DefaultScheduler", "Event", "EventType", "EventScheduler", "JitterType", "TickConfig", "EVENT_TYPE_FROM_STRING"]
+__all__ = [
+    "DefaultScheduler",
+    "Event",
+    "EventType",
+    "EventScheduler",
+    "JitterType",
+    "TickConfig",
+    "EVENT_TYPE_FROM_STRING",
+    "EventAnalyzer",
+    "EpisodeResult",
+    "EventAnalysis",
+]

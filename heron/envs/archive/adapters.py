@@ -37,7 +37,7 @@ from ray.rllib.env.multi_agent_env import MultiAgentEnv
 import gymnasium as gym
 
 from heron.envs.base import EnvCore
-from heron.messaging.base import MessageBroker
+from heron.messaging.broker_base import MessageBroker
 from heron.utils.typing import AgentID
 
 

@@ -5,9 +5,11 @@ implementations must follow.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
-from heron.agents.base import Agent
+if TYPE_CHECKING:
+    from heron.agents.base import Agent
+
 from heron.messaging.messages import Message
 from heron.utils.typing import AgentID
 
@@ -38,7 +40,7 @@ class MessageBroker(ABC):
         else:
             raise ValueError(f"Unsupported message broker type: {config['type']}")
 
-    def attach(self, agents: Dict[AgentID, Agent]) -> None:
+    def attach(self, agents: Dict[AgentID, "Agent"]) -> None:
         """Attach the broker to a list of agents.
 
         This allows the broker to manage subscriptions and message routing for these agents.

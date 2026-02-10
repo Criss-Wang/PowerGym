@@ -6,12 +6,7 @@ import numpy as np
 from gymnasium.spaces import Box, Space
 
 from heron.agents.base import Agent
-from heron.core.observation import (
-    Observation,
-    OBS_KEY_STATE,
-    OBS_KEY_OBSERVATION,
-    OBS_KEY_PROXY_STATE,
-)
+from heron.core.observation import Observation
 from heron.core.state import FieldAgentState
 from heron.core.action import Action
 from heron.core.policies import Policy
@@ -19,10 +14,19 @@ from heron.utils.typing import AgentID
 from heron.protocols.base import Protocol
 from heron.scheduling.tick_config import TickConfig
 from heron.scheduling.scheduler import EventScheduler, Event
-from heron.agents.proxy_agent import ProxyAgent, PROXY_AGENT_ID
-
-
-FIELD_LEVEL = 1  # Level identifier for field-level agents
+from heron.agents.proxy_agent import ProxyAgent
+from heron.agents.constants import (
+    FIELD_LEVEL,
+    PROXY_AGENT_ID,
+    DEFAULT_FIELD_TICK_INTERVAL,
+    MSG_GET_INFO,
+    MSG_SET_STATE_COMPLETION,
+    MSG_SET_TICK_RESULT,
+    INFO_TYPE_OBS,
+    INFO_TYPE_LOCAL_STATE,
+    MSG_KEY_BODY,
+    MSG_KEY_PROTOCOL,
+)
 
 
 class FieldAgent(Agent):
@@ -49,7 +53,7 @@ class FieldAgent(Agent):
             subordinates=None, # L1 agent has no subordinate
             upstream_id=upstream_id,
             env_id=env_id,
-            tick_config=tick_config or TickConfig.deterministic(tick_interval=1.0),
+            tick_config=tick_config or TickConfig.deterministic(tick_interval=DEFAULT_FIELD_TICK_INTERVAL),
             policy=policy,
             protocol=protocol
         )
@@ -67,7 +71,7 @@ class FieldAgent(Agent):
     def set_state(self, *args, **kwargs) -> None:
         pass
 
-    def set_action(self, *args, **kwargs) -> None:
+    def set_action(self, action: Any, *args, **kwargs) -> None:
         pass
 
 
@@ -144,7 +148,7 @@ class FieldAgent(Agent):
             scheduler.schedule_message_delivery(
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
-                message={"get_info": "obs", "protocol": self.protocol},
+                message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
                 delay=self._tick_config.msg_delay,
             )
         else:
@@ -158,7 +162,11 @@ class FieldAgent(Agent):
     # 1. compute_local_reward
     #   - applying specific reward computation mechanism
     #   - may use additional info via proxy (for additional info) + protocol (for visibility and info control)
-    # 2. apply_action
+    # 2. set_action
+    #   - set self.action
+    # 3. set_state
+    #   - update self.state
+    # 4. apply_action
     #   - given self.action, update self.state
     # 
     # [Optional]
@@ -179,6 +187,20 @@ class FieldAgent(Agent):
     # ============================================
     # Custom Handlers for Event-Driven Execution
     # ============================================
+    @Agent.handler("agent_tick")
+    def agent_tick_handler(self, event: Event, scheduler: EventScheduler) -> None:
+        self.tick(scheduler, event.timestamp)
+
+    @Agent.handler("action_effect")
+    def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
+        self.apply_action()
+        scheduler.schedule_message_delivery(
+            sender_id=self.agent_id,
+            recipient_id=PROXY_AGENT_ID,
+            message={"set_state": "local", "body": self.state.to_dict(include_metadata=True)},
+            delay=self._tick_config.msg_delay,
+        )
+
     @Agent.handler("message_delivery")
     def message_delivery_handler(self, event: Event, scheduler: EventScheduler) -> None:
         """Deliver message via message broker."""
@@ -189,26 +211,34 @@ class FieldAgent(Agent):
         # Publish message via broker
         if "get_obs_response" in message_content:
             assert isinstance(message_content, dict)
-            obs = message_content['body']
+            response_data = message_content["get_obs_response"]
+            obs = response_data[MSG_KEY_BODY]
             self.compute_action(obs, scheduler)
         elif "get_local_state_response" in message_content:
-            local_state = message_content['body']
-            local_reward = self.compute_local_reward(local_state)
+            response_data = message_content["get_local_state_response"]
+            local_state = response_data[MSG_KEY_BODY]
+            tick_result = {
+                "reward": self.compute_local_reward(local_state),
+                "terminated": self.is_terminated(local_state),
+                "truncated": self.is_truncated(local_state),
+                "info": self.get_local_info(local_state)
+            }
+
             scheduler.schedule_message_delivery(
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
-                message={"set_reward": "local", "body": local_reward},
+                message={MSG_SET_TICK_RESULT: INFO_TYPE_LOCAL_STATE, MSG_KEY_BODY: tick_result},
                 delay=self._tick_config.msg_delay,
             )
 
-        elif "set_state_completion" in message_content:
-            if message_content["set_state_completion"] != "success":
+        elif MSG_SET_STATE_COMPLETION in message_content:
+            if message_content[MSG_SET_STATE_COMPLETION] != "success":
                 raise ValueError(f"State update failed in proxy, cannot proceed with reward computation")
 
             scheduler.schedule_message_delivery(
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
-                message={"get_info": "local_state", "protocol": self.protocol},
+                message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
                 delay=self._tick_config.msg_delay,
             )
         else:

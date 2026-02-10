@@ -165,18 +165,91 @@ class State(ABC):
         self.validate_observation_dict(observable_feature_dict)
         return observable_feature_dict
 
-    def to_dict(self) -> Dict[str, Dict[str, Any]]:
+    def to_dict(self, include_metadata: bool = False) -> Dict[str, Any]:
         """Serialize the State into a plain dict.
+
+        Args:
+            include_metadata: If True, includes _owner_id and _owner_level for reconstruction
 
         Returns:
             Dict mapping feature names to their serialized representations.
+            If include_metadata=True, includes "_owner_id", "_owner_level", "_state_type"
         """
         feature_dict: Dict[str, Any] = {}
 
         for feature in self.features:
             feature_dict[feature.feature_name] = feature.to_dict()
 
+        if include_metadata:
+            return {
+                "_owner_id": self.owner_id,
+                "_owner_level": self.owner_level,
+                "_state_type": self.__class__.__name__,
+                "features": feature_dict
+            }
+
         return feature_dict
+
+    @classmethod
+    def from_dict(cls, state_dict: Dict[str, Any]) -> "State":
+        """Reconstruct State object from serialized dict.
+
+        Args:
+            state_dict: Serialized state with metadata format:
+                {"_owner_id": str, "_owner_level": int, "_state_type": str, "features": {...}}
+                OR simple format: {"FeatureName": {...}, ...}
+
+        Returns:
+            Reconstructed State object with FeatureProvider instances
+
+        Raises:
+            ValueError: If feature class not found in registry
+        """
+        from heron.core.feature import get_feature_class
+
+        # Extract metadata if present
+        if "_owner_id" in state_dict and "_owner_level" in state_dict:
+            owner_id = state_dict["_owner_id"]
+            owner_level = state_dict["_owner_level"]
+            state_type = state_dict.get("_state_type")
+            features_dict = state_dict.get("features", {})
+        else:
+            # Fallback: no metadata, assume features are at top level
+            owner_id = state_dict.get("owner_id", "unknown")
+            owner_level = state_dict.get("owner_level", 1)
+            state_type = None
+            features_dict = {k: v for k, v in state_dict.items() if not k.startswith("_") and k not in ["owner_id", "owner_level"]}
+
+        # Determine which State class to instantiate
+        if state_type and cls == State:
+            # If called on base State class, use the type from metadata
+            # Use globals() for late binding (classes defined later in file)
+            import sys
+            current_module = sys.modules[__name__]
+            state_class = getattr(current_module, state_type, None)
+            if state_class is None:
+                raise ValueError(f"Unknown state type: {state_type}")
+        else:
+            # Called on concrete subclass, use it directly
+            state_class = cls
+
+        # Create State instance
+        state = state_class(owner_id=owner_id, owner_level=owner_level)
+
+        # Reconstruct features using registry
+        for feature_name, feature_data in features_dict.items():
+            if feature_name.startswith("_"):
+                continue  # Skip internal metadata fields
+
+            try:
+                feature_class = get_feature_class(feature_name)
+                feature_obj = feature_class.from_dict(feature_data)
+                state.features.append(feature_obj)
+            except ValueError as e:
+                # Feature not registered - skip with warning
+                print(f"Warning: Skipping unregistered feature '{feature_name}': {e}")
+
+        return state
 
     def validate_observation_dict(self, obs_dict: Dict[str, np.ndarray]) -> None:
         """Validate the collected feature vectors for consistency.

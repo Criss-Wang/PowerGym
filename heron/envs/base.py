@@ -8,11 +8,13 @@ from heron.agents.base import Agent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.core.observation import Observation
 from heron.core.action import Action
+from heron.core.policies import Policy
 from heron.messaging import MessageBroker, ChannelManager, Message, MessageType
 from heron.utils.typing import AgentID, MultiAgentDict
-from heron.scheduling import EventScheduler, DefaultScheduler, Event
-from heron.agents.system_agent import SystemAgent, SYSTEM_AGENT_ID
-from heron.agents.proxy_agent import ProxyAgent, PROXY_AGENT_ID
+from heron.scheduling import EventScheduler, DefaultScheduler, Event, EventAnalyzer, EpisodeResult
+from heron.agents.system_agent import SystemAgent
+from heron.agents.proxy_agent import ProxyAgent
+from heron.agents.constants import SYSTEM_AGENT_ID, PROXY_AGENT_ID
 
 
 class EnvCore:
@@ -29,21 +31,22 @@ class EnvCore:
     ) -> None:
         # environment attributes
         self.env_id = env_id or f"env_{uuid.uuid4().hex[:8]}"
+        self.simulation_wait_interval = simulation_wait_interval
 
         # agent-specific fields
         self.registered_agents: Dict[AgentID, Agent] = {}
         self._register_agents(system_agent, coordinator_agents)
-        self._initialize_agents()
 
-        # setup message broker
+        # setup message broker (before initialization - agents need it)
         self.message_broker = MessageBroker.init(message_broker_config)
         self.message_broker.attach(self.registered_agents)
 
-        # setup scheduler
+        # setup scheduler (before initialization - agents need it)
         self.scheduler = EventScheduler.init(scheduler_config)
         self.scheduler.attach(self.registered_agents)
 
-        self.simulation_wait_interval = simulation_wait_interval
+        # Initialize agents after message broker and scheduler are attached
+        self._initialize_agents()
 
     # ============================================
     # Agent Management Methods
@@ -67,7 +70,12 @@ class EnvCore:
                 subordinate={agent.agent_id: agent for agent in coordinator_agents}
             )
             print("No system agent provided, using default system agent")
-        self._system_agent.set_simulation(self.run_simulation, self.simulation_wait_interval)
+        self._system_agent.set_simulation(
+            self.run_simulation, 
+            self.env_state_to_global_state,
+            self.global_state_to_env_state,
+            self.simulation_wait_interval
+        )
         self.register_agent(self._system_agent)
         
         # register proxy agent (singleton)
@@ -77,6 +85,9 @@ class EnvCore:
     def _initialize_agents(self) -> None:
         for agent in self.registered_agents.values():
             agent.initialize(self._proxy_agent)
+
+        # Initialize global state from all registered agent states
+        self._proxy_agent.init_global_state()
 
     def get_agent(self, agent_id: AgentID) -> Optional[Agent]:
         """Get a registered agent by ID.
@@ -115,8 +126,10 @@ class EnvCore:
         self.clear_broker_environment()
 
         # reset agents (system agent will reset subordinates)
-        self._proxy_agent.reset(seed)
-        return self._system_agent.reset(seed, self._proxy_agent)
+        self._proxy_agent.reset(seed=seed)
+        obs = self._system_agent.reset(seed=seed, proxy=self._proxy_agent)
+        self._proxy_agent.init_global_state()  # Cache initial state in proxy after reset
+        return obs
     
     def step(self, actions: Dict[AgentID, Any]) -> Tuple[
         Dict[AgentID, Any],
@@ -171,19 +184,62 @@ class EnvCore:
     # Simulation-related Methods
     # ============================================
     @abstractmethod
-    def run_simulation(self, *args, **kwargs) -> None:
+    def run_simulation(self, env_state: Any, *args, **kwargs) -> Any:
         """ Custom simulation logic post-system_agent.act and before system_agent.update_from_environment().
-        
+
         In the long run, this can be eventually turned into a static SimulatorAgent.
         """
         pass
 
     @abstractmethod
-    def env_to_system_agent_state(self) -> State:
+    def env_state_to_global_state(self, env_state: Any) -> Dict[str, Any]:
+        """Convert custom environment state to HERON global state dict format.
+
+        This method is called after run_simulation() to convert the updated
+        environment state back into the global state dict structure that will
+        be stored in proxy.state_cache["global"].
+
+        Args:
+            env_state: Custom environment state after simulation
+
+        Returns:
+            Dict that will be merged into proxy.state_cache["global"] via .update()
+            Typically includes "agent_states" dict with updated agent state dicts.
+
+        Example:
+            return {
+                "agent_states": {
+                    "agent_1": {"FeatureName": {"field": value}},
+                    ...
+                }
+            }
+        """
         pass
 
     @abstractmethod
-    def system_agent_state_to_env(self, state: State) -> Any:
+    def global_state_to_env_state(self, global_state: Dict[str, Any]) -> Any:
+        """Convert HERON global state dict to custom environment state format.
+
+        This method is called before run_simulation() to extract relevant info
+        from proxy.state_cache["global"] and convert it to the custom format
+        your simulation function expects.
+
+        Args:
+            global_state: Dict from proxy.state_cache["global"] with structure:
+                {
+                    "agent_states": {agent_id: state_dict, ...},
+                    ... other global fields ...
+                }
+                Note: state_dict is the dict representation from State.to_dict()
+
+        Returns:
+            Custom environment state object for your simulation
+
+        Example:
+            agent_states = global_state.get("agent_states", {})
+            battery_soc = agent_states["battery_1"]["BatteryFeature"]["soc"]
+            return CustomEnvState(battery_soc=battery_soc)
+        """
         pass
 
 
@@ -196,6 +252,12 @@ class EnvCore:
             for agent_id, agent in self.registered_agents.items()
             if agent.policy
         }
+    
+    def set_agent_policies(self, policies: Dict[AgentID, Policy]) -> None:
+        for agent_id, policy in policies.items():
+            agent = self.registered_agents.get(agent_id)
+            if agent:
+                agent.policy = policy
 
     def clear_broker_environment(self) -> None:
         """Clear all messages for this environment from the broker.

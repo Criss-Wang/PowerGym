@@ -10,24 +10,6 @@ from typing import Any, Dict
 import numpy as np
 
 
-# =============================================================================
-# Observation.local key constants
-# =============================================================================
-
-# FieldAgent local keys
-OBS_KEY_STATE = "state"  # Agent's state vector
-OBS_KEY_OBSERVATION = "observation"  # Agent's observation vector
-OBS_KEY_PROXY_STATE = "proxy_state"  # State from proxy (delayed observations)
-
-# CoordinatorAgent local keys
-OBS_KEY_SUBORDINATE_OBS = "subordinate_obs"  # Dict of subordinate observations
-OBS_KEY_COORDINATOR_STATE = "coordinator_state"  # Coordinator's state vector
-
-# SystemAgent local keys
-OBS_KEY_COORDINATOR_OBS = "coordinator_obs"  # Dict of coordinator observations
-OBS_KEY_SYSTEM_STATE = "system_state"  # System agent's state vector
-
-
 @dataclass
 class Observation:
     """Structured observation for an agent.
@@ -95,6 +77,39 @@ class Observation:
             Flattened observation vector
         """
         return self.vector()
+
+    def __array__(self, dtype=None) -> np.ndarray:
+        """Support automatic conversion to numpy array.
+
+        This allows Observation objects to be used directly with:
+        - np.array(obs)
+        - policy.forward(observation=obs) where policy expects np.ndarray
+
+        Returns:
+            Flattened observation vector
+        """
+        vec = self.vector()
+        if dtype is not None:
+            return vec.astype(dtype)
+        return vec
+
+    @property
+    def shape(self) -> tuple:
+        """Return shape of vectorized observation (array-like compatibility)."""
+        return self.vector().shape
+
+    @property
+    def dtype(self):
+        """Return dtype of vectorized observation (array-like compatibility)."""
+        return np.float32
+
+    def __len__(self) -> int:
+        """Return length of vectorized observation (array-like compatibility)."""
+        return len(self.vector())
+
+    def __getitem__(self, key):
+        """Support indexing like a numpy array (array-like compatibility)."""
+        return self.vector()[key]
 
     def _flatten_dict_to_list(self, d: Dict, parts: list) -> None:
         """Recursively flatten a dictionary into a list of arrays.

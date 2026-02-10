@@ -2,9 +2,12 @@
 
 from abc import ABC, abstractmethod
 from builtins import float
-from typing import Any, Dict, List, Optional, Callable
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Callable
 
 import gymnasium as gym
+
+if TYPE_CHECKING:
+    from heron.agents.proxy_agent import ProxyAgent
 
 from heron.messaging import MessageBroker, ChannelManager, Message as BrokerMessage, MessageType
 from heron.utils.typing import AgentID
@@ -12,14 +15,35 @@ from heron.scheduling.tick_config import TickConfig, JitterType
 from heron.scheduling.scheduler import EventScheduler
 from heron.scheduling.event import Event, EventType, EVENT_TYPE_FROM_STRING
 from heron.core.policies import Policy
+from heron.core.state import State
+from heron.core.observation import Observation
 from heron.protocols.base import Protocol
-from heron.agents.proxy_agent import ProxyAgent
+from heron.agents.constants import PROXY_AGENT_ID
 
 
 class Agent(ABC):
     # class-level handler function mapping
     _event_handler_funcs: Dict[EventType, Callable[[Event, "EventScheduler"], None]] = {}
-    
+
+    def __init_subclass__(cls, **kwargs):
+        """Ensure each subclass gets its own copy of the handlers dict and register handlers."""
+        super().__init_subclass__(**kwargs)
+        # Create a new dict for this subclass, inheriting parent handlers
+        cls._event_handler_funcs = cls._event_handler_funcs.copy()
+
+        # Register any handlers marked with _handler_event_type
+        for name in dir(cls):
+            # Skip special attributes (dunder methods)
+            if name.startswith('__'):
+                continue
+            try:
+                attr = getattr(cls, name)
+                if callable(attr) and hasattr(attr, '_handler_event_type'):
+                    cls._event_handler_funcs[attr._handler_event_type] = attr
+            except AttributeError:
+                # Skip attributes that can't be accessed
+                pass
+
     def __init__(
         self,
         agent_id: AgentID,
@@ -43,7 +67,7 @@ class Agent(ABC):
         self.action_space = action_space
         self.policy = policy
         self.protocol = protocol
-        self.state = None
+        self.state: Optional[State] = None
 
         # Execution state
         self._timestep: float = 0.0
@@ -80,7 +104,7 @@ class Agent(ABC):
         pass
 
     @abstractmethod
-    def set_action(self, *args, **kwargs) -> None:
+    def set_action(self, action: Any, *args, **kwargs) -> None:
         pass
 
     # ============================================
@@ -90,20 +114,30 @@ class Agent(ABC):
     # - execute: Synchronous Execution (for Training phase)
     # - tick: Event-Driven Execution (for Testing phase)
     # ============================================
-    def initialize(self, proxy: Optional[ProxyAgent] = None) -> None:
+    def initialize(self, proxy: Optional["ProxyAgent"] = None) -> None:
         self.init_action()
         self.init_state()
-        proxy.register_agent(self.agent_id)
+        proxy.register_agent(self.agent_id, agent_state=self.state)
         for subordinate in self.subordinates.values():
             subordinate.initialize(proxy=proxy)
 
-    def reset(self, *, seed: Optional[int] = None, proxy: Optional[ProxyAgent] = None, **kwargs) -> Any:
+    def reset(self, *, seed: Optional[int] = None, proxy: Optional["ProxyAgent"] = None, **kwargs) -> Any:
         self._timestep = 0.0
+        self.init_action()
+        self.init_state()
+
+        # Cache initial state in proxy
+        if not proxy:
+            raise ValueError("Agent requires a proxy agent to reset states")
+        if self.state is None:
+            raise ValueError("Agent state is not initialized, cannot reset. Please call initialize() first.")
+        proxy.set_local_state(self.agent_id, self.state)  # Pass State object directly
+
         for subordinate in self.subordinates.values():
             subordinate.reset(seed=seed, proxy=proxy, **kwargs)
 
     @abstractmethod
-    def execute(self, actions: Dict[AgentID, Any], proxy: Optional[ProxyAgent] = None) -> None:
+    def execute(self, actions: Dict[AgentID, Any], proxy: Optional["ProxyAgent"] = None) -> None:
         pass
 
     @abstractmethod
@@ -117,7 +151,7 @@ class Agent(ABC):
     # ============================================
     # Observation related functions
     # ============================================
-    def observe(self, global_state: Optional[Dict[str, Any]] = None, proxy: Optional[ProxyAgent] = None, *args, **kwargs) -> Dict[AgentID, Any]:
+    def observe(self, global_state: Optional[Dict[str, Any]] = None, proxy: Optional["ProxyAgent"] = None, *args, **kwargs) -> Dict[AgentID, Any]:
         """
         Sample format:
         {
@@ -132,13 +166,13 @@ class Agent(ABC):
             self.agent_id: proxy.get_observation(self.agent_id, self.protocol), # local observation
         }
         for subordinate in self.subordinates.values():
-            obs.update(subordinate.observe(proxy))
+            obs.update(subordinate.observe(proxy=proxy))
         return obs
 
     # ============================================
     # Reward related functions
     # ============================================
-    def compute_rewards(self, proxy: ProxyAgent) -> Dict[AgentID, float]:
+    def compute_rewards(self, proxy: "ProxyAgent") -> Dict[AgentID, float]:
         if not proxy:
             raise ValueError("System Agent requires a proxy agent to compute rewards")
 
@@ -162,7 +196,7 @@ class Agent(ABC):
     # ============================================
     # Info related functions
     # ============================================
-    def get_info(self, proxy: ProxyAgent) -> Dict[AgentID, Dict]:
+    def get_info(self, proxy: "ProxyAgent") -> Dict[AgentID, Dict]:
         if not proxy:
             raise ValueError("System Agent requires a proxy agent to get infos")
         # Local info derivation
@@ -182,7 +216,7 @@ class Agent(ABC):
     # ============================================
     # terminateds related functions
     # ============================================
-    def get_terminateds(self, proxy: ProxyAgent) -> Dict[AgentID, bool]:
+    def get_terminateds(self, proxy: "ProxyAgent") -> Dict[AgentID, bool]:
         if not proxy:
             raise ValueError("System Agent requires a proxy agent to derive termination state")
         # May need to use env fields to decide
@@ -203,7 +237,7 @@ class Agent(ABC):
     # ============================================
     # truncateds related functions
     # ============================================
-    def get_truncateds(self, proxy: ProxyAgent) -> Dict[AgentID, float]:
+    def get_truncateds(self, proxy: "ProxyAgent") -> Dict[AgentID, float]:
         if not proxy:
             raise ValueError("System Agent requires a proxy agent to derive truncated states")
         # May need to use env fields to decide
@@ -224,15 +258,15 @@ class Agent(ABC):
     # ============================================
     # Action taking related functions
     # ============================================
-    def act(self, actions: Dict[AgentID, Any], proxy: Optional[ProxyAgent] = None) -> None:
-        actions = self.layer_actions(actions)
+    def act(self, actions: Dict[str, Any], proxy: Optional["ProxyAgent"] = None) -> None:
+        self._timestep += 1
 
         # run self action & store local state updates in proxy
         self.handle_self_action(actions['self'], proxy)
         # run subordinate actions & store local state updates in proxy
         self.handle_subordinate_actions(actions['subordinates'], proxy)
 
-    def layer_actions(self, actions: Dict[AgentID, Any]) -> Dict[AgentID, Any]:
+    def layer_actions(self, actions: Dict[AgentID, Any]) -> Dict[str, Any]:
         """
         Format:
         {
@@ -250,33 +284,35 @@ class Agent(ABC):
         """
         return {
             "self": actions.get(self.agent_id),
-            "suborindates": {
+            "subordinates": {
                 subordinate_id: subordinate.layer_actions(actions)
                 for subordinate_id, subordinate in self.subordinates.items()
             }
         }
 
-    def handle_self_action(self, action: Any, proxy: Optional[ProxyAgent] = None):
+    def handle_self_action(self, action: Any, proxy: Optional["ProxyAgent"] = None):
         if action:
             self.set_action(action)
         elif self.policy:
-            local_obs = proxy.get_obervation(self.agent_id)
+            local_obs = proxy.get_observation(self.agent_id)
             self.set_action(self.policy.forward(observation=local_obs)) # This is where policy is needed!
 
         else:
-            print(f"No action built for ({self}) becase there's no upstream action and no action policy")
+            # Only warn for field agents (level 1) - higher-level agents don't need policies in CTDE
+            if self.level == 1:
+                print(f"No action built for ({self}) becase there's no upstream action and no action policy")
 
         self.apply_action()
         if not self.state:
             raise ValueError("We cannot find appropriate agent state, double check your state update logic")
-        proxy.set_local_state(self.state) # update agent-specific state in proxy for parent/subordinate to retrieve
+        proxy.set_local_state(self.agent_id, self.state)  # Pass State object directly
 
-    def handle_subordinate_actions(self, actions: Dict[AgentID, Any], proxy: Optional[ProxyAgent] = None):
+    def handle_subordinate_actions(self, actions: Dict[AgentID, Any], proxy: Optional["ProxyAgent"] = None):
         # Note: Parent Agent doesn't build action for subordinates, i.e. self.policy.forward only produces local action
         # TODO: Support parent-controlled actions
         for subordinate_id, subordinate in self.subordinates.items():
             if subordinate_id in actions:
-                subordinate.execute(actions, proxy)
+                subordinate.execute(actions[subordinate_id], proxy)
             else:
                 print(f"{subordinate} not executed in current execution cycle")
 
@@ -349,37 +385,39 @@ class Agent(ABC):
             agent_id=self.agent_id,
             delay=self._tick_config.act_delay,
         )
-    
-    def on_action_effect(self, action: Any) -> Any:
-        pass
+
 
     # Default handlers for common event types. Can be overridden or extended in subclasses for custom handling logic.
-    def handler(cls, type: str):
-        """Decorator for registering custom handler"""
-        event_type = EVENT_TYPE_FROM_STRING.get(type)
-        if not event_type:
-            raise KeyError(f"Event type cannot be handler, please select from {EVENT_TYPE_FROM_STRING.keys()}")
-        def decorator(func):
-            cls._event_handler_funcs[event_type] = func
+    class handler:
+        """Decorator for registering event handlers.
+
+        This is a descriptor that works both as @Agent.handler (from outside/subclasses)
+        and as @handler (from inside the Agent class definition).
+        """
+        def __init__(self, event_type_str: str):
+            self.event_type_str = event_type_str
+            event_type = EVENT_TYPE_FROM_STRING.get(event_type_str)
+            if not event_type:
+                raise KeyError(f"Event type '{event_type_str}' not found. Choose from: {list(EVENT_TYPE_FROM_STRING.keys())}")
+            self.event_type = event_type
+
+        def __call__(self, func):
+            """Called when used as @handler("event_type")."""
+            # Store event type on the function itself for later registration
+            func._handler_event_type = self.event_type
             return func
-        return decorator
-
-    @handler("agent_tick")
-    def agent_tick_handler(self, event: Event, scheduler: EventScheduler) -> None:
-        self.tick(scheduler, event.timestamp)
-
-    @handler("action_effect")
-    def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
-        action = event.payload.get("action")
-        if action is not None:
-            self.on_action_effect(action)
-
-    @handler("message_delivery")
-    def message_delivery_handler(self, event: Event, scheduler: EventScheduler) -> None:
-        pass
 
     def get_handlers(self) -> Dict[EventType, Callable[[Event, "EventScheduler"], None]]:
-        return self._event_handler_funcs
+        """Return handlers bound to this agent instance.
+
+        Handlers are stored as unbound methods at the class level, but need to be
+        bound to the specific agent instance when retrieved.
+        """
+        bound_handlers = {}
+        for event_type, func in self._event_handler_funcs.items():
+            # Bind the unbound method to this agent instance
+            bound_handlers[event_type] = lambda e, s, f=func: f(self, e, s)
+        return bound_handlers
     
     # ============================================
     # Additional subordinate controls (Protocol Usage)

@@ -1,11 +1,13 @@
 import heapq
-from typing import Any, Callable, Dict, List, Optional, Set, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Iterable
 
-from heron.agents import Agent, SystemAgent
-from heron.agents.system_agent import SYSTEM_AGENT_ID
+if TYPE_CHECKING:
+    from heron.agents import Agent
+
 from heron.scheduling.event import Event, EventType
 from heron.utils.typing import AgentID
 from heron.scheduling.tick_config import TickConfig
+from heron.agents.constants import SYSTEM_AGENT_ID
 
 
 class EventScheduler:
@@ -39,12 +41,12 @@ class EventScheduler:
         """Get the tick configs for all agents."""
         return self._agent_tick_configs
     
-    def attach(self, agents: Dict[AgentID, Agent]) -> None:
+    def attach(self, agents: Dict[AgentID, "Agent"]) -> None:
         for agent_id, agent in agents.items():
             self._agent_tick_configs[agent_id] = agent.tick_config
             self._active_agents.add(agent_id)
             self.set_handlers_for_agent(agent_id, agent.get_handlers())
-            if isinstance(agent, SystemAgent):
+            if agent_id == SYSTEM_AGENT_ID:
                 # Only schedule first tick for system agent
                 self.schedule(Event(
                 timestamp=self.current_time,
@@ -79,11 +81,11 @@ class EventScheduler:
 
         Args:
             agent_id: Agent to tick
-            timestamp: When to tick (defaults to current_time + jittered interval)
+            timestamp: When to tick (defaults to current_time + agent's jittered interval)
             payload: Optional event payload
         """
         if timestamp is None:
-            timestamp = self.current_time + self.get_tick_interval()
+            timestamp = self.current_time + self.get_tick_interval(agent_id)
 
         self.schedule(Event(
             timestamp=timestamp,
@@ -112,7 +114,7 @@ class EventScheduler:
             timestamp=self.current_time + delay,
             event_type=EventType.ACTION_EFFECT,
             agent_id=agent_id,
-            priority=0, # TODO: update priority
+            priority=0,  # Agent-level events (applies action effects on agent state)
         ))
 
     def schedule_message_delivery(
@@ -139,7 +141,7 @@ class EventScheduler:
             timestamp=self.current_time + delay,
             event_type=EventType.MESSAGE_DELIVERY,
             agent_id=recipient_id,
-            priority=1,  # TODO: update priority
+            priority=2,  # Communication-level events (deliver after state changes)
             payload={"sender": sender_id, "message": message}
         ))
 
@@ -154,7 +156,7 @@ class EventScheduler:
                 timestamp=self.current_time + delay,
                 event_type=EventType.SIMULATION,
                 agent_id=agent_id,
-                priority=1,  # TODO: update priority
+                priority=1,  # Environment-level events (runs physics after actions)
             )
         )
 
@@ -322,6 +324,8 @@ class EventScheduler:
 
         # Dispatch to handler (agent-specific first, then global fallback)
         handler = self.get_handler(event.event_type, event.agent_id)
+        if handler is None:
+            raise ValueError(f"No handler registered for event_type={event.event_type}, agent_id={event.agent_id}")
         handler(event, self)
 
         return event
@@ -369,12 +373,13 @@ class EventScheduler:
         self.clear()
         self._processed_count = 0
 
-        # Re-schedule first ticks for all agents
-        for agent_id in self._active_agents:
+        # Re-schedule first tick only for system agent (matches attach() behavior)
+        # System agent will cascade ticks to subordinates
+        if SYSTEM_AGENT_ID in self._active_agents:
             self.schedule(Event(
                 timestamp=start_time,
                 event_type=EventType.AGENT_TICK,
-                agent_id=agent_id,
+                agent_id=SYSTEM_AGENT_ID,
                 payload={}
             ))
 

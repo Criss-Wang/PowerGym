@@ -13,6 +13,16 @@ from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.agents.system_agent import SystemAgent
 from heron.agents.proxy_agent import ProxyAgent
+from heron.agents.constants import (
+    # Agent Hierarchy Levels
+    PROXY_LEVEL,
+    FIELD_LEVEL,
+    COORDINATOR_LEVEL,
+    SYSTEM_LEVEL,
+    # Special Agent IDs
+    PROXY_AGENT_ID,
+    SYSTEM_AGENT_ID,
+)
 
 __all__ = [
     "Agent",
@@ -20,4 +30,11 @@ __all__ = [
     "CoordinatorAgent",
     "SystemAgent",
     "ProxyAgent",
+    # Constants
+    "PROXY_LEVEL",
+    "FIELD_LEVEL",
+    "COORDINATOR_LEVEL",
+    "SYSTEM_LEVEL",
+    "PROXY_AGENT_ID",
+    "SYSTEM_AGENT_ID",
 ]

@@ -3,12 +3,9 @@ from enum import Enum
 
 from heron.agents.base import Agent
 from heron.agents.coordinator_agent import CoordinatorAgent
-from heron.agents.proxy_agent import ProxyAgent, PROXY_AGENT_ID
+from heron.agents.proxy_agent import ProxyAgent
 from heron.core.action import Action
-from heron.core.observation import (
-    OBS_KEY_COORDINATOR_OBS,
-    OBS_KEY_SYSTEM_STATE,
-)
+from heron.core.observation import Observation
 from heron.core.state import SystemAgentState
 from heron.utils.typing import AgentID, MultiAgentDict
 from heron.core.policies import Policy
@@ -16,10 +13,22 @@ from heron.protocols.base import Protocol
 from heron.scheduling.scheduler import Event, EventScheduler
 from heron.scheduling.tick_config import TickConfig
 from gymnasium.spaces import Box, Space
-
-
-SYSTEM_LEVEL = 3  # Level identifier for system-level agents
-SYSTEM_AGENT_ID = "system_agent"
+from heron.agents.constants import (
+    SYSTEM_LEVEL,
+    SYSTEM_AGENT_ID,
+    PROXY_AGENT_ID,
+    DEFAULT_SYSTEM_TICK_INTERVAL,
+    MSG_GET_INFO,
+    MSG_SET_STATE,
+    MSG_SET_STATE_COMPLETION,
+    MSG_SET_TICK_RESULT,
+    INFO_TYPE_OBS,
+    INFO_TYPE_GLOBAL_STATE,
+    INFO_TYPE_LOCAL_STATE,
+    STATE_TYPE_GLOBAL,
+    MSG_KEY_BODY,
+    MSG_KEY_PROTOCOL,
+)
 
 
 class SystemAgent(Agent):
@@ -46,7 +55,7 @@ class SystemAgent(Agent):
             subordinates=subordinates,
             upstream_id=None,  # System agent has no upstream
             env_id=env_id,
-            tick_config=tick_config or TickConfig.deterministic(tick_interval=300.0),
+            tick_config=tick_config or TickConfig.deterministic(tick_interval=DEFAULT_SYSTEM_TICK_INTERVAL),
             policy=policy,
             protocol=protocol
         )
@@ -63,7 +72,7 @@ class SystemAgent(Agent):
     def set_state(self, *args, **kwargs) -> None:
         pass
 
-    def set_action(self, *args, **kwargs) -> None:
+    def set_action(self, action: Any, *args, **kwargs) -> None:
         pass
 
     # ============================================
@@ -84,6 +93,7 @@ class SystemAgent(Agent):
         if not proxy:
             raise ValueError("We still require a valid proxy agent so far")
         
+        actions = self.layer_actions(actions)
         self.act(actions, proxy)
         
         # get latest global state (after the above local state updates are accounted for)
@@ -138,7 +148,7 @@ class SystemAgent(Agent):
             scheduler.schedule_message_delivery(
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
-                message={"get_info": "obs", "protocol": self.protocol},
+                message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
                 delay=self._tick_config.msg_delay,
             )
         else:
@@ -151,6 +161,20 @@ class SystemAgent(Agent):
     # ============================================
     # Custom Handlers for Event-Driven Execution
     # ============================================
+    @Agent.handler("agent_tick")
+    def agent_tick_handler(self, event: Event, scheduler: EventScheduler) -> None:
+        self.tick(scheduler, event.timestamp)
+
+    @Agent.handler("action_effect")
+    def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
+        self.apply_action()
+        scheduler.schedule_message_delivery(
+            sender_id=self.agent_id,
+            recipient_id=PROXY_AGENT_ID,
+            message={"set_state": "local", "body": self.state.to_dict(include_metadata=True)},
+            delay=self._tick_config.msg_delay,
+        )
+
     @Agent.handler("message_delivery")
     def message_delivery_handler(self, event: Event, scheduler: EventScheduler) -> None:
         """Deliver message via message broker."""
@@ -165,19 +189,26 @@ class SystemAgent(Agent):
         # d. receiving "state set completion" message from proxy -> schedule reward computation
         assert isinstance(message_content, dict)
         if "get_obs_response" in message_content:
-            obs = message_content['body']
+            # Deserialize observation dict back to Observation object
+            # The proxy sends serialized dicts, reconstruct the object
+            response_data = message_content["get_obs_response"]
+            obs_dict = response_data[MSG_KEY_BODY]
+            obs = Observation.from_dict(obs_dict)
             self.compute_action(obs, scheduler)
         elif "get_global_state_response" in message_content:
-            global_state = message_content['body']
+            # The response structure is {'get_global_state_response': {'body': {...}}}
+            response_data = message_content["get_global_state_response"]
+            global_state = response_data[MSG_KEY_BODY] # a dict of {agent_id: state}
             updated_global_state = self.simulate(global_state)
             scheduler.schedule_message_delivery(
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
-                message={"set_state": "global", "body": updated_global_state},
+                message={MSG_SET_STATE: STATE_TYPE_GLOBAL, MSG_KEY_BODY: updated_global_state},
                 delay=self._tick_config.msg_delay,
             )
         elif "get_local_state_response" in message_content:
-            local_state = message_content['body']
+            response_data = message_content["get_local_state_response"]
+            local_state = response_data[MSG_KEY_BODY]
             tick_result = {
                 "reward": self.compute_local_reward(local_state),
                 "terminated": self.is_terminated(local_state),
@@ -188,32 +219,32 @@ class SystemAgent(Agent):
             scheduler.schedule_message_delivery(
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
-                message={"set_tick_result": "local", "body": tick_result},
+                message={MSG_SET_TICK_RESULT: INFO_TYPE_LOCAL_STATE, MSG_KEY_BODY: tick_result},
                 delay=self._tick_config.msg_delay,
             )
-        elif "set_state_completion" in message_content:
-            if message_content["set_state_completion"] != "success":
+        elif MSG_SET_STATE_COMPLETION in message_content:
+            if message_content[MSG_SET_STATE_COMPLETION] != "success":
                 raise ValueError(f"State update failed in proxy, cannot proceed with reward computation")
-            
+
             # Initiate reward computation after state update by retrieving local states from proxy agent
 
             # Note: Parent agent will help initiate reward computation for subordinates.
             # The alternative options is to let proxy agent directly send reward computation message to subordinates,
-            # but we want to keep the logic of "when to compute rewards" in the agent itself for better modularity and 
-            # flexibility (e.g. parent agent may choose to delay subordinate reward computation until certain 
+            # but we want to keep the logic of "when to compute rewards" in the agent itself for better modularity and
+            # flexibility (e.g. parent agent may choose to delay subordinate reward computation until certain
             # conditions are met, instead of immediately after state update)
             for subordinate_id in self.subordinates:
                 scheduler.schedule_message_delivery(
                     sender_id=subordinate_id,
                     recipient_id=PROXY_AGENT_ID,
-                    message={"get_info": "local_state", "protocol": self.protocol},
+                    message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
                     delay=self._tick_config.msg_delay,
                 )
 
             scheduler.schedule_message_delivery(
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
-                message={"get_info": "local_state", "protocol": self.protocol},
+                message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
                 delay=self._tick_config.msg_delay,
             )
         else:
@@ -231,7 +262,7 @@ class SystemAgent(Agent):
         scheduler.schedule_message_delivery(
             sender_id=self.agent_id,
             recipient_id=PROXY_AGENT_ID,
-            message={"get_info": "global_state", "protocol": self.protocol},
+            message={MSG_GET_INFO: INFO_TYPE_GLOBAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
             delay=self._tick_config.msg_delay,
         )
     
@@ -239,16 +270,27 @@ class SystemAgent(Agent):
     # ============================================
     # Simulation related functions - SystemAgent-specific
     # ============================================
-    def set_simulation(self, simulation_func: Callable, wait_interval: Optional[float] = None):
+    def set_simulation(
+        self, 
+        simulation_func: Callable, 
+        env_state_to_global_state: Callable,
+        global_state_to_env_state: Callable,
+        wait_interval: Optional[float] = None
+    ):
         """
         simulation_func: simulation function passed from environment
         wait_interval: waiting time between action kick-off and simulation starts
         """
         self._simulation_func = simulation_func
+        self._env_state_to_global_state = env_state_to_global_state
+        self._global_state_to_env_state = global_state_to_env_state
         self._simulation_wait_interval = wait_interval or self.tick_config.tick_interval
 
     def simulate(self, global_state: Dict[AgentID, Any]) -> Any:
-        return self._simulation_func(global_state)
+        env_state =  self._global_state_to_env_state(global_state)
+        updated_env_state = self._simulation_func(env_state)
+        updated_global_state = self._env_state_to_global_state(updated_env_state)
+        return updated_global_state
 
 
     # ============================================
