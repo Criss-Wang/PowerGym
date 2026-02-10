@@ -13,7 +13,6 @@ from heron.core.observation import Observation
 from heron.core.feature import FeatureProvider
 from heron.core.action import Action
 from heron.core.policies import Policy, obs_to_vector, vector_to_action
-from heron.core.state import FieldAgentState
 from heron.envs.base import MultiAgentEnv
 from heron.scheduling import EventScheduler, EventType, TickConfig, JitterType
 from heron.scheduling.analysis import EventAnalyzer
@@ -37,11 +36,6 @@ class BatteryAgent(FieldAgent):
     """Battery field agent - Level 1 in the hierarchy.
     """
 
-    def __init__(self, agent_id: str, capacity: float = 100.0, initial_soc: float = 0.5, **kwargs):
-        self._capacity = capacity
-        self._initial_soc = initial_soc
-        super().__init__(agent_id=agent_id, **kwargs)
-
     @property
     def soc(self) -> float:
         return self.state.features[0].soc
@@ -50,25 +44,15 @@ class BatteryAgent(FieldAgent):
     def capacity(self) -> float:
         return self.state.features[0].capacity
 
-    def init_state(self) -> None:
-        """Initialize battery state with SOC and capacity."""
-        battery_feature = BatteryChargeFeature(soc=self._initial_soc, capacity=self._capacity)
-        self.state = FieldAgentState(owner_id=self.agent_id, owner_level=self.level)
-        self.state.features.append(battery_feature)
-
-    def init_action(self) -> None:
+    def init_action(self, features: List[FeatureProvider] = []):
         """Initialize action (charge/discharge rate)."""
-        self.action = Action()
-        self.action.set_specs(dim_c=1, range=(np.array([-1.0]), np.array([1.0])))
-        self.action.set_values(np.array([0.0]))
+        action = Action()
+        action.set_specs(dim_c=1, range=(np.array([-1.0]), np.array([1.0])))
+        action.set_values(np.array([0.0]))
+        return action
 
     def compute_local_reward(self, local_state: dict) -> float:
         """Compute reward for this agent (reward = SOC).
-
-        BUG FIX #2: Use local_state parameter from proxy, not self.state!
-        In event-driven mode, self.state may be stale due to message delays.
-
-        BUG FIX #3: With visibility filtering, local_state contains numpy arrays from observed_by()
 
         Args:
             local_state: State dict from proxy.get_local_state() with structure:
@@ -220,6 +204,9 @@ class ActorMLP(SimpleMLP):
         super().__init__(input_dim, hidden_dim, output_dim, seed)
         # Override W2 initialization with smaller weights for actor
         self.W2 = np.random.randn(hidden_dim, output_dim) * 0.1
+        # Initialize bias to encourage charging (positive actions)
+        # tanh(0.5) ≈ 0.46, so initial actions will be around +0.46 (charging)
+        self.b2 = np.ones(output_dim) * 0.5
 
     def update(self, x, action_taken, advantage, lr=0.01):
         """Update actor using policy gradient.
@@ -279,7 +266,8 @@ class NeuralPolicy(Policy):
         self.critic = SimpleMLP(obs_dim, hidden_dim, 1, seed + 1)
 
         # Exploration noise (decreases over training)
-        self.noise_scale = 0.3
+        # Start with lower noise since we have a good initial bias
+        self.noise_scale = 0.15
 
     @obs_to_vector
     @vector_to_action
@@ -415,8 +403,14 @@ def train_ctde(env: MultiAgentEnv, num_episodes=100, steps_per_episode=50, gamma
 
     return policies, returns_history, soc_history
 
-battery_agent_1 = BatteryAgent(agent_id="battery_1")
-battery_agent_2 = BatteryAgent(agent_id="battery_2")
+battery_agent_1 = BatteryAgent(
+    agent_id="battery_1",
+    features=[BatteryChargeFeature(soc=0.5, capacity=100.0)]
+)
+battery_agent_2 = BatteryAgent(
+    agent_id="battery_2",
+    features=[BatteryChargeFeature(soc=0.5, capacity=100.0)]
+)
 zone_coordinator = ZoneCoordinator(agent_id="zone_1", subordinates={"battery_1": battery_agent_1, "battery_2": battery_agent_2})
 grid_system_agent = GridSystemAgent(agent_id="system_agent", subordinates={"zone_1": zone_coordinator})
 
@@ -445,7 +439,7 @@ print("CTDE Training with Policy Gradient + Critic Baseline")
 print("Reward = SOC (policy learns to charge batteries)")
 print("Observations: [soc, capacity]\n")
 
-policies, returns, avg_socs = train_ctde(env, num_episodes=100, steps_per_episode=50)
+policies, returns, avg_socs = train_ctde(env, num_episodes=100, steps_per_episode=50, lr=0.02)
 
 print(f"\nResults:")
 print(f"  Initial avg SOC: {np.mean(avg_socs[:10]):.1%}")

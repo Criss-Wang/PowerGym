@@ -5,10 +5,12 @@ from builtins import float
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Callable
 
 import gymnasium as gym
+import numpy as np
 
 if TYPE_CHECKING:
     from heron.agents.proxy_agent import ProxyAgent
 
+from heron.core.feature import FeatureProvider
 from heron.messaging import MessageBroker, ChannelManager, Message as BrokerMessage, MessageType
 from heron.utils.typing import AgentID
 from heron.scheduling.tick_config import TickConfig, JitterType
@@ -16,6 +18,7 @@ from heron.scheduling.scheduler import EventScheduler
 from heron.scheduling.event import Event, EventType, EVENT_TYPE_FROM_STRING
 from heron.core.policies import Policy
 from heron.core.state import State
+from heron.core.action import Action
 from heron.core.observation import Observation
 from heron.protocols.base import Protocol
 from heron.agents.constants import PROXY_AGENT_ID
@@ -48,6 +51,7 @@ class Agent(ABC):
         self,
         agent_id: AgentID,
         level: int = 1,
+        features: List[FeatureProvider] = [],
         observation_space: Optional[gym.Space] = None,
         action_space: Optional[gym.Space] = None,
         # hierarchy params
@@ -67,7 +71,8 @@ class Agent(ABC):
         self.action_space = action_space
         self.policy = policy
         self.protocol = protocol
-        self.state: Optional[State] = None
+        self.action = self.init_action(features=features)
+        self.state = self.init_state(features=features)
 
         # Execution state
         self._timestep: float = 0.0
@@ -92,11 +97,11 @@ class Agent(ABC):
         return subordinates
 
     @abstractmethod
-    def init_state(self) -> None:
+    def init_state(self, features: List[FeatureProvider] = []) -> State:
         pass
     
     @abstractmethod
-    def init_action(self) -> None:
+    def init_action(self, features: List[FeatureProvider] = []) -> Action:
         pass
 
     @abstractmethod
@@ -107,24 +112,20 @@ class Agent(ABC):
     def set_action(self, action: Any, *args, **kwargs) -> None:
         pass
 
+    def post_proxy_attach(self, proxy: "ProxyAgent") -> None:
+        """Hook for any additional setup after proxy attachment and global state initialization."""
+        pass
+
     # ============================================
     # Core Lifecycle Methods (Both Modes)
-    # - initialize: set up initial action, states, action/obs spaces (if any) with help from proxy
     # - reset: reseting fields and states, potentially returning current states
     # - execute: Synchronous Execution (for Training phase)
     # - tick: Event-Driven Execution (for Testing phase)
     # ============================================
-    def initialize(self, proxy: Optional["ProxyAgent"] = None) -> None:
-        self.init_action()
-        self.init_state()
-        proxy.register_agent(self.agent_id, agent_state=self.state)
-        for subordinate in self.subordinates.values():
-            subordinate.initialize(proxy=proxy)
-
     def reset(self, *, seed: Optional[int] = None, proxy: Optional["ProxyAgent"] = None, **kwargs) -> Any:
         self._timestep = 0.0
-        self.init_action()
-        self.init_state()
+        self.action.reset(**kwargs)  # Reset action to initial values, with optional overrides
+        self.state.reset(**kwargs)  # Reset state to initial values, with optional overrides
 
         # Cache initial state in proxy
         if not proxy:
@@ -319,6 +320,36 @@ class Agent(ABC):
     def apply_action(self):
         """Update self.state in agent based on self.action"""
         pass
+
+    def sync_state_from_observed(self, observed_state: Dict[str, Any]) -> None:
+        """Synchronize internal state features from observed state data received from proxy.
+
+        This updates the agent's internal state to reflect any external changes (e.g., from simulation)
+        that were applied in the proxy. The observed_state format depends on whether it contains
+        numpy arrays (from observed_by()) or field-level dicts (from full state retrieval).
+
+        Args:
+            observed_state: State data from proxy, either:
+                - Dict[str, np.ndarray]: Feature vectors from observed_by()
+                - Dict[str, Dict[str, Any]]: Feature field dicts for direct update
+        """
+        if not observed_state:
+            return
+
+        for feature_name, feature_data in observed_state.items():
+            # Find matching feature in our state
+            for feature in self.state.features:
+                if feature.feature_name == feature_name:
+                    if isinstance(feature_data, dict):
+                        # Direct field-level update
+                        feature.set_values(**feature_data)
+                    elif isinstance(feature_data, np.ndarray):
+                        # Vector format - reconstruct field values using feature.names()
+                        field_names = feature.names()
+                        if len(field_names) == len(feature_data):
+                            updates = {name: float(val) for name, val in zip(field_names, feature_data)}
+                            feature.set_values(**updates)
+                    break
 
     # ============================================
     # Event-Driven Execution via scheduler

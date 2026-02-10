@@ -7,7 +7,7 @@ built on the HERON agent framework.
 from powergrid.agents.device_agent import DeviceAgent
 from powergrid.agents.generator import Generator
 from powergrid.agents.storage import ESS
-from powergrid.agents.power_grid_agent import GridAgent, PowerGridAgent
+from powergrid.agents.power_grid_agent import PowerGridAgent
 from powergrid.agents.grid_system_agent import GridSystemAgent
 
 # Import ProxyAgent from heron (no custom implementation needed)
@@ -20,7 +20,6 @@ __all__ = [
     "DeviceAgent",
     "Generator",
     "ESS",
-    "GridAgent",
     "PowerGridAgent",
     "GridSystemAgent",
     "ProxyAgent",

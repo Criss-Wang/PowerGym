@@ -1,12 +1,13 @@
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import List, Any, Callable, Dict, Optional, Tuple
 from enum import Enum
 
 from heron.agents.base import Agent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.agents.proxy_agent import ProxyAgent
 from heron.core.action import Action
+from heron.core.feature import FeatureProvider
 from heron.core.observation import Observation
-from heron.core.state import SystemAgentState
+from heron.core.state import State, SystemAgentState
 from heron.utils.typing import AgentID, MultiAgentDict
 from heron.core.policies import Policy
 from heron.protocols.base import Protocol
@@ -35,6 +36,7 @@ class SystemAgent(Agent):
     def __init__(
         self,
         agent_id: Optional[AgentID] = None,
+        features: List[FeatureProvider] = [],
         # hierarchy params
         subordinates: Optional[Dict[AgentID, "Agent"]] = None,
         env_id: Optional[str] = None,
@@ -52,6 +54,7 @@ class SystemAgent(Agent):
         super().__init__(
             agent_id=agent_id or SYSTEM_AGENT_ID,
             level=SYSTEM_LEVEL,
+            features=features,
             subordinates=subordinates,
             upstream_id=None,  # System agent has no upstream
             env_id=env_id,
@@ -60,15 +63,17 @@ class SystemAgent(Agent):
             protocol=protocol
         )
 
-    def init_state(self) -> None:
-        self.state = SystemAgentState(
+    def init_state(self, features: List[FeatureProvider] = []) -> State:
+        return SystemAgentState(
             owner_id=self.agent_id,
-            owner_level=SYSTEM_LEVEL
+            owner_level=SYSTEM_LEVEL,
+            features=features
         )
 
-    def init_action(self) -> None:
-        self.action = Action()
+    def init_action(self, features: List[FeatureProvider] = []) -> Action:
+        return Action()
 
+    
     def set_state(self, *args, **kwargs) -> None:
         pass
 
@@ -209,6 +214,10 @@ class SystemAgent(Agent):
         elif "get_local_state_response" in message_content:
             response_data = message_content["get_local_state_response"]
             local_state = response_data[MSG_KEY_BODY]
+
+            # Sync internal state with what's stored in proxy (may have been modified by simulation)
+            self.sync_state_from_observed(local_state)
+
             tick_result = {
                 "reward": self.compute_local_reward(local_state),
                 "terminated": self.is_terminated(local_state),

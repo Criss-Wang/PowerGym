@@ -1,50 +1,41 @@
-from dataclasses import dataclass, fields
-from typing import Any, Dict, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from powergrid.agents.device_agent import DeviceAgent
+from powergrid.agents.device_agent import DeviceAgent, CostSafetyMetrics
+from heron.core.action import Action
+from heron.core.feature import FeatureProvider
 from heron.core.policies import Policy
-from heron.protocols.base import NoProtocol, Protocol
+from heron.protocols.base import Protocol
 from heron.scheduling.tick_config import TickConfig
+from heron.utils.typing import AgentID
 from powergrid.core.features.electrical import ElectricalBasePh
 from powergrid.core.features.power_limits import PowerLimits
 from powergrid.core.features.status import StatusBlock
 from powergrid.core.features.storage import StorageBlock
-from heron.utils.typing import float_if_not_none
 from powergrid.utils.phase import PhaseModel, PhaseSpec, check_phase_model_consistency
 
 
 @dataclass
 class StorageConfig:
-    """Configuration for an Energy Storage System."""
+    """Configuration for an Energy Storage System.
+
+    Note: Most storage parameters (SOC limits, capacity, efficiencies, degradation)
+    are stored in the StorageBlock feature. Reactive power limits (if Q control is
+    enabled) are in the PowerLimits feature.
+    """
     bus: str
 
-    # Power & energy constraints
+    # Phase model configuration
+    phase_model: str = "balanced_1ph"
+    phase_spec: Optional[Dict[str, Any]] = None
+
+    # Power bounds for action space and feasibility checks
     p_min_MW: float = 0.0          # allowed negative (discharge)
     p_max_MW: float = 0.0          # positive (charge)
-    e_capacity_MWh: float = 0.0    # nameplate energy capacity
 
-    # SOC limits (fractions of capacity)
-    soc_min: float = 0.0           # lower bound in [0,1]
-    soc_max: float = 1.0           # upper bound in [0,1]
-    init_soc: float = 0.5          # initial SOC in [0,1]
-
-    # Reactive power
-    q_min_MVAr: Optional[float] = None
-    q_max_MVAr: Optional[float] = None
-    s_rated_MVA: Optional[float] = None
-
-    # Efficiency
-    ch_eff: float = 0.98
-    dsc_eff: float = 0.98
-
-    # Degradation economics
-    e_throughput_MWh: float = 0.0
-    degr_cost_per_MWh: float = 0.0
-    degr_cost_per_cycle: float = 0.0
-    degr_cost_cum: float = 0.0
-
+    # Time step for dynamics calculations
     dt_h: float = 1.0
 
 class ESS(DeviceAgent):
@@ -87,77 +78,87 @@ class ESS(DeviceAgent):
 
     def __init__(
         self,
-        *,
-        agent_id: Optional[str] = None,
-        policy: Optional[Policy] = None,
-        protocol: Protocol = NoProtocol(),
+        agent_id: str,
+        storage_config: StorageConfig,
+        features: List[FeatureProvider] = [],
+        # hierarchy params
         upstream_id: Optional[str] = None,
         env_id: Optional[str] = None,
-        device_config: Dict[str, Any],
         # timing config (for event-driven scheduling)
         tick_config: Optional[TickConfig] = None,
+        # execution params
+        policy: Optional[Policy] = None,
+        # coordination params
+        protocol: Optional[Protocol] = None,
     ):
-        config = device_config.get("device_state_config", {})
+        # Extract config fields into instance variables
+        self._initialize_from_config(storage_config)
 
-        # phase model & spec
-        self.phase_model = PhaseModel(device_config.get("phase_model", "balanced_1ph"))
-        self.phase_spec = PhaseSpec().from_dict(device_config.get("phase_spec", {}))
-        check_phase_model_consistency(self.phase_model, self.phase_spec)
-
-        self._storage_config = StorageConfig(
-            bus=config.get("bus", ""),
-            p_min_MW=config.get("p_min_MW", 0.0),
-            p_max_MW=config.get("p_max_MW", 0.0),
-            e_capacity_MWh=config.get("e_capacity_MWh", 0.0),
-
-            soc_min=config.get("soc_min", 0.0),
-            soc_max=config.get("soc_max", 1.0),
-            init_soc=config.get("init_soc", 0.5),
-
-            q_min_MVAr=float_if_not_none(config.get("q_min_MVAr", None)),
-            q_max_MVAr=float_if_not_none(config.get("q_max_MVAr", None)),
-            s_rated_MVA=float_if_not_none(config.get("s_rated_MVA", None)),
-
-            ch_eff=config.get("ch_eff", 0.98),
-            dsc_eff=config.get("dsc_eff", 0.98),
-
-            e_throughput_MWh=config.get("e_throughput_MWh", 0.0),
-            degr_cost_per_MWh=config.get("degr_cost_per_MWh", 0.0),
-            degr_cost_per_cycle=config.get("degr_cost_per_cycle", 0.0),
-            degr_cost_cum=config.get("degr_cost_cum", 0.0),
-
-            dt_h=config.get("dt_h", 1.0),
-        )
         super().__init__(
             agent_id=agent_id,
+            features=features,
             policy=policy,
             protocol=protocol,
             upstream_id=upstream_id,
             env_id=env_id,
-            device_config=device_config,
             tick_config=tick_config,
         )
 
-    def set_action(self) -> None:
+    def _initialize_from_config(self, config: StorageConfig) -> None:
+        """Extract and store needed config fields as instance variables.
+
+        This avoids persisting the entire config object and makes explicit
+        which fields are actually used by the storage system.
+
+        Args:
+            config: StorageConfig object to extract fields from
         """
-        Define Action:
+        # Metadata
+        self._bus = config.bus
+
+        # Power bounds (for action space and feasibility)
+        self._p_min_MW = config.p_min_MW
+        self._p_max_MW = config.p_max_MW
+
+        # Time step (for dynamics calculations)
+        self._dt_h = config.dt_h
+
+        # Phase model & spec
+        self.phase_model = PhaseModel(config.phase_model)
+        self.phase_spec = PhaseSpec().from_dict(config.phase_spec or {})
+        check_phase_model_consistency(self.phase_model, self.phase_spec)
+
+    def init_action(self, features: List[FeatureProvider] = []) -> Action:
+        """Initialize Action space for energy storage.
+
+        Action:
             - c[0]: P_MW in [p_min_MW, p_max_MW]
-            - c[1]: Q_MVAr in [q_min_MVAr, q_max_MVAr] if Q control enabled
+            - c[1]: Q_MVAr (if Q control enabled via PowerLimits feature)
+
+        Args:
+            features: List of feature providers (may include PowerLimits for Q control)
+
+        Returns:
+            Initialized Action object
         """
-        cfg = self._storage_config
+        action = Action()
 
-        lows = [cfg.p_min_MW]
-        highs = [cfg.p_max_MW]
+        # Check for PowerLimits feature for Q control
+        limits = None
+        for f in features:
+            if isinstance(f, PowerLimits):
+                limits = f
+                break
 
-        has_q_control = (
-            cfg.q_min_MVAr is not None and 
-            cfg.q_max_MVAr is not None
-        )
-        if has_q_control:
-            lows.append(cfg.q_min_MVAr)
-            highs.append(cfg.q_max_MVAr)
+        lows = [self._p_min_MW]
+        highs = [self._p_max_MW]
 
-        self.action.set_specs(
+        # Q control if PowerLimits feature is present with Q bounds
+        if limits and limits.q_min_MVAr is not None and limits.q_max_MVAr is not None:
+            lows.append(limits.q_min_MVAr)
+            highs.append(limits.q_max_MVAr)
+
+        action.set_specs(
             dim_c=len(lows),
             dim_d=0,
             ncats=0,
@@ -167,103 +168,59 @@ class ESS(DeviceAgent):
             ),
         )
 
-    def set_state(self) -> None:
-        cfg = self._storage_config
+        # Initialize with zeros
+        if len(lows) > 0:
+            action.set_values(c=np.zeros(len(lows), dtype=np.float32))
 
-        # Electrical telemetry
-        electrical_telemetry = ElectricalBasePh(
-            phase_model=self.phase_model,
-            phase_spec=self.phase_spec,
-            P_MW=0.0,
-            Q_MVAr=0.0,
-            Vm_pu=1.0,
-            Va_rad=0.0,
-            visibility=["owner"],
-        )
+        return action
 
-        storage_block = StorageBlock(
-            soc=cfg.init_soc,
-            soc_min=cfg.soc_min,
-            soc_max=cfg.soc_max,
-            e_capacity_MWh=cfg.e_capacity_MWh,
-            p_ch_max_MW=cfg.p_max_MW,
-            p_dsc_max_MW=-cfg.p_min_MW,
-            ch_eff=cfg.ch_eff,
-            dsc_eff=cfg.dsc_eff,
-            e_throughput_MWh=cfg.e_throughput_MWh,
-            degr_cost_per_MWh=cfg.degr_cost_per_MWh,
-            degr_cost_per_cycle=cfg.degr_cost_per_cycle,
-            degr_cost_cum=cfg.degr_cost_cum,
-            visibility=["owner"],
-        )
-
-        self.state.features = [electrical_telemetry, storage_block]
-        self.state.owner_id = self.agent_id
-        self.state.owner_level = self.level
-
-        has_q_control = (
-            cfg.q_min_MVAr is not None and 
-            cfg.q_max_MVAr is not None
-        )
-        if has_q_control:
-            # Capability / limits
-            power_limits = PowerLimits(
-                s_rated_MVA=self._storage_config.s_rated_MVA,
-                p_min_MW=self._storage_config.p_min_MW,
-                p_max_MW=self._storage_config.p_max_MW,
-                q_min_MVAr=self._storage_config.q_min_MVAr,
-                q_max_MVAr=self._storage_config.q_max_MVAr,
-            )
-            self.state.features.append(power_limits)
-
-    def reset_agent(self, **kwargs) -> None:
-        """Reset ESS to a neutral operating point.
+    def set_action(self, action: Any) -> None:
+        """Set action from Action object or compatible format.
 
         Args:
-            **kwargs: Optional keyword arguments for StorageBlock.reset:
-                soc: Explicit SOC target (fraction in [0, 1])
-                random_init_soc: Sample SOC uniformly in [soc_min, soc_max]
-                seed: RNG seed for random SOC initialization
-                reset_degradation: Clear degradation accounting
+            action: Action object or numpy array/dict with action values
         """
-        # Extract optional overrides for StorageBlock.reset
-        soc = kwargs.get("soc", None)
-        random_init_soc = kwargs.get("random_init_soc", False)
-        seed = kwargs.get("seed", None)
-        reset_degradation = kwargs.get("reset_degradation", True)
+        if isinstance(action, Action):
+            # Extract action vector from Action object
+            if action.c.size > 0:
+                self.action.set_values(c=action.c)
+            if action.d.size > 0:
+                self.action.set_values(d=action.d)
+        else:
+            # Direct value (numpy array or dict)
+            self.action.set_values(action)
 
-        # Reset all feature providers and the action to their neutral state
-        self.state.reset()
-        self.action.reset()
+    def set_state(self) -> None:
+        """Apply action to update storage state.
 
-        # If any SOC/degradation overrides are provided, explicitly re-reset
-        # the StorageBlock with those options on top of the neutral reset
-        if any(k in kwargs for k in ("soc", "random_init_soc", "seed", "reset_degradation")):
-            self.storage.reset(
-                soc=soc,
-                random_init=random_init_soc,
-                seed=seed,
-                reset_degradation=reset_degradation,
-            )
-
-        # Cost / safety bookkeeping
-        self.cost = 0.0
-        self.safety = 0.0
-
-    def update_state(self, **kwargs) -> None:
-        """Apply P/Q from action, update SOC/degradation, apply extra updates.
-
-        Args:
-            **kwargs: Optional keyword arguments for feature updates:
-                - ElectricalBasePh fields (e.g. P_MW, Q_MVAr, Vm_pu, Va_rad)
-                - StorageBlock fields (e.g. soc, e_throughput_MWh)
-                - PowerLimits fields (if PowerLimits is present)
+        Modern HERON pattern: called by apply_action() after action is set.
+        Updates power outputs, storage dynamics, and cost/safety metrics.
         """
         P_eff, Q_eff = self._update_power_outputs()
         self._update_storage_dynamics(P_eff)
+        self._update_cost_safety()
 
-        if kwargs:
-            self._update_by_kwargs(**kwargs)
+    def apply_action(self) -> None:
+        """Apply current action to update state.
+
+        Overrides DeviceAgent.apply_action() to follow modern HERON pattern.
+        """
+        self.set_state()
+
+    def sync_state_from_observed(self, observed_state: Any) -> None:
+        """Synchronize state from external observations, then update cost/safety.
+
+        Called after state features are updated from observations (e.g., from power flow).
+        Recalculates cost and safety metrics based on the synchronized state.
+
+        Args:
+            observed_state: External observations to sync from
+        """
+        # Call parent to sync state features (ElectricalBasePh, StorageBlock, etc.)
+        super().sync_state_from_observed(observed_state)
+
+        # Update cost and safety based on new state
+        self._update_cost_safety()
 
     def _update_power_outputs(self) -> Tuple[float, float]:
         """Read action.c, project through limits, update ElectricalBasePh.
@@ -299,7 +256,7 @@ class ESS(DeviceAgent):
             P_MW: Active power (positive=charging, negative=discharging)
         """
         storage = self.storage
-        dt = self._storage_config.dt_h
+        dt = self._dt_h
 
         # SOC update: normalize energy change by capacity
         if P_MW >= 0.0:
@@ -317,28 +274,7 @@ class ESS(DeviceAgent):
         )
         storage.set_values(soc=new_soc)
 
-    def _update_by_kwargs(self, **kwargs) -> None:
-        """Route keyword updates to appropriate FeatureProviders.
-
-        Args:
-            **kwargs: Keyword arguments mapping to feature fields
-        """
-        electrical_keys = {f.name for f in fields(ElectricalBasePh)}
-        storage_keys = {f.name for f in fields(StorageBlock)}
-        power_limits_keys = {f.name for f in fields(PowerLimits)}
-
-        elec_updates = {k: v for k, v in kwargs.items() if k in electrical_keys}
-        storage_updates = {k: v for k, v in kwargs.items() if k in storage_keys}
-        limits_updates = {k: v for k, v in kwargs.items() if k in power_limits_keys}
-
-        if elec_updates:
-            self.state.update_feature(ElectricalBasePh.feature_name, **elec_updates)
-        if storage_updates:
-            self.state.update_feature(StorageBlock.feature_name, **storage_updates)
-        if limits_updates:
-            self.state.update_feature(PowerLimits.feature_name, **limits_updates)
-    
-    def update_cost_safety(self) -> None:
+    def _update_cost_safety(self) -> None:
         """Update per-step cost and safety penalties for the ESS.
 
         Cost: Degradation from energy throughput and equivalent cycles
@@ -346,7 +282,7 @@ class ESS(DeviceAgent):
         """
         P = self.electrical.P_MW or 0.0
         Q = self.electrical.Q_MVAr or 0.0
-        dt = self._storage_config.dt_h
+        dt = self._dt_h
 
         if P >= 0.0:
             # Charging
@@ -371,7 +307,7 @@ class ESS(DeviceAgent):
             degr_cost_cum=degr_cost_cum
         )
 
-        self.cost = degr_cost_inc
+        cost = degr_cost_inc
 
         # Safety: SOC violations + power limit violations
         safety = self.storage.soc_violation()
@@ -379,7 +315,43 @@ class ESS(DeviceAgent):
             violations = self.limits.feasible(P, Q)
             safety += np.sum(list(violations.values())) * dt
 
-        self.safety = safety
+        # Sync cost and safety to the CostSafetyMetrics feature
+        self.state.update_feature(
+            CostSafetyMetrics.feature_name,
+            cost=cost,
+            safety=safety
+        )
+
+    def compute_local_reward(self, local_state: dict) -> float:
+        """Compute reward for ESS based on SOC, cost, and safety.
+
+        Reward = SOC - cost - safety
+        (maximize SOC while minimizing operating cost and safety violations)
+
+        Args:
+            local_state: State dict from proxy.get_local_state() with structure:
+                {"StorageBlock": np.array([soc, ...]),
+                 "CostSafetyMetrics": np.array([cost, safety]), ...}
+
+        Returns:
+            Reward value (higher is better)
+        """
+        soc_reward = 0.0
+        cost_penalty = 0.0
+        safety_penalty = 0.0
+
+        # Extract SOC from StorageBlock (first element)
+        if "StorageBlock" in local_state:
+            storage_vec = local_state["StorageBlock"]
+            soc_reward = float(storage_vec[0])
+
+        # Extract cost/safety from CostSafetyMetrics
+        if "CostSafetyMetrics" in local_state:
+            metrics_vec = local_state["CostSafetyMetrics"]
+            cost_penalty = float(metrics_vec[0])
+            safety_penalty = float(metrics_vec[1])
+
+        return soc_reward - cost_penalty - safety_penalty
 
     def feasible_action(self, P_req: float) -> float:
         """Clip action to feasible set based on SOC window and power limits.
@@ -391,7 +363,7 @@ class ESS(DeviceAgent):
             Clipped active power respecting SOC and power constraints
         """
         storage = self.storage
-        dt = self._storage_config.dt_h
+        dt = self._dt_h
 
         # Charging headroom (P > 0)
         if storage.soc < storage.soc_max:
@@ -407,8 +379,8 @@ class ESS(DeviceAgent):
         else:
             p_min_soc = 0.0
 
-        p_min = max(p_min_soc, self._storage_config.p_min_MW)
-        p_max = min(p_max_soc, self._storage_config.p_max_MW)
+        p_min = max(p_min_soc, self._p_min_MW)
+        p_max = min(p_max_soc, self._p_max_MW)
 
         return np.clip(P_req, p_min, p_max)
 
@@ -438,7 +410,7 @@ class ESS(DeviceAgent):
 
     @property
     def bus(self) -> str:
-        return self._storage_config.bus
+        return self._bus
 
     @property
     def name(self) -> str:
@@ -499,7 +471,7 @@ class ESS(DeviceAgent):
 
     def __repr__(self) -> str:
         name = self.agent_id
-        cap = self._storage_config.e_capacity_MWh
-        pmin = self._storage_config.p_min_MW
-        pmax = self._storage_config.p_max_MW
+        cap = self.storage.e_capacity_MWh if self.storage else 0.0
+        pmin = self._p_min_MW
+        pmax = self._p_max_MW
         return f"ESS(name={name}, capacity={cap}MWh, P∈[{pmin},{pmax}]MW)"

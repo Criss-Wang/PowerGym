@@ -1,13 +1,14 @@
 
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import numpy as np
 from gymnasium.spaces import Box, Space
 
 from heron.agents.base import Agent
+from heron.core.feature import FeatureProvider
 from heron.core.observation import Observation
-from heron.core.state import FieldAgentState
+from heron.core.state import FieldAgentState, State
 from heron.core.action import Action
 from heron.core.policies import Policy
 from heron.utils.typing import AgentID
@@ -33,8 +34,9 @@ class FieldAgent(Agent):
     def __init__(
         self,
         agent_id: AgentID,
-        upstream_id: Optional[AgentID] = None,
+        features: List[FeatureProvider] = [],
         # hierarchy params
+        upstream_id: Optional[AgentID] = None,
         env_id: Optional[str] = None,
         # timing config (for event-driven scheduling)
         tick_config: Optional[TickConfig] = None,
@@ -50,30 +52,73 @@ class FieldAgent(Agent):
         super().__init__(
             agent_id=agent_id,
             level=FIELD_LEVEL,
-            subordinates=None, # L1 agent has no subordinate
+            features=features,
             upstream_id=upstream_id,
+            subordinates=None, # L1 agent has no subordinate
             env_id=env_id,
             tick_config=tick_config or TickConfig.deterministic(tick_interval=DEFAULT_FIELD_TICK_INTERVAL),
             policy=policy,
-            protocol=protocol
+            protocol=protocol,
         )
 
+    # ============================================
+    # Functions requiring overriding:
+    # 
+    # [Must]
+    # 1. compute_local_reward
+    #   - applying specific reward computation mechanism
+    #   - may use additional info via proxy (for additional info) + protocol (for visibility and info control)
+    # 2. set_action
+    #   - set self.action
+    # 3. set_state
+    #   - update self.state
+    # 4. apply_action
+    #   - given self.action, update self.state
+    # 
+    # [Optional]
+    # 1. init_state & init_action
+    #   - by default, state is initialized with features from parent coordinator, and action is
+    #     initialized as empty Action. Override if you want to add additional features or custom initialization logic.
+    # 2. get_local_info
+    # 3. is_terminated
+    # 4. is_truncated
+    # 5. post_proxy_attach
+    # ============================================
 
-    def _init_state(self) -> None:
-        self.state = FieldAgentState(
+    def init_state(self, features: List[FeatureProvider] = []) -> State:
+        return FieldAgentState(
             owner_id=self.agent_id,
-            owner_level=FIELD_LEVEL
+            owner_level=FIELD_LEVEL,
+            features=features
         )
 
-    def _init_action(self) -> None:
-        self.action = Action()
+    def init_action(self, features: List[FeatureProvider] = []) -> Action:
+        return Action()
 
     def set_state(self, *args, **kwargs) -> None:
-        pass
+        raise NotImplementedError(
+            "No implementation of set_state found, you need to define how to update state for this agent"
+        )
 
     def set_action(self, action: Any, *args, **kwargs) -> None:
-        pass
+        raise NotImplementedError(
+            "No implementation of set_action found, you need to define how to set action for this agent"
+        )
 
+    def post_proxy_attach(self, proxy: "ProxyAgent") -> None:
+        """Hook for any additional setup after proxy attachment and global state initialization."""
+        self.action_space = self.get_action_space()
+        self.observation_space = self.get_observation_space(proxy)
+
+    def compute_local_reward(self, local_state: dict) -> float:
+        raise NotImplementedError(
+            "No implementation of compute_local_reward found, you need to define reward computation mechanism for this agent"
+        )
+
+    def apply_action(self):
+        raise NotImplementedError(
+            "No implementation of apply_action found, you need to define action effect mechanism for this agent"
+        )
 
     def get_action_space(self) -> Space:
         """Get action space based on agent action. [Both Modes]
@@ -112,11 +157,6 @@ class FieldAgent(Agent):
     # ============================================
     # Core Lifecycle Methods Overrides (see heron/agents/base.py for more details)
     # ============================================
-    def initialize(self, proxy: Optional[ProxyAgent] = None) -> None:
-        super().initialize(proxy=proxy)
-        self.action_space = self.get_action_space()
-        self.observation_space = self.get_observation_space(proxy)
-
     def reset(self, *, seed: Optional[int] = None, proxy: Optional[ProxyAgent] = None, **kwargs) -> Any:
         super().reset(seed=seed, proxy=proxy, **kwargs)
 
@@ -153,36 +193,6 @@ class FieldAgent(Agent):
             )
         else:
             print(f"{self} doesn't act iself, becase there's no action policy")
-        
-
-    # ============================================
-    # Functions requiring overriding:
-    # 
-    # [Must]
-    # 1. compute_local_reward
-    #   - applying specific reward computation mechanism
-    #   - may use additional info via proxy (for additional info) + protocol (for visibility and info control)
-    # 2. set_action
-    #   - set self.action
-    # 3. set_state
-    #   - update self.state
-    # 4. apply_action
-    #   - given self.action, update self.state
-    # 
-    # [Optional]
-    # 1. get_local_info
-    # 2. is_terminated
-    # 3. is_truncated
-    # ============================================
-    def compute_local_reward(self, local_state: dict) -> float:
-        raise NotImplementedError(
-            "No implementation of compute_local_reward found, you need to define reward computation mechanism for this agent"
-        )
-
-    def apply_action(self):
-        raise NotImplementedError(
-            "No implementation of apply_action found, you need to define action effect mechanism for this agent"
-        )
     
     # ============================================
     # Custom Handlers for Event-Driven Execution
@@ -217,6 +227,10 @@ class FieldAgent(Agent):
         elif "get_local_state_response" in message_content:
             response_data = message_content["get_local_state_response"]
             local_state = response_data[MSG_KEY_BODY]
+
+            # Sync internal state with what's stored in proxy (may have been modified by simulation)
+            self.sync_state_from_observed(local_state)
+
             tick_result = {
                 "reward": self.compute_local_reward(local_state),
                 "terminated": self.is_terminated(local_state),

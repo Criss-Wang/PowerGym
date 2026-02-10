@@ -2,7 +2,7 @@
 
 This module provides power system components:
 - Agents: Generator, ESS (Energy Storage), Transformer, DeviceAgent
-- Grid Coordination: GridAgent, PowerGridAgent
+- Grid Coordination: PowerGridAgent
 - Environments: NetworkedGridEnv, MultiAgentMicrogrids
 - Features: Electrical, Storage, Network state providers
 
@@ -25,7 +25,7 @@ from powergrid.agents.storage import ESS, StorageConfig
 from powergrid.agents.transformer import Transformer, TransformerConfig
 
 # Grid Agents
-from powergrid.agents.power_grid_agent import GridAgent, PowerGridAgent
+from powergrid.agents.power_grid_agent import PowerGridAgent
 from heron.agents.proxy_agent import ProxyAgent, PROXY_LEVEL
 from powergrid.agents import POWER_FLOW_CHANNEL_TYPE
 
@@ -57,7 +57,6 @@ __all__ = [
     "Transformer",
     "TransformerConfig",
     # Grid Agents
-    "GridAgent",
     "PowerGridAgent",
     "ProxyAgent",
     "PROXY_LEVEL",

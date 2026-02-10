@@ -632,10 +632,8 @@ class NetworkedGridEnv(PettingZooParallelEnv):
             **kwargs: Additional arguments passed to agent reset methods
         """
         for agent in self.agent_dict.values():
-            agent.reset(seed=seed, **kwargs)
-            # Reset subordinate devices if this is a PowerGridAgent
-            if isinstance(agent, PowerGridAgent):
-                agent.reset_all_devices(**kwargs)
+            # Agent.reset() now handles subordinate reset automatically via the hierarchy
+            agent.reset(seed=seed, proxy=self._local_proxy_agent, **kwargs)
 
     def get_collective_metrics(self) -> Dict[str, float]:
         """Get collective metrics across all agents for CTDE evaluation.

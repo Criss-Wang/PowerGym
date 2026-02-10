@@ -1,34 +1,4 @@
-"""Grid-level system agent for power system coordination.
 
-GridSystemAgent manages multiple grid coordinators (PowerGridAgent instances)
-and provides system-wide coordination like frequency regulation, inter-area
-power flow control, and market clearing.
-
-This is the top level (L3) in the HERON hierarchy for power grid applications:
-- SystemAgent (L3): GridSystemAgent - Manages multiple grids
-- CoordinatorAgent (L2): PowerGridAgent - Manages devices within a grid
-- FieldAgent (L1): DeviceAgent (Generator, ESS, etc.) - Individual devices
-
-Timing Configuration:
-    GridSystemAgent accepts a `tick_config` parameter for event-driven scheduling.
-    Use `TickConfig.deterministic()` for training (no jitter) or
-    `TickConfig.with_jitter()` for testing (realistic timing variance).
-
-    Example:
-        # Deterministic timing (training)
-        tick_config = TickConfig.deterministic(tick_interval=300.0)
-
-        # With jitter (testing)
-        tick_config = TickConfig.with_jitter(
-            tick_interval=300.0,
-            obs_delay=5.0,
-            act_delay=10.0,
-            msg_delay=2.0,
-            jitter_type=JitterType.GAUSSIAN,
-            jitter_ratio=0.1,
-            seed=42,
-        )
-"""
 
 from typing import Any, Dict as DictType, List, Optional
 
@@ -46,43 +16,7 @@ from powergrid.core.state.state import GridSystemState
 
 
 class GridSystemAgent(SystemAgent):
-    """System-level agent for multi-area power grid coordination.
-
-    GridSystemAgent coordinates multiple PowerGridAgent instances,
-    handling:
-    - Inter-area power flow constraints
-    - System frequency regulation
-    - Aggregate generation/demand balancing
-    - Market clearing (if applicable)
-
-    Attributes:
-        grids: Dictionary mapping grid IDs to PowerGridAgent instances
-               (alias for coordinators)
-        total_generation: Aggregate generation across all grids (MW)
-        total_load: Aggregate load across all grids (MW)
-        frequency: System frequency (Hz)
-
-    Example:
-        Create a system agent managing multiple grids::
-
-            from powergrid.agents import GridSystemAgent, PowerGridAgent
-            from heron.protocols import SetpointProtocol
-
-            # Create grid agents
-            grid1 = PowerGridAgent(agent_id="grid_1", net=net1)
-            grid2 = PowerGridAgent(agent_id="grid_2", net=net2)
-
-            # Create system agent
-            system = GridSystemAgent(
-                agent_id="grid_system",
-                protocol=SetpointProtocol(),
-                grids=[grid1, grid2]
-            )
-
-            # Use in training loop
-            obs = system.observe(global_state)
-            system.act(obs, upstream_action=joint_action)
-    """
+ 
 
     def __init__(
         self,

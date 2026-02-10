@@ -37,16 +37,22 @@ class EnvCore:
         self.registered_agents: Dict[AgentID, Agent] = {}
         self._register_agents(system_agent, coordinator_agents)
 
-        # setup message broker (before initialization - agents need it)
+        # initialize proxy agent (singleton) for state access and action dispatch
+        self.proxy_agent = ProxyAgent(agent_id=PROXY_AGENT_ID)
+        self._register_agent(self.proxy_agent)
+
+        # setup message broker (before proxy attach - proxy needs it for channels)
         self.message_broker = MessageBroker.init(message_broker_config)
         self.message_broker.attach(self.registered_agents)
+
+        # attach message broker to proxy agent for communication
+        self.proxy_agent.set_message_broker(self.message_broker)
+        # establish direction link between registered agents and proxy for state access
+        self.proxy_agent.attach(self.registered_agents)
 
         # setup scheduler (before initialization - agents need it)
         self.scheduler = EventScheduler.init(scheduler_config)
         self.scheduler.attach(self.registered_agents)
-
-        # Initialize agents after message broker and scheduler are attached
-        self._initialize_agents()
 
     # ============================================
     # Agent Management Methods
@@ -57,7 +63,6 @@ class EnvCore:
         coordinator_agents: Optional[List[CoordinatorAgent]],
     ) -> None:
         """Internal method to register agents during initialization."""
-
         # register system agent (singleton) & its subordinates
         if system_agent and coordinator_agents:
             raise ValueError("Cannot provide both SystemAgent and List[CoordinatorAgent]. Provide one or the other.")
@@ -65,29 +70,19 @@ class EnvCore:
         if system_agent:
             self._system_agent = system_agent
         else:
+            print("No system agent provided, using default system agent")
             self._system_agent = SystemAgent(
                 agent_id=SYSTEM_AGENT_ID,
-                subordinate={agent.agent_id: agent for agent in coordinator_agents}
+                subordinates={agent.agent_id: agent for agent in coordinator_agents}
             )
-            print("No system agent provided, using default system agent")
         self._system_agent.set_simulation(
-            self.run_simulation, 
+            self.run_simulation,
             self.env_state_to_global_state,
             self.global_state_to_env_state,
             self.simulation_wait_interval
         )
-        self.register_agent(self._system_agent)
+        self._register_agent(self._system_agent)
         
-        # register proxy agent (singleton)
-        self._proxy_agent = ProxyAgent(agent_id=PROXY_AGENT_ID)
-        self.register_agent(self._proxy_agent)
-
-    def _initialize_agents(self) -> None:
-        for agent in self.registered_agents.values():
-            agent.initialize(self._proxy_agent)
-
-        # Initialize global state from all registered agent states
-        self._proxy_agent.init_global_state()
 
     def get_agent(self, agent_id: AgentID) -> Optional[Agent]:
         """Get a registered agent by ID.
@@ -100,7 +95,7 @@ class EnvCore:
         """
         return self.registered_agents.get(agent_id)
 
-    def register_agent(self, agent: Agent) -> None:
+    def _register_agent(self, agent: Agent) -> None:
         """Register an agent with the environment.
 
         Args:
@@ -108,8 +103,8 @@ class EnvCore:
         """
         agent.env_id = self.env_id
         self.registered_agents[agent.agent_id] = agent
-        for agent in agent.subordinates.values():
-            self.register_agent(agent)
+        for subordinate in agent.subordinates.values():
+            self._register_agent(subordinate)
 
     # ===========================================
     # Environment Interaction Methods
@@ -126,9 +121,9 @@ class EnvCore:
         self.clear_broker_environment()
 
         # reset agents (system agent will reset subordinates)
-        self._proxy_agent.reset(seed=seed)
-        obs = self._system_agent.reset(seed=seed, proxy=self._proxy_agent)
-        self._proxy_agent.init_global_state()  # Cache initial state in proxy after reset
+        self.proxy_agent.reset(seed=seed)
+        obs = self._system_agent.reset(seed=seed, proxy=self.proxy_agent)
+        self.proxy_agent.init_global_state()  # Cache initial state in proxy after reset
         return obs
     
     def step(self, actions: Dict[AgentID, Any]) -> Tuple[
@@ -154,8 +149,8 @@ class EnvCore:
             - truncated: Dict with agent IDs and "__all__" key
             - infos: Dict mapping agent IDs to info dicts
         """
-        self._system_agent.execute(actions, self._proxy_agent)
-        return self._proxy_agent.get_step_results()
+        self._system_agent.execute(actions, self.proxy_agent)
+        return self.proxy_agent.get_step_results()
     
     def run_event_driven(
         self,
@@ -765,7 +760,7 @@ class EnvCore:
 
 #         # Register all coordinators from the system agent
 #         for coordinator in system_agent.coordinators.values():
-#             self.register_agent(coordinator)
+#             self._register_agent(coordinator)
 
 #         # Configure message broker for system agent
 #         if self.message_broker:
@@ -788,7 +783,7 @@ class EnvCore:
 #             proxy_agent: ProxyAgent instance for state distribution
 #         """
 #         self._proxy_agent = proxy_agent
-#         self.register_agent(proxy_agent)
+#         self._register_agent(proxy_agent)
 
 #     @property
 #     def proxy_agent(self) -> Optional["ProxyAgent"]:

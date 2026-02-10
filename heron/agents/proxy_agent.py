@@ -6,6 +6,7 @@ import numpy as np
 
 from heron.agents.base import Agent
 from heron.core.observation import Observation
+from heron.core.feature import FeatureProvider
 from heron.protocols.base import Protocol
 from heron.messaging import ChannelManager, Message, MessageBroker, MessageType
 from heron.utils.typing import AgentID
@@ -50,11 +51,11 @@ class ProxyAgent(Agent):
             env_id=env_id,
         )
 
+        self.history_length = history_length
         self.registered_agents: List[AgentID] = registered_agents or []
         self.visibility_rules: Dict[AgentID, List[str]] = visibility_rules or {}
         self.state_cache: Dict[str, Any] = {}
         self._agent_levels: Dict[AgentID, int] = {}  # Track agent hierarchy levels for visibility
-        self.history_length = history_length
 
         if message_broker is not None:
             raise ValueError("No message broker detected!")
@@ -65,10 +66,10 @@ class ProxyAgent(Agent):
     # Note that ProxyAgent does not maintain its own state or action in the traditional sense, so these methods are either no-ops or can be used to set up any necessary internal structures for
     # managing the proxy's functionality (e.g. state cache, visibility rules, etc.)
     # ============================================
-    def init_state(self) -> None:
+    def init_state(self, features: List[FeatureProvider] = []) -> None:
         pass
 
-    def init_action(self) -> None:
+    def init_action(self, features: List[FeatureProvider] = []) -> None:
         pass
 
     def set_state(self, *args, **kwargs) -> None:
@@ -77,13 +78,39 @@ class ProxyAgent(Agent):
     def set_action(self, action: Any, *args, **kwargs) -> None:
         pass
 
-    def register_agent(self, agent_id: AgentID, agent_state: Optional["State"] = None) -> None:
+    def attach(self, agents:  Dict[AgentID, Agent]) -> None:
+        """Attach proxy to the environment by registering all agents.
+
+        This should be called during environment initialization after all agents are created but before any agent initialization or reset.
+
+        Args:
+            agents: Dict of agent_id to Agent objects to register with the proxy
+        """
+        for agent_id, agent in agents.items():
+            if agent_id == self.agent_id:
+                continue  # Skip registering the proxy itself
+            self._register_agent(agent)
+
+        # Initialize global state after all agents are registered
+        self.init_global_state()
+
+        # Individual agent post-proxy-attach handling with initialized global state
+        for agent_id, agent in agents.items():
+            if agent_id == self.agent_id:
+                continue  # Skip the proxy itself
+            agent.post_proxy_attach(proxy=self)
+
+        # Setup communication channels after all agents are registered
+        self._setup_channels()
+
+    def _register_agent(self, agent: Agent) -> None:
         """Register a new agent that can request state.
 
         Args:
-            agent_id: Agent ID to register
-            agent_state: Optional initial state of the agent
+            agent: Agent to register
         """
+        agent_id = agent.agent_id
+        agent_state = agent.state
         if agent_id == self.agent_id:
             print("Proxy agent doesn't register itself.")
             return
@@ -135,10 +162,6 @@ class ProxyAgent(Agent):
     # Core Agent Lifecycle Methods Overrides (see heron/agents/base.py for more details)
     # Note that ProxyAgent does not follow the standard observe-decide-act loop, so execute and tick are empty logic.
     # ============================================
-    def initialize(self, proxy = None):
-        # Doesn't need to register with itself with proxy.
-        self._setup_channels()
-
     def reset(self, *, seed: Optional[int] = None, **kwargs) -> None:
         """Reset proxy agent state.
 

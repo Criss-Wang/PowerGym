@@ -1,10 +1,12 @@
 import math
-from dataclasses import dataclass, fields
-from typing import Any, Dict, Optional, Sequence
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
-from powergrid.agents.device_agent import DeviceAgent
+from powergrid.agents.device_agent import DeviceAgent, CostSafetyMetrics
+from heron.core.action import Action
+from heron.core.feature import FeatureProvider
 from heron.core.policies import Policy
 from heron.protocols.base import NoProtocol, Protocol
 from heron.scheduling.tick_config import TickConfig
@@ -12,42 +14,43 @@ from powergrid.core.features.electrical import ElectricalBasePh
 from powergrid.core.features.power_limits import PowerLimits
 from powergrid.core.features.status import StatusBlock
 from powergrid.utils.cost import cost_from_curve
-from heron.utils.typing import float_if_not_none
+from heron.utils.typing import AgentID
 from powergrid.utils.phase import PhaseModel, PhaseSpec, check_phase_model_consistency
 
 
 @dataclass
 class GeneratorConfig:
-    """Configuration for a dispatchable Generator."""
+    """Configuration for a dispatchable Generator.
+
+    Note: Power limits (s_rated_MVA, p_min_MW, p_max_MW, q_min_MVAr, q_max_MVAr,
+    pf_min_abs, derate_frac) are stored in the PowerLimits feature, not here.
+    """
     bus: str
 
-    # capability & constraints
-    s_rated_MVA: Optional[float] = None
-    p_min_MW: float = 0.0
-    p_max_MW: float = 0.0
-    q_min_MVAr: Optional[float] = None
-    q_max_MVAr: Optional[float] = None
-    pf_min_abs: Optional[float] = None
+    # Phase model configuration
+    phase_model: str = "balanced_1ph"
+    phase_spec: Optional[Dict[str, Any]] = None
+
+    # Voltage bounds for PV/SLACK control modes (not in features)
     vm_min_pu: Optional[float] = None
     vm_max_pu: Optional[float] = None
     va_min_deg: Optional[float] = None
     va_max_deg: Optional[float] = None
-    derate_frac: float = 1.0
 
-    # UC timings (in timesteps); if both None -> no UC head
+    # UC timings and costs
     startup_time_hr: Optional[int] = None
     shutdown_time_hr: Optional[int] = None
     startup_cost: float = 0.0
     shutdown_cost: float = 0.0
 
-    # economics & sim
+    # Economic parameters
     cost_curve_coefs: Sequence[float] = (0.0, 0.0, 0.0)  # a,b,c for a*(P^2)+b*P+c
     dt_h: float = 1.0  # hours per step (for costs)
     min_pf: Optional[float] = None   # for safety penalty
+
+    # Metadata
     type: str = "fossil"
     source: Optional[str] = None  # "solar", "wind", or None for dispatchable
-
-    # PQ / PV / SLACK control mode
     control_mode: str = "PQ"      # "PQ", "PV", or "SLACK"
 
 
@@ -92,66 +95,75 @@ class Generator(DeviceAgent):
 
     def __init__(
         self,
-        *,
-        agent_id: Optional[str] = None,
-        policy: Optional[Policy] = None,
-        protocol: Protocol = NoProtocol(),
-        upstream_id: Optional[str] = None,
+        agent_id: AgentID,
+        generator_config: GeneratorConfig,
+        features: List[FeatureProvider] = [],
+        # hierarchy params
+        upstream_id: Optional[AgentID] = None,
         env_id: Optional[str] = None,
-        device_config: Optional[Dict[str, Any]] = None,
         # timing config (for event-driven scheduling)
         tick_config: Optional[TickConfig] = None,
+        # execution params
+        policy: Optional[Policy] = None,
+        # coordination params
+        protocol: Optional[Protocol] = None,
     ):
-        if device_config is None:
-            device_config = {}
-        state_config = device_config.get("device_state_config", {})
+        # Extract config fields into instance variables
+        self._initialize_from_config(generator_config)
 
-        # phase model & spec
-        self.phase_model = PhaseModel(device_config.get("phase_model", "balanced_1ph"))
-        self.phase_spec = PhaseSpec().from_dict(device_config.get("phase_spec", {}))
-        check_phase_model_consistency(self.phase_model, self.phase_spec)
-
-        self._generator_config = GeneratorConfig(
-            bus=state_config.get("bus", ""),
-            s_rated_MVA=float_if_not_none(state_config.get("s_rated_MVA", None)),
-            p_min_MW=float_if_not_none(state_config.get("p_min_MW", 0.0)),
-            p_max_MW=float_if_not_none(state_config.get("p_max_MW", 0.0)),
-            q_min_MVAr=float_if_not_none(state_config.get("q_min_MVAr", None)),
-            q_max_MVAr=float_if_not_none(state_config.get("q_max_MVAr", None)),
-            pf_min_abs=float_if_not_none(state_config.get("pf_min_abs", None)),
-            vm_min_pu=float_if_not_none(state_config.get("vm_min_pu", 0.95)),
-            vm_max_pu=float_if_not_none(state_config.get("vm_max_pu", 1.05)),
-            va_min_deg=float_if_not_none(state_config.get("va_min_deg", -180.0)),
-            va_max_deg=float_if_not_none(state_config.get("va_max_deg", 180.0)),
-            derate_frac=float_if_not_none(state_config.get("derate_frac", 1.0)),
-
-            # economics & UC params
-            cost_curve_coefs=state_config.get("cost_curve_coefs", (0.0, 0.0, 0.0)),
-            dt_h=float_if_not_none(state_config.get("dt_h", 1.0)),
-            startup_time_hr=float_if_not_none(state_config.get("startup_time_hr", None)),
-            shutdown_time_hr=float_if_not_none(state_config.get("shutdown_time_hr", None)),
-            startup_cost=float_if_not_none(state_config.get("startup_cost", 0.0)),
-            shutdown_cost=float_if_not_none(state_config.get("shutdown_cost", 0.0)),
-            min_pf=float_if_not_none(state_config.get("min_pf", None)),
-            type=state_config.get("type", "fossil"),
-            source=state_config.get("source", None),
-
-            # control mode
-            control_mode=state_config.get("control_mode", "PQ"),
-        )
         super().__init__(
             agent_id=agent_id,
+            features=features,
             policy=policy,
             protocol=protocol,
             upstream_id=upstream_id,
             env_id=env_id,
-            device_config=device_config,
             tick_config=tick_config,
         )
 
-    def set_action(self) -> None:
+    def _initialize_from_config(self, config: GeneratorConfig) -> None:
+        """Extract and store needed config fields as instance variables.
+
+        This avoids persisting the entire config object and makes explicit
+        which fields are actually used by the generator.
+
+        Args:
+            config: GeneratorConfig object to extract fields from
         """
-        Define Action depending on generator control model.
+        # Metadata
+        self._bus = config.bus
+        self._control_mode = config.control_mode
+        self._type = config.type
+        self._source = config.source
+
+        # Voltage bounds (for PV/SLACK action space)
+        self._vm_min_pu = config.vm_min_pu
+        self._vm_max_pu = config.vm_max_pu
+        self._va_min_deg = config.va_min_deg
+        self._va_max_deg = config.va_max_deg
+
+        # Unit commitment parameters
+        self._startup_time_hr = config.startup_time_hr
+        self._shutdown_time_hr = config.shutdown_time_hr
+        self._startup_cost = config.startup_cost
+        self._shutdown_cost = config.shutdown_cost
+
+        # Economic parameters
+        self._cost_curve_coefs = config.cost_curve_coefs
+        self._dt_h = config.dt_h
+        self._min_pf = config.min_pf
+
+        # Phase model & spec
+        self.phase_model = PhaseModel(config.phase_model)
+        self.phase_spec = PhaseSpec().from_dict(config.phase_spec or {})
+        check_phase_model_consistency(self.phase_model, self.phase_spec)
+
+        # Unit commitment cost tracking (updated during _update_uc_status)
+        self._uc_cost_step = 0.0
+
+    def init_action(self, features: List[FeatureProvider] = []) -> Action:
+        """
+        Initialize Action space depending on generator control model.
 
         PQ model:
         (1a) P-only:
@@ -182,36 +194,47 @@ class Generator(DeviceAgent):
 
         UC head d[0] in {0=turn_off, 1=turn_on}.
         """
-        cfg = self._generator_config
-        mode = (cfg.control_mode or "PQ").upper()
+        action = Action()
+
+        # Need to get limits from features parameter
+        limits = None
+        for f in features:
+            if isinstance(f, PowerLimits):
+                limits = f
+                break
+
+        if limits is None:
+            raise ValueError("PowerLimits feature required for action initialization")
+
+        mode = (self._control_mode or "PQ").upper()
 
         lows: list[float] = []
         highs: list[float] = []
 
         if mode == "PQ":
             # --- P bounds (always present in PQ) ---
-            lows.append(cfg.p_min_MW)
-            highs.append(cfg.p_max_MW)
+            lows.append(limits.p_min_MW)
+            highs.append(limits.p_max_MW)
 
             has_q_box = (
-                cfg.q_min_MVAr is not None and
-                cfg.q_max_MVAr is not None
+                limits.q_min_MVAr is not None and
+                limits.q_max_MVAr is not None
             )
             has_pf_cap = (
-                cfg.pf_min_abs is not None and
-                cfg.s_rated_MVA is not None
+                limits.pf_min_abs is not None and
+                limits.s_rated_MVA is not None
             )
 
             if has_q_box:
                 # (1b) P+Q with explicit limits
-                lows.append(cfg.q_min_MVAr)
-                highs.append(cfg.q_max_MVAr)
+                lows.append(limits.q_min_MVAr)
+                highs.append(limits.q_max_MVAr)
 
             elif has_pf_cap:
                 # (1c) P+Q with PF capability curve:
                 # approximate symmetric Q box from S & pf_min_abs
-                S = cfg.s_rated_MVA * (cfg.derate_frac or 1.0)
-                pf = cfg.pf_min_abs
+                S = limits.s_rated_MVA * (limits.derate_frac or 1.0)
+                pf = limits.pf_min_abs
                 q_max_mag = S * math.sqrt(max(0.0, 1.0 - pf * pf))
                 lows.append(-q_max_mag)
                 highs.append(q_max_mag)
@@ -222,104 +245,92 @@ class Generator(DeviceAgent):
 
         elif mode == "PV":
             # (2) PV: action = [P, Vm]
-            lows.append(cfg.p_min_MW)
-            highs.append(cfg.p_max_MW)
+            lows.append(limits.p_min_MW)
+            highs.append(limits.p_max_MW)
 
-            vm_min = float(cfg.vm_min_pu)
-            vm_max = float(cfg.vm_max_pu)
+            vm_min = float(self._vm_min_pu)
+            vm_max = float(self._vm_max_pu)
             lows.append(vm_min)
             highs.append(vm_max)
 
         elif mode == "SLACK":
             # (3) Slack: action = [Vm, Va]
-            lows.append(cfg.vm_min_pu)
-            highs.append(cfg.vm_max_pu)
-            lows.append(np.deg2rad(cfg.va_min_deg))
-            highs.append(np.deg2rad(cfg.va_max_deg))
+            lows.append(self._vm_min_pu)
+            highs.append(self._vm_max_pu)
+            lows.append(np.deg2rad(self._va_min_deg))
+            highs.append(np.deg2rad(self._va_max_deg))
 
         else:
             raise ValueError(f"Unknown generator control_mode={mode!r}")
 
         # --- Unit commitment discrete head ---
         have_uc = (
-            cfg.startup_time_hr is not None or
-            cfg.shutdown_time_hr is not None
+            self._startup_time_hr is not None or
+            self._shutdown_time_hr is not None
         )
 
-        self.action.set_specs(
+        action.set_specs(
             dim_c=len(lows),
             dim_d=(1 if have_uc else 0),
             ncats=(2 if have_uc else 0),
             range=(np.asarray(lows, np.float32), np.asarray(highs, np.float32)),
         )
 
-    def set_state(self) -> None:
-        # Electrical telemetry
-        electrical_telemetry = ElectricalBasePh(
-            phase_model=self.phase_model,
-            phase_spec=self.phase_spec,
-            P_MW=0.0,
-            Q_MVAr=0.0,
-            Vm_pu=1.0,
-            Va_rad=0.0,
-            visibility=["owner"],
-        )
+        # Initialize with zeros
+        if len(lows) > 0:
+            action.set_values(c=np.zeros(len(lows), dtype=np.float32))
+        if have_uc:
+            action.set_values(d=np.array([1], dtype=np.int32))  # Default to "on"
 
-        # Status / UC lifecycle
-        status = StatusBlock(
-            in_service=True,
-            out_service=False,
-            state="online",
-            states_vocab=["offline", "startup", "online", "shutdown", "fault"],
-            emit_state_one_hot=True,
-            emit_state_index=False,
-            visibility=["owner"],
-            t_in_state_s=0.0,
-            t_to_next_s=None,  # None means not in transition
-            progress_frac=None,
-        )
+        return action
 
-        # Capability / limits
-        power_limits = PowerLimits(
-            s_rated_MVA=self._generator_config.s_rated_MVA,
-            derate_frac=self._generator_config.derate_frac,
-            p_min_MW=self._generator_config.p_min_MW,
-            p_max_MW=self._generator_config.p_max_MW,
-            q_min_MVAr=self._generator_config.q_min_MVAr,
-            q_max_MVAr=self._generator_config.q_max_MVAr,
-            pf_min_abs=self._generator_config.pf_min_abs,
-        )
-
-        self.state.features = [
-            electrical_telemetry,
-            status,
-            power_limits,
-        ]
-        self.state.owner_id = self.agent_id
-        self.state.owner_level = self.level
-
-    def reset_agent(self, **kwargs) -> None:
-        """Reset generator to a neutral operating point."""
-        self.state.reset()
-        self.action.reset()
-
-        # Cost / safety bookkeeping
-        self.cost = 0.0
-        self.safety = 0.0
-        self._uc_cost_step = 0.0
-
-    def update_state(self, **kwargs) -> None:
-        """Update generator state with optional kwargs for feature updates.
+    def set_action(self, action: Any) -> None:
+        """Set action from Action object or compatible format.
 
         Args:
-            **kwargs: Optional keyword arguments to update specific feature fields
+            action: Action object or numpy array with action values
+        """
+        if isinstance(action, Action):
+            # Extract action vector from Action object
+            if action.c.size > 0:
+                self.action.set_values(c=action.c)
+            if action.d.size > 0:
+                self.action.set_values(d=action.d)
+        else:
+            # Direct value (numpy array or dict)
+            self.action.set_values(action)
+
+    def set_state(self) -> None:
+        """Apply action to update generator state.
+
+        Modern HERON pattern: called by apply_action() after action is set.
+        Updates UC status, power outputs, and applies cost/safety metrics.
         """
         self._update_uc_status()
         self._update_power_outputs()
+        self._update_cost_safety()
 
-        # Apply any additional kwargs to respective features
-        if kwargs:
-            self._update_by_kwargs(**kwargs)
+    def apply_action(self) -> None:
+        """Apply current action to update state.
+
+        Overrides DeviceAgent.apply_action() to follow modern HERON pattern.
+        """
+        self.set_state()
+
+    def sync_state_from_observed(self, observed_state: Any) -> None:
+        """Synchronize state from external observations, then update cost/safety.
+
+        Called after state features are updated from observations (e.g., from power flow).
+        Recalculates cost and safety metrics based on the synchronized state.
+
+        Args:
+            observed_state: External observations to sync from
+        """
+        # Call parent to sync state features (ElectricalBasePh, StatusBlock, etc.)
+        super().sync_state_from_observed(observed_state)
+
+        # Update cost and safety based on new state
+        self._update_cost_safety()
 
     def _update_uc_status(self) -> None:
         """Advance UC lifecycle in StatusBlock using d[0] ∈ {off, on}.
@@ -332,7 +343,7 @@ class Generator(DeviceAgent):
         t_in_state_s = self.status.t_in_state_s or 0.0
         t_to_next_s = self.status.t_to_next_s
         progress_frac = self.status.progress_frac
-        dt = self._generator_config.dt_h
+        dt = self._dt_h
         t_in_state_s += dt
 
         # 2) UC command: 0=request_off, 1=request_on
@@ -340,8 +351,8 @@ class Generator(DeviceAgent):
         if self.action.dim_d > 0 and self.action.d.size > 0:
             uc_cmd = int(self.action.d[0])
 
-        t_start = self._generator_config.startup_time_hr
-        t_stop = self._generator_config.shutdown_time_hr
+        t_start = self._startup_time_hr
+        t_stop = self._shutdown_time_hr
 
         # 3) Handle UC command
         #    - If not in transition: react to UC
@@ -356,7 +367,7 @@ class Generator(DeviceAgent):
                     t_in_state_s = 0.0
                     t_to_next_s = None
                     progress_frac = None
-                    self._uc_cost_step = self._generator_config.shutdown_cost
+                    self._uc_cost_step = self._shutdown_cost
                 else:
                     # Begin shutdown transition
                     state = "shutdown"
@@ -372,7 +383,7 @@ class Generator(DeviceAgent):
                     t_in_state_s = 0.0
                     t_to_next_s = None
                     progress_frac = None
-                    self._uc_cost_step = self._generator_config.startup_cost
+                    self._uc_cost_step = self._startup_cost
                 else:
                     # Begin startup transition
                     state = "startup"
@@ -396,13 +407,13 @@ class Generator(DeviceAgent):
                     t_in_state_s = 0.0
                     t_to_next_s = None
                     progress_frac = None
-                    self._uc_cost_step = self._generator_config.startup_cost
+                    self._uc_cost_step = self._startup_cost
                 elif state == "shutdown":
                     state = "offline"
                     t_in_state_s = 0.0
                     t_to_next_s = None
                     progress_frac = None
-                    self._uc_cost_step = self._generator_config.shutdown_cost
+                    self._uc_cost_step = self._shutdown_cost
 
         # Apply updates to features
         status_updates: Dict[str, Any] = {
@@ -431,42 +442,55 @@ class Generator(DeviceAgent):
 
         self.state.update_feature(ElectricalBasePh.feature_name, **elec_updates)
 
-    def _update_by_kwargs(self, **kwargs) -> None:
-        """Update features based on provided kwargs.
-
-        Args:
-            **kwargs: Keyword arguments mapping to feature fields
-        """
-        electrical_keys = {f.name for f in fields(ElectricalBasePh)}
-        status_keys = {f.name for f in fields(StatusBlock)}
-        power_limits_keys = {f.name for f in fields(PowerLimits)}
-
-        elec_updates = {k: v for k, v in kwargs.items() if k in electrical_keys}
-        status_updates = {k: v for k, v in kwargs.items() if k in status_keys}
-        limits_updates = {k: v for k, v in kwargs.items() if k in power_limits_keys}
-
-        if elec_updates:
-            self.state.update_feature(ElectricalBasePh.feature_name, **elec_updates)
-        if status_updates:
-            self.state.update_feature(StatusBlock.feature_name, **status_updates)
-        if limits_updates:
-            self.state.update_feature(PowerLimits.feature_name, **limits_updates)
-
-    def update_cost_safety(self) -> None:
+    def _update_cost_safety(self) -> None:
         """Economic cost + S/PF penalties + UC start/stop cost."""
         P = self.electrical.P_MW or 0.0
         Q = self.electrical.Q_MVAr or 0.0
         on = 1.0 if self.status.state == "online" else 0.0
-        dt = self._generator_config.dt_h
+        dt = self._dt_h
 
         # Cost
-        fuel_cost = cost_from_curve(P, self._generator_config.cost_curve_coefs)
+        fuel_cost = cost_from_curve(P, self._cost_curve_coefs)
         uc_cost = self._uc_cost_step
-        self.cost = fuel_cost * on * dt + uc_cost
+        cost = fuel_cost * on * dt + uc_cost
 
         # Safety violations
         violations = self.limits.feasible(P, Q)
-        self.safety = np.sum(list(violations.values())) * on * dt
+        safety = np.sum(list(violations.values())) * on * dt
+
+        # Sync cost and safety to the CostSafetyMetrics feature
+        self.state.update_feature(
+            CostSafetyMetrics.feature_name,
+            cost=cost,
+            safety=safety
+        )
+
+    def compute_local_reward(self, local_state: dict) -> float:
+        """Compute reward for Generator based on cost and safety.
+
+        Reward = -cost - safety
+        (minimize fuel cost, UC cost, and safety violations)
+
+        Args:
+            local_state: State dict from proxy.get_local_state() with structure:
+                {"ElectricalBasePh": np.array([P_MW, Q_MVAr, ...]),
+                 "StatusBlock": np.array([...]),
+                 "PowerLimits": np.array([...]),
+                 "CostSafetyMetrics": np.array([cost, safety]), ...}
+
+        Returns:
+            Reward value (higher is better)
+        """
+        cost_penalty = 0.0
+        safety_penalty = 0.0
+
+        # Extract cost/safety from CostSafetyMetrics
+        if "CostSafetyMetrics" in local_state:
+            metrics_vec = local_state["CostSafetyMetrics"]
+            cost_penalty = float(metrics_vec[0])
+            safety_penalty = float(metrics_vec[1])
+
+        return -cost_penalty - safety_penalty
 
     @property
     def electrical(self) -> ElectricalBasePh:
@@ -488,7 +512,7 @@ class Generator(DeviceAgent):
 
     @property
     def bus(self) -> str:
-        return self._generator_config.bus
+        return self._bus
 
     @property
     def name(self) -> str:
@@ -497,7 +521,7 @@ class Generator(DeviceAgent):
     @property
     def source(self) -> Optional[str]:
         """Get renewable source type ('solar', 'wind', or None for dispatchable)."""
-        return self._generator_config.source
+        return self._source
 
     # ============================================
     # Distributed Mode Overrides

@@ -6,8 +6,9 @@ from heron.agents.base import Agent
 from heron.agents.field_agent import FieldAgent
 from heron.agents.proxy_agent import ProxyAgent
 from heron.core.action import Action
+from heron.core.feature import FeatureProvider
 from heron.core.observation import Observation
-from heron.core.state import CoordinatorAgentState
+from heron.core.state import CoordinatorAgentState, State
 from heron.core.policies import Policy
 from heron.utils.typing import AgentID
 from heron.protocols.base import Protocol
@@ -31,8 +32,9 @@ class CoordinatorAgent(Agent):
     def __init__(
         self,
         agent_id: Optional[AgentID] = None,
-        upstream_id: Optional[AgentID] = None,
+        features: List[FeatureProvider] = [],
         # hierarchy params
+        upstream_id: Optional[AgentID] = None,
         subordinates: Optional[Dict[AgentID, "Agent"]] = None,
         env_id: Optional[str] = None,
         # timing config (for event-driven scheduling)
@@ -49,20 +51,22 @@ class CoordinatorAgent(Agent):
         super().__init__(
             agent_id=agent_id,
             level=COORDINATOR_LEVEL,
-            subordinates=subordinates,
+            features=features,
             upstream_id=upstream_id,
+            subordinates=subordinates,
             env_id=env_id,
             tick_config=tick_config or TickConfig.deterministic(tick_interval=DEFAULT_COORDINATOR_TICK_INTERVAL),
         )
 
-    def init_state(self) -> None:
-        self.state = CoordinatorAgentState(
+    def init_state(self, features: List[FeatureProvider] = []) -> State:
+        return CoordinatorAgentState(
             owner_id=self.agent_id,
-            owner_level=COORDINATOR_LEVEL
+            owner_level=COORDINATOR_LEVEL,
+            features=features
         )
 
-    def init_action(self) -> None:
-        self.action = Action()
+    def init_action(self, features: List[FeatureProvider] = []) -> Action:
+        return Action()
 
     def set_state(self, *args, **kwargs) -> None:
         pass
@@ -140,6 +144,10 @@ class CoordinatorAgent(Agent):
         elif "get_local_state_response" in message_content:
             response_data = message_content["get_local_state_response"]
             local_state = response_data[MSG_KEY_BODY]
+
+            # Sync internal state with what's stored in proxy (may have been modified by simulation)
+            self.sync_state_from_observed(local_state)
+
             tick_result = {
                 "reward": self.compute_local_reward(local_state),
                 "terminated": self.is_terminated(local_state),
