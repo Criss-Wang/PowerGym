@@ -375,13 +375,14 @@ class EventScheduler:
 
         # Re-schedule first tick only for system agent (matches attach() behavior)
         # System agent will cascade ticks to subordinates
-        if SYSTEM_AGENT_ID in self._active_agents:
-            self.schedule(Event(
-                timestamp=start_time,
-                event_type=EventType.AGENT_TICK,
-                agent_id=SYSTEM_AGENT_ID,
-                payload={}
-            ))
+        if SYSTEM_AGENT_ID not in self._active_agents:
+            raise ValueError(f"System agent (ID={SYSTEM_AGENT_ID}) not registered, check your environment setup again")
+        self.schedule(Event(
+            timestamp=start_time,
+            event_type=EventType.AGENT_TICK,
+            agent_id=SYSTEM_AGENT_ID,
+            payload={}
+        ))
 
     # ===============================
     # Properties and Utility Methods

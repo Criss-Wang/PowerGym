@@ -117,7 +117,7 @@ class EnvCore:
             **kwargs: Additional reset parameters
         """
         # reset scheduler and clear messages before resetting agents to ensure a clean slate
-        self.scheduler.reset(seed)
+        self.scheduler.reset(start_time=0.0)  # Always reset to time 0
         self.clear_broker_environment()
 
         # reset agents (system agent will reset subordinates)
