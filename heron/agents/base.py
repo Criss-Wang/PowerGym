@@ -20,8 +20,8 @@ from heron.core.policies import Policy
 from heron.core.state import State
 from heron.core.action import Action
 from heron.core.observation import Observation
-from heron.protocols.base import Protocol
-from heron.agents.constants import PROXY_AGENT_ID
+from heron.protocols.base import Protocol, NoActionCoordination
+from heron.agents.constants import PROXY_AGENT_ID, FIELD_LEVEL
 
 
 class Agent(ABC):
@@ -147,7 +147,9 @@ class Agent(ABC):
         scheduler: EventScheduler,
         current_time: float,
     ) -> None:
-        pass
+        self._timestep = current_time
+        self._check_for_upstream_action()  # Check for any new upstream action at the start of the tick
+
 
     # ============================================
     # Observation related functions
@@ -406,17 +408,44 @@ class Agent(ABC):
             msg_delay=self._tick_config.msg_delay,
         )
 
+    def _check_for_upstream_action(self) -> None:
+        """Check message broker for action from upstream parent."""
+        if not self.upstream_id or not self._message_broker:
+            self._upstream_action = None
+            return
+
+        actions = self.receive_upstream_actions(
+            sender_id=self.upstream_id,
+            clear=True,
+        )
+        self._upstream_action = actions[-1] if actions else None
+
     # Action-related functions for event-driven execution (testing mode)
     def compute_action(self, obs: Any, scheduler: EventScheduler):
-        # Note: Parent Agent doesn't build action for subordinates
-        # TODO: Support parent-controlled actions -> self.send_subordinate_action
-        # TODO: Add protocol-based parent control logic
-        self.set_action(self.policy.forward(observation=obs))
+        # Priority: upstream action > policy > no action
+        # Action construction: 
+        #   - Option A: Get from message_broker
+        #   - Option B: Get from policy forward function (for coordinators with policies)
+        # Action decomposition: decomposition defined by protocol (for coordinators with protocols)
+        if self._upstream_action is not None:
+            action = self._upstream_action
+            self._upstream_action = None  # Clear after use
+        elif self.policy:
+            action = self.policy.forward(observation=obs)
+        else:
+            if self.level == FIELD_LEVEL and not self.upstream_id:
+                print(f"Warning: {self} has no policy and no upstream action")
+
+        # Coordinate subordinate actions if needed
+        if self._should_send_subordinate_actions():
+            self.coordinate(obs, action)
+
+        # Set self action and schedule its effect 
+        self.set_action(action)
         scheduler.schedule_action_effect(
             agent_id=self.agent_id,
             delay=self._tick_config.act_delay,
         )
-
 
     # Default handlers for common event types. Can be overridden or extended in subclasses for custom handling logic.
     class handler:
@@ -432,7 +461,7 @@ class Agent(ABC):
                 raise KeyError(f"Event type '{event_type_str}' not found. Choose from: {list(EVENT_TYPE_FROM_STRING.keys())}")
             self.event_type = event_type
 
-        def __call__(self, func):
+        def __call__(self, func: Callable):
             """Called when used as @handler("event_type")."""
             # Store event type on the function itself for later registration
             func._handler_event_type = self.event_type
@@ -452,8 +481,37 @@ class Agent(ABC):
     
     # ============================================
     # Additional subordinate controls (Protocol Usage)
-    # TODO: fill this section up
     # ============================================
+    def _should_send_subordinate_actions(self) -> bool:
+        """Check if agent should coordinate subordinate actions."""
+        if not self.subordinates or not self.protocol:
+            return False
+        return not self.protocol.no_action()
+    
+    def coordinate(self, obs: Any, action: Any) -> None:
+        """Coordinate subordinate actions based on protocol."""
+        if not self.protocol or not self.subordinates:
+            return
+        
+        messages, actions = self.protocol.coordinate(
+            coordinator_state=self.state,
+            coordinator_action=action,
+            info_for_subordinates={sub_id: obs for sub_id in self.subordinates},  # Placeholder: in practice, get actual states
+        )
+        # Send coordinated actions to subordinates via message broker
+        for sub_id, sub_action in actions.items():
+            self.send_subordinate_action(sub_id, sub_action)
+
+        # Send coordination messages to subordinates via message broker
+        # Note: the message passed is not used yet
+        for sub_id, message in messages.items():
+            self.send_info(
+                broker=self._message_broker,
+                recipient_id=sub_id,
+                info=message,
+            )
+    
+
 
     # ============================================
     # Messaging via message broker
@@ -482,7 +540,7 @@ class Agent(ABC):
         return self._message_broker
 
 
-    def receive_upstream_action(
+    def receive_upstream_actions(
         self,
         sender_id: Optional[str] = None,
         clear: bool = True,
@@ -524,6 +582,9 @@ class Agent(ABC):
             raise RuntimeError(
                 f"Agent {self.agent_id} has no message broker configured."
             )
+        if action is None:
+            print(f"Warning: No action to send to subordinate {recipient_id}")
+            return
 
         self.send_action(
             broker=self._message_broker,

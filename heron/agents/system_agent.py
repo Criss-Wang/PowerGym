@@ -141,7 +141,7 @@ class SystemAgent(Agent):
         - Compute rewards
         - Schedule next tick
         """
-        self._timestep = current_time
+        super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
 
         # Schedule subordinate ticks
         for subordinate_id in self.subordinates:

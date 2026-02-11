@@ -88,12 +88,11 @@ class CoordinatorAgent(Agent):
         """
         Action phase - equivalent to `self.act`
 
-        Note: CoordinatorAgent ticks only upon SystemAgent.tick (see heron/agents/system_agent.py)
-
-        Currently, we assume NO upstream action passed down, coodinator computes its own action
-        If we receive upstream actions in the future, do it via self.receive_upstream_action
+        Note: 
+        - CoordinatorAgent ticks only upon SystemAgent.tick (see heron/agents/system_agent.py)
+        - Upstream actions checked in SystemAgent.tick() via _check_for_upstream_action()
         """
-        self._timestep = current_time
+        super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
 
         # Schedule subordinate ticks
         for subordinate_id in self.subordinates:

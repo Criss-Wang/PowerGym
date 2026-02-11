@@ -174,13 +174,11 @@ class FieldAgent(Agent):
         """
         Action phase - equivalent to `self.act`
 
-        Note: FieldAgent ticks only upon CoordinatorAgent.tick (see heron/agents/coordinator_agent.py)
-
-        Currently, we assume NO upstream action passed down, field agent computes its own action
-        If we receive upstream actions in the future, do it via self.receive_upstream_action
+        Note: 
+        - FieldAgent ticks only upon CoordinatorAgent.tick (see heron/agents/coordinator_agent.py)
+        - Upstream actions checked in base.Agent.tick() via _check_for_upstream_action()
         """
-
-        self._timestep = current_time
+        super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
 
         if self.policy:
             # Compute & execute self action
