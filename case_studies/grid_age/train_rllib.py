@@ -21,7 +21,7 @@ except ImportError:
     RLLIB_AVAILABLE = False
     print("Warning: RLlib not available. Install with: pip install ray[rllib]")
 
-from case_studies.grid_age.envs import MicrogridEnv
+from case_studies.grid_age.envs import create_hierarchical_env
 from heron.core.observation import Observation
 
 
@@ -32,7 +32,7 @@ class HeronToGymWrapper(gym.Env):
     with RLlib's single-agent interface within multi-agent training.
     """
 
-    def __init__(self, heron_env: MicrogridEnv, agent_id: str):
+    def __init__(self, heron_env, agent_id: str):  # HierarchicalMicrogridEnv
         """Initialize wrapper.
 
         Args:
@@ -173,7 +173,7 @@ def train_with_rllib(
 
     # Step 1: Create probe environment to get spaces
     print("\n1. Creating probe environment...")
-    probe_env = MicrogridEnv(num_microgrids=num_microgrids, episode_steps=24)
+    probe_env = create_hierarchical_env(num_microgrids=num_microgrids, episode_steps=24)
     obs, _ = probe_env.reset(seed=0)
 
     # Get agent IDs and spaces
@@ -225,10 +225,17 @@ def train_with_rllib(
         return agent_id
 
     # Step 3: Build RLlib configuration
+    # Note: We can't pass the factory function directly, so we create a wrapper
+    def env_creator(env_config):
+        return create_hierarchical_env(
+            num_microgrids=env_config.get("num_microgrids", 3),
+            episode_steps=env_config.get("episode_steps", 24),
+        )
+
     config = (
         PPOConfig()
         .environment(
-            env=MicrogridEnv,
+            env=env_creator,
             env_config={
                 "num_microgrids": num_microgrids,
                 "episode_steps": 24,
@@ -292,7 +299,7 @@ def train_with_rllib(
     # Step 5: Evaluate
     print("\n4. Evaluating trained policies...")
 
-    eval_env = MicrogridEnv(num_microgrids=num_microgrids, episode_steps=24)
+    eval_env = create_hierarchical_env(num_microgrids=num_microgrids, episode_steps=24)
     eval_obs, _ = eval_env.reset(seed=999)
 
     eval_rewards = []

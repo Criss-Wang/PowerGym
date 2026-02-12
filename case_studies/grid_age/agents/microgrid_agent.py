@@ -20,14 +20,6 @@ from heron.core.policies import Policy
 from heron.protocols.base import Protocol
 from heron.scheduling.tick_config import TickConfig
 
-from case_studies.grid_age.features import (
-    ESSFeature,
-    DGFeature,
-    RESFeature,
-    GridFeature,
-    NetworkFeature,
-)
-
 
 class MicrogridFieldAgent(FieldAgent):
     """Composite field agent controlling a microgrid with multiple devices.
@@ -50,14 +42,7 @@ class MicrogridFieldAgent(FieldAgent):
     def __init__(
         self,
         agent_id: str,
-        # Device parameters
-        ess_capacity: float = 2.0,
-        ess_min_p: float = -0.5,
-        ess_max_p: float = 0.5,
-        dg_max_p: float = 0.66,
-        dg_min_p: float = 0.1,
-        pv_max_p: float = 0.1,
-        wind_max_p: float = 0.1,
+        features: List[FeatureProvider],  # REQUIRED: Pass pre-initialized features
         # Hierarchy parameters
         upstream_id: Optional[str] = None,
         env_id: Optional[str] = None,
@@ -70,55 +55,51 @@ class MicrogridFieldAgent(FieldAgent):
     ):
         """Initialize microgrid field agent.
 
+        IMPORTANT: Features must be created externally before passing to agent.
+
         Args:
             agent_id: Unique agent identifier (e.g., "MG1", "MG2")
-            ess_capacity: ESS energy capacity in MWh
-            ess_min_p: ESS minimum power (discharge) in MW
-            ess_max_p: ESS maximum power (charge) in MW
-            dg_max_p: DG maximum power in MW
-            dg_min_p: DG minimum stable generation in MW
-            pv_max_p: PV rated capacity in MW
-            wind_max_p: Wind rated capacity in MW
+            features: Pre-initialized feature providers (REQUIRED)
+                     Expected: [ESSFeature, DGFeature, RESFeature(PV), RESFeature(Wind), GridFeature, NetworkFeature]
             upstream_id: Parent agent ID (if any)
             env_id: Environment ID
             tick_config: Timing configuration for event-driven mode
             policy: Policy for action selection
             protocol: Coordination protocol (if parent-controlled)
+
+        Example:
+            features = [
+                ESSFeature(capacity=2.0, min_p=-0.5, max_p=0.5, soc=0.5),
+                DGFeature(max_p=0.66, min_p=0.1, on=1),
+                RESFeature(max_p=0.1),  # PV
+                RESFeature(max_p=0.1),  # Wind
+                GridFeature(),
+                NetworkFeature(),
+            ]
+            agent = MicrogridFieldAgent(agent_id="MG1", features=features)
         """
-        # Store device parameters for denormalization
-        self.ess_min_p = ess_min_p
-        self.ess_max_p = ess_max_p
-        self.dg_min_p = dg_min_p
-        self.dg_max_p = dg_max_p
-        self.pv_max_q = pv_max_p * 0.5  # Reactive capability ~50% of active
-        self.wind_max_q = wind_max_p * 0.5
+        if not features or len(features) < 6:
+            raise ValueError(
+                f"MicrogridFieldAgent requires 6 features "
+                f"(ESS, DG, PV, Wind, Grid, Network). Got {len(features) if features else 0}"
+            )
+
+        # Extract denormalization parameters from features
+        # These are used in apply_action() to convert normalized actions to physical units
+        ess_feature = features[0]  # Assume first is ESS
+        dg_feature = features[1]   # Assume second is DG
+        pv_feature = features[2]   # Assume third is PV
+        wind_feature = features[3] # Assume fourth is Wind
+
+        self.ess_min_p = getattr(ess_feature, 'min_p', -0.5)
+        self.ess_max_p = getattr(ess_feature, 'max_p', 0.5)
+        self.dg_min_p = getattr(dg_feature, 'min_p', 0.1)
+        self.dg_max_p = getattr(dg_feature, 'max_p', 0.66)
+        self.pv_max_q = getattr(pv_feature, 'max_q', 0.05)
+        self.wind_max_q = getattr(wind_feature, 'max_q', 0.05)
 
         # Time step for dynamics (1 hour default)
         self.dt = 1.0  # hours
-
-        # Initialize device features
-        features = [
-            ESSFeature(
-                capacity=ess_capacity,
-                min_p=ess_min_p,
-                max_p=ess_max_p,
-                soc=0.5,  # Start at 50% SOC
-            ),
-            DGFeature(
-                max_p=dg_max_p,
-                min_p=dg_min_p,
-                on=1,
-                P=dg_min_p,  # Start at minimum generation
-            ),
-            RESFeature(
-                max_p=pv_max_p,
-            ),  # PV
-            RESFeature(
-                max_p=wind_max_p,
-            ),  # Wind
-            GridFeature(),
-            NetworkFeature(),
-        ]
 
         super().__init__(
             agent_id=agent_id,
@@ -176,43 +157,121 @@ class MicrogridFieldAgent(FieldAgent):
         else:
             raise ValueError(f"Unsupported action type: {type(action)}")
 
-    def apply_action(self):
-        """Apply normalized actions to device features.
+    def set_state(
+        self,
+        P_ess: Optional[float] = None,
+        P_dg: Optional[float] = None,
+        Q_pv: Optional[float] = None,
+        Q_wind: Optional[float] = None,
+        voltage_min: Optional[float] = None,
+        voltage_max: Optional[float] = None,
+        voltage_avg: Optional[float] = None,
+        max_line_loading: Optional[float] = None,
+        voltage_violations: Optional[int] = None,
+        overload_violations: Optional[int] = None,
+        pv_availability: Optional[float] = None,
+        wind_availability: Optional[float] = None,
+        grid_price: Optional[float] = None,
+        **kwargs
+    ) -> None:
+        """Update state for all device features and network conditions.
 
-        Denormalizes actions from [-1, 1] to physical ranges and updates
-        device feature setpoints. The actual physics (e.g., SOC dynamics)
-        will be updated in the simulation phase.
+        This is the ONLY method that should update agent state. All other methods
+        (apply_action, update_device_dynamics, set_renewable_availability, etc.)
+        should call this method.
+
+        Args:
+            P_ess: ESS active power (MW). If None, computed from action.
+            P_dg: DG active power (MW). If None, computed from action.
+            Q_pv: PV reactive power (MVAr). If None, computed from action.
+            Q_wind: Wind reactive power (MVAr). If None, computed from action.
+            voltage_min: Minimum bus voltage (pu)
+            voltage_max: Maximum bus voltage (pu)
+            voltage_avg: Average bus voltage (pu)
+            max_line_loading: Maximum line loading percentage
+            voltage_violations: Number of voltage violations
+            overload_violations: Number of overload violations
+            pv_availability: PV availability [0, 1]
+            wind_availability: Wind availability [0, 1]
+            grid_price: Electricity price ($/MWh)
+            **kwargs: Additional state parameters
         """
         # Get device features
         ess_feature = self.state.features[self.ess_idx]
         dg_feature = self.state.features[self.dg_idx]
         pv_feature = self.state.features[self.pv_idx]
         wind_feature = self.state.features[self.wind_idx]
+        grid_feature = self.state.features[self.grid_idx]
+        network_feature = self.state.features[self.network_idx]
 
-        # Extract normalized actions
-        ess_action = self.action.c[0]  # [-1, 1]
-        dg_action = self.action.c[1]   # [-1, 1]
-        pv_action = self.action.c[2]   # [-1, 1]
-        wind_action = self.action.c[3] # [-1, 1]
+        # Compute power setpoints from actions if not provided
+        if P_ess is None or P_dg is None or Q_pv is None or Q_wind is None:
+            # Extract normalized actions
+            ess_action = self.action.c[0]  # [-1, 1]
+            dg_action = self.action.c[1]   # [-1, 1]
+            pv_action = self.action.c[2]   # [-1, 1]
+            wind_action = self.action.c[3] # [-1, 1]
 
-        # Denormalize ESS power: [-1, 1] → [min_p, max_p]
-        # Get feasible range based on current SOC
-        min_p_feasible, max_p_feasible = ess_feature.get_feasible_power_range()
-        P_ess = ess_action * (max_p_feasible if ess_action > 0 else abs(min_p_feasible))
+            if P_ess is None:
+                # Denormalize ESS power: [-1, 1] → [min_p, max_p]
+                min_p_feasible, max_p_feasible = ess_feature.get_feasible_power_range()
+                P_ess = ess_action * (max_p_feasible if ess_action > 0 else abs(min_p_feasible))
 
-        # Denormalize DG power: [-1, 1] → [min_p, max_p]
-        # Map -1 to min_p, +1 to max_p
-        P_dg = self.dg_min_p + (dg_action + 1) / 2 * (self.dg_max_p - self.dg_min_p)
+            if P_dg is None:
+                # Denormalize DG power: [-1, 1] → [min_p, max_p]
+                P_dg = self.dg_min_p + (dg_action + 1) / 2 * (self.dg_max_p - self.dg_min_p)
 
-        # Denormalize reactive power: [-1, 1] → [-max_q, max_q]
-        Q_pv = pv_action * self.pv_max_q
-        Q_wind = wind_action * self.wind_max_q
+            if Q_pv is None:
+                # Denormalize reactive power: [-1, 1] → [-max_q, max_q]
+                Q_pv = pv_action * self.pv_max_q
+
+            if Q_wind is None:
+                Q_wind = wind_action * self.wind_max_q
 
         # Update device features with setpoints
         ess_feature.set_values(P=P_ess)
         dg_feature.set_values(P=P_dg)
         pv_feature.set_values(Q=Q_pv)
         wind_feature.set_values(Q=Q_wind)
+
+        # Update ESS SOC dynamics if needed (called after power flow)
+        # Note: This is part of state update, not a separate operation
+        if hasattr(ess_feature, 'update_soc'):
+            ess_feature.update_soc(self.dt)
+
+        # Update network state if provided
+        if any(x is not None for x in [voltage_min, voltage_max, voltage_avg, max_line_loading, voltage_violations, overload_violations]):
+            update_dict = {}
+            if voltage_min is not None:
+                update_dict['voltage_min'] = voltage_min
+            if voltage_max is not None:
+                update_dict['voltage_max'] = voltage_max
+            if voltage_avg is not None:
+                update_dict['voltage_avg'] = voltage_avg
+            if max_line_loading is not None:
+                update_dict['max_line_loading'] = max_line_loading
+            if voltage_violations is not None:
+                update_dict['voltage_violations'] = voltage_violations
+            if overload_violations is not None:
+                update_dict['overload_violations'] = overload_violations
+            network_feature.set_values(**update_dict)
+
+        # Update renewable availability if provided
+        if pv_availability is not None:
+            pv_feature.set_availability(pv_availability)
+            pv_feature.set_values(P=pv_feature.max_p * pv_availability)
+
+        if wind_availability is not None:
+            wind_feature.set_availability(wind_availability)
+            wind_feature.set_values(P=wind_feature.max_p * wind_availability)
+
+        # Update grid price if provided
+        if grid_price is not None:
+            grid_feature.set_price(grid_price)
+
+    def apply_action(self):
+        """Apply normalized actions to device features."""
+        self.set_state()
 
     def compute_local_reward(self, local_state: dict) -> float:
         """Compute reward based on operational cost and safety violations.
@@ -289,22 +348,14 @@ class MicrogridFieldAgent(FieldAgent):
 
         return reward
 
-    def set_state(self, *args, **kwargs) -> None:
-        """Set state (not typically used in this architecture)."""
-        pass
-
     def update_device_dynamics(self) -> None:
         """Update device dynamics (ESS SOC, DG unit commitment, etc.).
 
         This is called after power flow simulation to update internal
         device states based on their setpoints and dynamics.
         """
-        # Update ESS SOC based on power flow
-        ess_feature = self.state.features[self.ess_idx]
-        ess_feature.update_soc(self.dt)
-
-        # DG unit commitment updates could go here if needed
-        # For now, assume DG stays on
+        # Delegate to set_state for all state updates
+        self.set_state()
 
     def set_renewable_availability(self, pv_availability: float,
                                     wind_availability: float) -> None:
@@ -314,15 +365,7 @@ class MicrogridFieldAgent(FieldAgent):
             pv_availability: PV availability fraction [0, 1]
             wind_availability: Wind availability fraction [0, 1]
         """
-        pv_feature = self.state.features[self.pv_idx]
-        wind_feature = self.state.features[self.wind_idx]
-
-        pv_feature.set_availability(pv_availability)
-        wind_feature.set_availability(wind_availability)
-
-        # Update active power based on availability
-        pv_feature.set_values(P=pv_feature.max_p * pv_availability)
-        wind_feature.set_values(P=wind_feature.max_p * wind_availability)
+        self.set_state(pv_availability=pv_availability, wind_availability=wind_availability)
 
     def set_grid_price(self, price: float) -> None:
         """Set electricity price.
@@ -330,8 +373,7 @@ class MicrogridFieldAgent(FieldAgent):
         Args:
             price: Electricity price in $/MWh
         """
-        grid_feature = self.state.features[self.grid_idx]
-        grid_feature.set_price(price)
+        self.set_state(grid_price=price)
 
     def get_device_states(self) -> Dict[str, Dict[str, float]]:
         """Get current device states for simulation.
@@ -377,8 +419,7 @@ class MicrogridFieldAgent(FieldAgent):
             voltage_violations: Number of voltage violations
             overload_violations: Number of overload violations
         """
-        network_feature = self.state.features[self.network_idx]
-        network_feature.set_values(
+        self.set_state(
             voltage_min=voltage_min,
             voltage_max=voltage_max,
             voltage_avg=voltage_avg,

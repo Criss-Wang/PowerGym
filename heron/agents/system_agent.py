@@ -95,9 +95,15 @@ class SystemAgent(Agent):
         return self.observe(proxy=proxy), {}
     
     def execute(self, actions: Dict[AgentID, Any], proxy: Optional[ProxyAgent] = None) -> None:
+        """Execute actions with hierarchical coordination and simulation. [Training Mode]"""
         if not proxy:
             raise ValueError("We still require a valid proxy agent so far")
-        
+
+        # Sync state first (by-product of proxy having updated global state)
+        local_state = proxy.get_local_state(self.agent_id, self.protocol)
+        self.sync_state_from_observed(local_state)
+
+        # Layer actions for hierarchical structure and act
         actions = self.layer_actions(actions)
         self.act(actions, proxy)
         
@@ -172,13 +178,11 @@ class SystemAgent(Agent):
 
     @Agent.handler("action_effect")
     def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
-        self.apply_action()
-        scheduler.schedule_message_delivery(
-            sender_id=self.agent_id,
-            recipient_id=PROXY_AGENT_ID,
-            message={"set_state": "local", "body": self.state.to_dict(include_metadata=True)},
-            delay=self._tick_config.msg_delay,
-        )
+        """System agent actions don't update local state (they manage simulation).
+
+        No-op handler to handle action_effect events scheduled by compute_action.
+        """
+        pass
 
     @Agent.handler("message_delivery")
     def message_delivery_handler(self, event: Event, scheduler: EventScheduler) -> None:
@@ -194,11 +198,20 @@ class SystemAgent(Agent):
         # d. receiving "state set completion" message from proxy -> schedule reward computation
         assert isinstance(message_content, dict)
         if "get_obs_response" in message_content:
-            # Deserialize observation dict back to Observation object
-            # The proxy sends serialized dicts, reconstruct the object
             response_data = message_content["get_obs_response"]
-            obs_dict = response_data[MSG_KEY_BODY]
+            body = response_data[MSG_KEY_BODY]
+
+            # Proxy sends both obs and local_state (design principle: agent asks for obs, proxy gives both)
+            obs_dict = body["obs"]
+            local_state = body["local_state"]
+
+            # Deserialize observation dict back to Observation object
             obs = Observation.from_dict(obs_dict)
+
+            # Sync state first (proxy gives both obs & state)
+            self.sync_state_from_observed(local_state)
+
+            # Compute action - policy decides which parts of observation to use
             self.compute_action(obs, scheduler)
         elif "get_global_state_response" in message_content:
             # The response structure is {'get_global_state_response': {'body': {...}}}

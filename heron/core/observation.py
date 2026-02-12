@@ -55,8 +55,10 @@ class Observation:
     def vector(self) -> np.ndarray:
         """Convert observation to flat numpy array for RL algorithms.
 
+        Includes both local and global information.
+
         Returns:
-            Flattened observation vector
+            Flattened observation vector (local + global)
         """
         parts: list = []
 
@@ -64,6 +66,35 @@ class Observation:
         self._flatten_dict_to_list(self.local, parts)
 
         # Flatten global info
+        self._flatten_dict_to_list(self.global_info, parts)
+
+        if not parts:
+            return np.array([], dtype=np.float32)
+        return np.concatenate(parts).astype(np.float32)
+
+    def local_vector(self) -> np.ndarray:
+        """Convert only local observation to flat numpy array.
+
+        Use this for decentralized policies that should only use
+        the agent's own state, ignoring global information.
+
+        Returns:
+            Flattened local observation vector
+        """
+        parts: list = []
+        self._flatten_dict_to_list(self.local, parts)
+
+        if not parts:
+            return np.array([], dtype=np.float32)
+        return np.concatenate(parts).astype(np.float32)
+
+    def global_vector(self) -> np.ndarray:
+        """Convert only global information to flat numpy array.
+
+        Returns:
+            Flattened global observation vector
+        """
+        parts: list = []
         self._flatten_dict_to_list(self.global_info, parts)
 
         if not parts:

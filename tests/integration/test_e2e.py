@@ -249,10 +249,13 @@ class NeuralPolicy(Policy):
     Methods work directly with numpy arrays!
 
     Architecture:
-        obs (2D) -> hidden (32) -> action (1D, tanh activation)
+        obs (2D local) -> hidden (32) -> action (1D, tanh activation)
 
     The policy learns to maximize SOC by outputting positive actions (charge).
+    Uses LOCAL-ONLY observations via observation_mode for decentralized execution.
     """
+    observation_mode = "local"  # Use only local observations (agent's own state)
+
     def __init__(self, obs_dim, action_dim=1, hidden_dim=32, seed=42):
         self.obs_dim = obs_dim
         self.action_dim = action_dim
@@ -274,7 +277,7 @@ class NeuralPolicy(Policy):
     def forward(self, obs_vec: np.ndarray) -> np.ndarray:
         """Compute action with exploration noise.
 
-        Decorators auto-convert: observation → obs_vec → action_vec → Action
+        Decorators auto-convert: observation → obs_vec (local-only) → action_vec → Action
         """
         action_mean = self.actor.forward(obs_vec)
         action_vec = action_mean + np.random.normal(0, self.noise_scale, self.action_dim)

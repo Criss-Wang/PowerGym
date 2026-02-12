@@ -19,8 +19,7 @@ from heron.scheduling.event import Event, EventType, EVENT_TYPE_FROM_STRING
 from heron.core.policies import Policy
 from heron.core.state import State
 from heron.core.action import Action
-from heron.core.observation import Observation
-from heron.protocols.base import Protocol, NoActionCoordination
+from heron.protocols.base import Protocol
 from heron.agents.constants import PROXY_AGENT_ID, FIELD_LEVEL
 
 
@@ -137,9 +136,23 @@ class Agent(ABC):
         for subordinate in self.subordinates.values():
             subordinate.reset(seed=seed, proxy=proxy, **kwargs)
 
-    @abstractmethod
     def execute(self, actions: Dict[AgentID, Any], proxy: Optional["ProxyAgent"] = None) -> None:
-        pass
+        """Execute actions in CTDE mode. [Training Mode]
+
+        Default implementation:
+        1. Sync state from proxy (state syncing as by-product of global state updates)
+        2. Act with given actions
+
+        Subclasses can override for custom behavior but should maintain state syncing.
+        """
+        if not proxy:
+            raise ValueError("Agent requires a proxy agent to execute")
+
+        # Sync state first (by-product of proxy having updated global state)
+        local_state = proxy.get_local_state(self.agent_id, self.protocol)
+        self.sync_state_from_observed(local_state)
+
+        self.act(actions, proxy)
 
     @abstractmethod
     def tick(
@@ -434,20 +447,25 @@ class Agent(ABC):
             action = self.policy.forward(observation=obs)
         else:
             if self.level == FIELD_LEVEL and not self.upstream_id:
-                print(f"Warning: {self} has no policy and no upstream action")
+                raise ValueError(f"Warning: {self} has no policy and no upstream action")
+
 
         # Coordinate subordinate actions if needed
         if self._should_send_subordinate_actions():
             self.coordinate(obs, action)
 
-        # Set self action and schedule its effect 
+        # Set self action 
         self.set_action(action)
-        scheduler.schedule_action_effect(
-            agent_id=self.agent_id,
-            delay=self._tick_config.act_delay,
-        )
+        if self.action:
+            # if action is not None, apply it to update state and sync with proxy
+            scheduler.schedule_action_effect(
+                agent_id=self.agent_id,
+                delay=self._tick_config.act_delay,
+            )
 
-    # Default handlers for common event types. Can be overridden or extended in subclasses for custom handling logic.
+    # ============================================
+    # Handler-related utils
+    # ============================================
     class handler:
         """Decorator for registering event handlers.
 
@@ -511,8 +529,6 @@ class Agent(ABC):
                 info=message,
             )
     
-
-
     # ============================================
     # Messaging via message broker
     #

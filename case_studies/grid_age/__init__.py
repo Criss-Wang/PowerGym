@@ -3,41 +3,62 @@
 This package implements the GridAges multi-microgrid environment using the Heron
 framework for hierarchical multi-agent reinforcement learning.
 
+Architecture:
+    SystemAgent → MicrogridCoordinatorAgent → DeviceFieldAgents
+
+Each microgrid has device agents (ESS, DG, PV, Wind) coordinated by a
+MicrogridCoordinatorAgent. Policies can be trained at either:
+    - Device level (individual device control)
+    - Coordinator level (microgrid-level control with action distribution)
+
 Key components:
-- features: Device feature providers (ESS, DG, RES, Grid, Network)
-- agents: MicrogridFieldAgent for composite device control
-- envs: MicrogridEnv with Pandapower integration
+- features: Device feature providers (SOC, Power, UnitCommitment, Availability, Voltage)
+- agents: Device agents (ESS, DG, RES) and MicrogridCoordinator
+- envs: HierarchicalMicrogridEnv with Pandapower integration
 - train: Training scripts for CTDE
 
 Example usage:
-    >>> from case_studies.grid_age import MicrogridEnv, train_microgrid_ctde
-    >>> env = MicrogridEnv(num_microgrids=3)
+    >>> from case_studies.grid_age import create_hierarchical_env, train_microgrid_ctde
+    >>> env = create_hierarchical_env(num_microgrids=3)
     >>> policies = train_microgrid_ctde(env, num_episodes=100)
 """
 
-from case_studies.grid_age.envs import MicrogridEnv, EnvState
-from case_studies.grid_age.agents import MicrogridFieldAgent
+from case_studies.grid_age.envs import (
+    HierarchicalMicrogridEnv,
+    EnvState,
+    create_hierarchical_env,
+)
+from case_studies.grid_age.agents import (
+    MicrogridCoordinatorAgent,
+    ESSFieldAgent,
+    DGFieldAgent,
+    RESFieldAgent,
+)
 from case_studies.grid_age.features import (
-    ESSFeature,
-    DGFeature,
-    RESFeature,
-    GridFeature,
-    NetworkFeature,
+    SOCFeature,
+    PowerFeature,
+    UnitCommitmentFeature,
+    AvailabilityFeature,
+    VoltageFeature,
 )
 from case_studies.grid_age.train import train_microgrid_ctde, NeuralPolicy
 
 __all__ = [
     # Environment
-    "MicrogridEnv",
+    "HierarchicalMicrogridEnv",
+    "create_hierarchical_env",
     "EnvState",
     # Agents
-    "MicrogridFieldAgent",
+    "MicrogridCoordinatorAgent",
+    "ESSFieldAgent",
+    "DGFieldAgent",
+    "RESFieldAgent",
     # Features
-    "ESSFeature",
-    "DGFeature",
-    "RESFeature",
-    "GridFeature",
-    "NetworkFeature",
+    "SOCFeature",
+    "PowerFeature",
+    "UnitCommitmentFeature",
+    "AvailabilityFeature",
+    "VoltageFeature",
     # Training
     "train_microgrid_ctde",
     "NeuralPolicy",

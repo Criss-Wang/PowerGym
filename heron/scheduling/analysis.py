@@ -116,11 +116,11 @@ class EventAnalyzer:
                 state_data = message_content["get_local_state_response"].get("body", {})
                 data_summary = self._summarize_state(state_data, "local")
 
-            # Check for state update responses
-            elif "set_state_response" in message_content:
-                message_type = "set_state_response"
+            # Check for state update completion
+            elif "set_state_completion" in message_content:
+                message_type = "set_state_completion"
                 self.state_update_count += 1
-                data_summary = {"status": message_content.get("set_state_response")}
+                data_summary = {"status": message_content.get("set_state_completion")}
 
             # Check for tick result messages
             elif "set_tick_result" in message_content:

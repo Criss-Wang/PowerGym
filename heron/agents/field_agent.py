@@ -163,8 +163,7 @@ class FieldAgent(Agent):
         self.action_space = self.get_action_space()
         self.observation_space = self.get_observation_space(proxy)
             
-    def execute(self, actions: Dict[AgentID, Any], proxy: Optional[ProxyAgent] = None) -> None:
-        self.act(actions, proxy)
+    # execute() inherited from base class - uses default implementation
 
     def tick(
         self,
@@ -180,7 +179,16 @@ class FieldAgent(Agent):
         """
         super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
 
-        if self.policy:
+        # If we received an upstream action (from coordinator), apply it
+        if self._upstream_action is not None:
+            self.set_action(self._upstream_action)
+            self._upstream_action = None  # Clear after use
+            # Schedule action effect
+            scheduler.schedule_action_effect(
+                agent_id=self.agent_id,
+                delay=self._tick_config.act_delay,
+            )
+        elif self.policy:
             # Compute & execute self action
             # Ask proxy_agent for global state to compute local action
             scheduler.schedule_message_delivery(
@@ -220,7 +228,19 @@ class FieldAgent(Agent):
         if "get_obs_response" in message_content:
             assert isinstance(message_content, dict)
             response_data = message_content["get_obs_response"]
-            obs = response_data[MSG_KEY_BODY]
+            body = response_data[MSG_KEY_BODY]
+
+            # Proxy sends both obs and local_state (design principle: agent asks for obs, proxy gives both)
+            obs_dict = body["obs"]
+            local_state = body["local_state"]
+
+            # Deserialize observation dict back to Observation object
+            obs = Observation.from_dict(obs_dict)
+
+            # Sync state first (proxy gives both obs & state)
+            self.sync_state_from_observed(local_state)
+
+            # Compute action - policy decides which parts of observation to use
             self.compute_action(obs, scheduler)
         elif "get_local_state_response" in message_content:
             response_data = message_content["get_local_state_response"]

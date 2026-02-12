@@ -1,5 +1,6 @@
 
 
+from abc import abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
@@ -103,6 +104,18 @@ class ProxyAgent(Agent):
         # Setup communication channels after all agents are registered
         self._setup_channels()
 
+    def _setup_channels(self) -> None:
+        if self._message_broker is None:
+            raise ValueError("Message broker is required to setup channels in ProxyAgent")
+
+        # Create proxy->agent channels for distributing state
+        for agent_id in self.registered_agents:
+            agent_channel = ChannelManager.info_channel(
+                self.agent_id, agent_id, self.env_id
+            )
+            self._message_broker.create_channel(agent_channel)
+
+
     def _register_agent(self, agent: Agent) -> None:
         """Register a new agent that can request state.
 
@@ -147,16 +160,6 @@ class ProxyAgent(Agent):
                 self.state_cache["global"]["agent_states"] = {}
             self.state_cache["global"]["agent_states"][agent_id] = agent_state
 
-    def _setup_channels(self) -> None:
-        if self._message_broker is None:
-            raise ValueError("Message broker is required to setup channels in ProxyAgent")
-
-        # Create proxy->agent channels for distributing state
-        for agent_id in self.registered_agents:
-            agent_channel = ChannelManager.info_channel(
-                self.agent_id, agent_id, self.env_id
-            )
-            self._message_broker.create_channel(agent_channel)
 
     # ============================================
     # Core Agent Lifecycle Methods Overrides (see heron/agents/base.py for more details)
@@ -202,14 +205,20 @@ class ProxyAgent(Agent):
 
             # Serialize Observation objects before sending via message
             # In async/distributed systems, objects must be serialized for message passing
-            # Observation.to_dict() converts to {"timestamp": float, "local": dict, "global_info": dict}
             info_type_key = "get_" + info_type + "_response" # e.g. obs -> get_obs_response
 
-            # Convert to dict: Observation objects need .to_dict(), state dicts are already dicts
+            # Special handling for observation requests: send both obs and local_state
             if isinstance(info, Observation):
-                info_data = info.to_dict()
+                # When requesting observation, proxy gives BOTH obs & state (design principle)
+                # Agent asks for obs, but proxy provides both for state syncing
+                local_state = self.get_local_state(sender_id, protocol)
+                info_data = {
+                    "obs": info.to_dict(),
+                    "local_state": local_state
+                }
             else:
-                info_data = info  # Already a dict (from get_global_states or get_local_state)
+                # For other info types (global_state, local_state), send as-is
+                info_data = info
 
             scheduler.schedule_message_delivery(
                 sender_id=recipient_id, # same as self.agent_id

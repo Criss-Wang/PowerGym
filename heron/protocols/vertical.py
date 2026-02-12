@@ -2,10 +2,6 @@
 
 Vertical protocols handle Parent -> Subordinate coordination.
 Each agent owns its own vertical protocol to coordinate its subordinates.
-
-Includes:
-- SetpointProtocol: Centralized control via direct action assignment
-- PriceSignalProtocol: Decentralized coordination via price signals
 """
 
 from typing import Any, Dict, Optional
@@ -16,310 +12,130 @@ from heron.protocols.base import (
     Protocol,
     CommunicationProtocol,
     ActionProtocol,
+    NoCommunication,
 )
 from heron.utils.typing import AgentID
 
 
-class VerticalProtocol(Protocol):
-    """Vertical coordination protocol for hierarchical control.
+class VectorDecompositionActionProtocol(ActionProtocol):
+    """Decomposes coordinator's joint action vector into per-subordinate actions.
 
-    Each agent owns its own vertical protocol to coordinate its subordinates.
-    This is decentralized - each agent independently manages its children.
+    This is the default action protocol for vertical coordination, handling the
+    common case where a coordinator computes a joint action vector and needs to
+    distribute it to subordinates.
+
+    Decomposition Strategy:
+    - If coordinator action is already a dict: use it directly
+    - If coordinator action is a vector: split based on subordinate action dimensions
+    - If coordinator action is None: return None for all subordinates
 
     Example:
-        CoordinatorAgent owns a PriceSignalProtocol to coordinate its FieldAgents.
+        Coordinator computes joint action [0.5, 0.3, 0.2, 0.1]
+        Subordinate 1 has action_dim=2 → receives [0.5, 0.3]
+        Subordinate 2 has action_dim=2 → receives [0.2, 0.1]
     """
-    pass
-
-
-# =============================================================================
-# CENTRALIZED VERTICAL PROTOCOLS (Direct action control)
-# =============================================================================
-
-class SetpointCommunicationProtocol(CommunicationProtocol):
-    """Sends setpoint assignments as informational messages."""
-
-    def __init__(self):
-        self.neighbors = set()
-
-    def compute_coordination_messages(
-        self,
-        sender_state: Any,
-        receiver_states: Dict[AgentID, Any],
-        context: Optional[Dict[str, Any]] = None
-    ) -> Dict[AgentID, Dict[str, Any]]:
-        """Compute setpoint messages."""
-        context = context or {}
-        coordinator_action = context.get("coordinator_action")
-        subordinates = context.get("subordinates", {})
-
-        if coordinator_action is None:
-            return {r_id: {} for r_id in receiver_states}
-
-        # Decompose action into per-subordinate setpoints
-        setpoints = self._decompose_action(coordinator_action, subordinates)
-
-        return {
-            receiver_id: {
-                "type": "setpoint_command",
-                "setpoint": setpoints.get(receiver_id)
-            }
-            for receiver_id in receiver_states
-            if receiver_id in setpoints
-        }
-
-    def _decompose_action(
-        self,
-        action: Any,
-        subordinates: Dict[AgentID, "Agent"]
-    ) -> Dict[AgentID, Any]:
-        """Split action vector into per-subordinate setpoints."""
-        if isinstance(action, dict):
-            return action  # Already per-subordinate
-
-        # Split numpy array based on subordinate action sizes
-        action = np.asarray(action)
-        setpoints = {}
-        offset = 0
-
-        for sub_id, subordinate in subordinates.items():
-            if not hasattr(subordinate, 'action'):
-                continue
-            action_size = subordinate.action.dim_c + subordinate.action.dim_d
-            setpoints[sub_id] = action[offset:offset + action_size]
-            offset += action_size
-
-        return setpoints
-
-
-class CentralizedActionProtocol(ActionProtocol):
-    """Direct action control - coordinator sets subordinate actions."""
 
     def compute_action_coordination(
         self,
         coordinator_action: Optional[Any],
-        subordinate_states: Dict[AgentID, Any],
-        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None
+        subordinate_states: Optional[Dict[AgentID, Any]] = None,
+        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None,
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[AgentID, Any]:
-        """Decompose coordinator action into subordinate actions."""
-        # If coordinator_action is a dict, use it directly
-        if isinstance(coordinator_action, dict):
-            return coordinator_action  # Already per-subordinate
+        """Decompose coordinator action into subordinate actions.
 
-        # For array actions or None, extract from coordination messages (setpoints)
-        if coordination_messages:
-            actions = {}
-            for sub_id, msg in coordination_messages.items():
-                if "setpoint" in msg:
-                    actions[sub_id] = msg["setpoint"]
+        Args:
+            coordinator_action: Joint action from coordinator (vector, dict, or Action object)
+            subordinate_states: Current states of subordinates
+            coordination_messages: Messages from communication protocol
+            context: Additional context (should contain "subordinates" dict)
+
+        Returns:
+            Dict mapping subordinate_id -> action
+        """
+        if coordinator_action is None or subordinate_states is None:
+            return {sub_id: None for sub_id in (subordinate_states or {})}
+
+        # If already per-subordinate dict, use directly
+        if isinstance(coordinator_action, dict):
+            return coordinator_action
+
+        # Get subordinates from context for action dimension info
+        context = context or {}
+        subordinates = context.get("subordinates", {})
+
+        if not subordinates:
+            # No subordinate info - distribute same action to all
+            return {sub_id: coordinator_action for sub_id in subordinate_states}
+
+        # Extract action vector from Action object or array
+        if hasattr(coordinator_action, 'c'):
+            action_vector = coordinator_action.c
+        elif isinstance(coordinator_action, np.ndarray):
+            action_vector = coordinator_action
+        else:
+            # Scalar - broadcast to all subordinates
+            return {sub_id: np.array([coordinator_action]) for sub_id in subordinate_states}
+
+        # Decompose vector by subordinate action dimensions
+        actions = {}
+        offset = 0
+
+        for sub_id in subordinate_states.keys():
+            subordinate = subordinates.get(sub_id)
+            if subordinate and hasattr(subordinate, 'action'):
+                # Get subordinate's action dimension
+                action_dim = subordinate.action.dim_c + subordinate.action.dim_d
+                if offset + action_dim <= len(action_vector):
+                    actions[sub_id] = action_vector[offset:offset + action_dim]
+                    offset += action_dim
+                else:
+                    # Not enough elements - give None
+                    actions[sub_id] = None
+            else:
+                # No action info - give portion assuming equal split
+                sub_ids_list = list(subordinate_states.keys())
+                portion_size = max(1, len(action_vector) // len(sub_ids_list))
+                if offset + portion_size <= len(action_vector):
+                    actions[sub_id] = action_vector[offset:offset + portion_size]
+                    offset += portion_size
                 else:
                     actions[sub_id] = None
-            return actions
 
-        # No action available
-        return {sub_id: None for sub_id in subordinate_states}
+        # Debug output during event-driven (when context has subordinates)
+        if context and "subordinates" in context:
+            action_str = np.array2string(action_vector, precision=4, suppress_small=True)
+            decomp_str = [(sid, np.array2string(a, precision=4, suppress_small=True) if a is not None else "None")
+                         for sid, a in actions.items()]
+            print(f"[VectorDecomposition] {action_str} -> {decomp_str}")
+
+        return actions
 
 
-class SetpointProtocol(VerticalProtocol):
-    """Setpoint-based coordination - parent assigns direct setpoints.
+class VerticalProtocol(Protocol):
+    """Default vertical coordination protocol for hierarchical control.
 
-    Communication: Send setpoint assignments (informational)
-    Action: Centralized (coordinator directly controls subordinates)
+    Default behavior:
+    - Communication: No communication (subordinates act based on actions only)
+    - Action: Vector decomposition (split coordinator's joint action)
 
-    This protocol works in both centralized and distributed modes:
-    - Centralized: Direct action application via subordinate.act()
-    - Distributed: Actions sent via message broker
+    This provides sensible default behavior for hierarchical coordination where
+    the coordinator computes a joint action vector and distributes portions to
+    each subordinate based on their action dimensions.
 
     Example:
         Use with a coordinator for centralized control::
 
             from heron.agents import CoordinatorAgent
-            from heron.protocols import SetpointProtocol
+            from heron.protocols import VerticalProtocol
 
-            # Coordinator with setpoint-based control
             coordinator = CoordinatorAgent(
                 agent_id="grid_operator",
-                protocol=SetpointProtocol()
+                protocol=VerticalProtocol()
             )
 
-            # Coordinator computes joint action and assigns to subordinates
-            joint_action = np.array([0.5, 0.3, 0.2])  # Power setpoints
-            coordinator.act(obs, upstream_action=joint_action)
-            # Each subordinate receives its portion of the joint action
-    """
-
-    def __init__(self):
-        super().__init__(
-            communication_protocol=SetpointCommunicationProtocol(),
-            action_protocol=CentralizedActionProtocol()
-        )
-
-
-# =============================================================================
-# DECENTRALIZED VERTICAL PROTOCOLS (Indirect coordination via signals)
-# =============================================================================
-
-class PriceCommunicationProtocol(CommunicationProtocol):
-    """Broadcasts price signals to subordinates."""
-
-    def __init__(self, initial_price: float = 50.0):
-        self.price = initial_price
-        self.neighbors = set()
-
-    def compute_coordination_messages(
-        self,
-        sender_state: Any,
-        receiver_states: Dict[AgentID, Any],
-        context: Optional[Dict[str, Any]] = None
-    ) -> Dict[AgentID, Dict[str, Any]]:
-        """Compute price messages to broadcast."""
-        context = context or {}
-
-        # Extract price from coordinator action if available
-        coordinator_action = context.get("coordinator_action")
-        if coordinator_action is not None:
-            if isinstance(coordinator_action, dict):
-                self.price = coordinator_action.get("price", self.price)
-            else:
-                try:
-                    self.price = float(coordinator_action)
-                except (TypeError, ValueError):
-                    pass  # Keep current price
-
-        # Broadcast same price to all subordinates
-        return {
-            receiver_id: {
-                "type": "price_signal",
-                "price": self.price
-            }
-            for receiver_id in receiver_states
-        }
-
-
-class DecentralizedActionProtocol(ActionProtocol):
-    """No direct action control - subordinates act independently based on messages."""
-
-    def compute_action_coordination(
-        self,
-        coordinator_action: Optional[Any],
-        subordinate_states: Dict[AgentID, Any],
-        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None
-    ) -> Dict[AgentID, Any]:
-        """Return empty actions - subordinates decide independently."""
-        return {sub_id: None for sub_id in subordinate_states}
-
-
-class PriceSignalProtocol(VerticalProtocol):
-    """Price-based coordination via marginal price signals.
-
-    Communication: Broadcast price signals
-    Action: Decentralized (subordinates respond to prices independently)
-
-    Attributes:
-        price: Current price signal value
-
-    Example:
-        Use for decentralized coordination via price signals::
-
-            from heron.protocols import PriceSignalProtocol
-
-            # Initialize with starting price
-            protocol = PriceSignalProtocol(initial_price=50.0)
-
-            # Update price based on supply/demand
-            protocol.price = 75.0  # High demand -> higher price
-
-            # Subordinates receive price and decide independently
-            # e.g., generators increase output, storage discharges
-    """
-
-    def __init__(self, initial_price: float = 50.0):
-        """Initialize price signal protocol.
-
-        Args:
-            initial_price: Initial price value
-        """
-        super().__init__(
-            communication_protocol=PriceCommunicationProtocol(initial_price),
-            action_protocol=DecentralizedActionProtocol()
-        )
-
-    @property
-    def price(self):
-        """Get current price."""
-        return self.communication_protocol.price
-
-    @price.setter
-    def price(self, value):
-        """Set current price."""
-        self.communication_protocol.price = value
-
-
-# =============================================================================
-# SYSTEM-LEVEL VERTICAL PROTOCOLS (For SystemAgent -> Coordinator coordination)
-# =============================================================================
-
-class SystemCommunicationProtocol(CommunicationProtocol):
-    """Sends system-wide signals to coordinators.
-
-    Used by SystemAgent to send directives to CoordinatorAgents.
-    Messages include system-level commands like frequency regulation signals,
-    emergency load shedding commands, or market clearing results.
-    """
-
-    def __init__(self):
-        self.neighbors = set()
-
-    def compute_coordination_messages(
-        self,
-        sender_state: Any,
-        receiver_states: Dict[AgentID, Any],
-        context: Optional[Dict[str, Any]] = None
-    ) -> Dict[AgentID, Dict[str, Any]]:
-        """Compute system-wide coordination messages.
-
-        Args:
-            sender_state: System agent's state
-            receiver_states: Dict of coordinator states
-            context: Context with system action and metadata
-
-        Returns:
-            Dict mapping coordinator IDs to messages
-        """
-        context = context or {}
-        system_action = context.get("coordinator_action")
-
-        return {
-            receiver_id: {
-                "type": "system_directive",
-                "directive": system_action,
-                "timestamp": context.get("timestamp"),
-            }
-            for receiver_id in receiver_states
-        }
-
-
-class SystemProtocol(VerticalProtocol):
-    """System-level coordination protocol.
-
-    Used by SystemAgent to coordinate CoordinatorAgents.
-    Default behavior sends system directives and applies centralized actions.
-
-    Example:
-        Use with a system agent for centralized control::
-
-            from heron.agents import SystemAgent
-            from heron.protocols import SystemProtocol
-
-            # System agent with system protocol
-            system = SystemAgent(
-                agent_id="grid_system",
-                protocol=SystemProtocol()
-            )
-
-            # System computes joint action and distributes to coordinators
-            joint_action = np.array([0.5, 0.3, 0.2])  # Per-coordinator signals
-            system.act(obs, upstream_action=joint_action)
+            # Coordinator policy outputs joint action
+            # Protocol automatically decomposes and distributes to subordinates
     """
 
     def __init__(
@@ -327,13 +143,13 @@ class SystemProtocol(VerticalProtocol):
         communication_protocol: Optional[CommunicationProtocol] = None,
         action_protocol: Optional[ActionProtocol] = None
     ):
-        """Initialize system protocol.
+        """Initialize vertical protocol.
 
         Args:
-            communication_protocol: Protocol for message computation
-            action_protocol: Protocol for action coordination
+            communication_protocol: Protocol for message computation (default: NoCommunication)
+            action_protocol: Protocol for action coordination (default: VectorDecompositionActionProtocol)
         """
         super().__init__(
-            communication_protocol=communication_protocol or SystemCommunicationProtocol(),
-            action_protocol=action_protocol or CentralizedActionProtocol()
+            communication_protocol=communication_protocol or NoCommunication(),
+            action_protocol=action_protocol or VectorDecompositionActionProtocol()
         )

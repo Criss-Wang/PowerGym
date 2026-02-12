@@ -77,8 +77,7 @@ class CoordinatorAgent(Agent):
     # ============================================
     # Core Lifecycle Methods Overrides (see heron/agents/base.py for more details)
     # ============================================
-    def execute(self, actions: Dict[AgentID, Any], proxy: Optional[ProxyAgent] = None) -> None:
-        self.act(actions, proxy)
+    # execute() inherited from base class - uses default implementation
 
     def tick(
         self,
@@ -94,11 +93,14 @@ class CoordinatorAgent(Agent):
         """
         super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
 
-        # Schedule subordinate ticks
+        # Schedule subordinate ticks -> intiate action process
         for subordinate_id in self.subordinates:
             scheduler.schedule_agent_tick(subordinate_id)
         
-        if self.policy:
+        if self._upstream_action:
+            print(f"{self} received upstream action: {self._upstream_action}")
+            self.compute_action(self._upstream_action, scheduler)
+        elif self.policy:
             # Compute & execute self action
             # Ask proxy_agent for global state to compute local action
             scheduler.schedule_message_delivery(
@@ -108,7 +110,7 @@ class CoordinatorAgent(Agent):
                 delay=self._tick_config.msg_delay,
             )
         else:
-            print(f"{self} doesn't act iself, becase there's no action policy")
+            print(f"{self} doesn't act itself, because there's no action policy")
 
     # ============================================
     # Custom Handlers for Event-Driven Execution
@@ -119,13 +121,11 @@ class CoordinatorAgent(Agent):
 
     @Agent.handler("action_effect")
     def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
-        self.apply_action()
-        scheduler.schedule_message_delivery(
-            sender_id=self.agent_id,
-            recipient_id=PROXY_AGENT_ID,
-            message={"set_state": "local", "body": self.state.to_dict(include_metadata=True)},
-            delay=self._tick_config.msg_delay,
-        )
+        """Coordinator actions don't update local state (they coordinate subordinates).
+
+        No-op handler to handle action_effect events scheduled by compute_action.
+        """
+        pass
 
     @Agent.handler("message_delivery")
     def message_delivery_handler(self, event: Event, scheduler: EventScheduler) -> None:
@@ -138,7 +138,19 @@ class CoordinatorAgent(Agent):
         if "get_obs_response" in message_content:
             assert isinstance(message_content, dict)
             response_data = message_content["get_obs_response"]
-            obs = response_data[MSG_KEY_BODY]
+            body = response_data[MSG_KEY_BODY]
+
+            # Proxy sends both obs and local_state (design principle: agent asks for obs, proxy gives both)
+            obs_dict = body["obs"]
+            local_state = body["local_state"]
+
+            # Deserialize observation dict back to Observation object
+            obs = Observation.from_dict(obs_dict)
+
+            # Sync state first (proxy gives both obs & state)
+            self.sync_state_from_observed(local_state)
+
+            # Compute action - policy decides which parts of observation to use
             self.compute_action(obs, scheduler)
         elif "get_local_state_response" in message_content:
             response_data = message_content["get_local_state_response"]

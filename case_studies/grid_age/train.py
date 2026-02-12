@@ -7,7 +7,7 @@ for training microgrid control policies.
 from typing import Dict
 import numpy as np
 
-from case_studies.grid_age.envs import MicrogridEnv
+from case_studies.grid_age.envs import create_hierarchical_env
 from heron.core.policies import Policy, obs_to_vector, vector_to_action
 from heron.core.observation import Observation
 
@@ -137,7 +137,7 @@ class NeuralPolicy(Policy):
 
 
 def train_microgrid_ctde(
-    env: MicrogridEnv,
+    env,  # HierarchicalMicrogridEnv
     num_episodes: int = 100,
     steps_per_episode: int = 24,
     gamma: float = 0.99,
@@ -146,8 +146,12 @@ def train_microgrid_ctde(
 ) -> Dict[str, NeuralPolicy]:
     """Train microgrid policies using CTDE with policy gradient.
 
+    Can train either:
+    - Device-level policies (one policy per device agent)
+    - Coordinator-level policies (one policy per microgrid coordinator)
+
     Args:
-        env: MicrogridEnv instance
+        env: HierarchicalMicrogridEnv instance
         num_episodes: Number of training episodes
         steps_per_episode: Steps per episode (24 for 24-hour episodes)
         gamma: Discount factor
@@ -292,9 +296,9 @@ def train_microgrid_ctde(
 
 def main():
     """Main training function."""
-    # Create environment
-    print("Creating microgrid environment...")
-    env = MicrogridEnv(
+    # Create environment with hierarchical agents
+    print("Creating hierarchical microgrid environment...")
+    env = create_hierarchical_env(
         num_microgrids=3,
         episode_steps=24,
         dt=1.0,

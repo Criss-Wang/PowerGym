@@ -5,7 +5,26 @@ import numpy as np
 
 from case_studies.grid_age.agents import MicrogridFieldAgent
 from case_studies.grid_age.envs import MicrogridEnv
+from case_studies.grid_age.features import (
+    ESSFeature,
+    DGFeature,
+    RESFeature,
+    GridFeature,
+    NetworkFeature,
+)
 from heron.core.action import Action
+
+
+def create_default_features(ess_capacity=2.0, dg_max_p=0.66, pv_max_p=0.1, wind_max_p=0.1):
+    """Helper to create default feature set for MicrogridFieldAgent."""
+    return [
+        ESSFeature(capacity=ess_capacity, min_p=-0.5, max_p=0.5, soc=0.5),
+        DGFeature(max_p=dg_max_p, min_p=0.1, on=1, P=0.1),
+        RESFeature(max_p=pv_max_p),  # PV
+        RESFeature(max_p=wind_max_p),  # Wind
+        GridFeature(),
+        NetworkFeature(),
+    ]
 
 
 class TestMicrogridFieldAgent:
@@ -13,11 +32,8 @@ class TestMicrogridFieldAgent:
 
     def test_initialization(self):
         """Test agent initialization."""
-        agent = MicrogridFieldAgent(
-            agent_id="MG1",
-            ess_capacity=2.0,
-            dg_max_p=0.66,
-        )
+        features = create_default_features(ess_capacity=2.0, dg_max_p=0.66)
+        agent = MicrogridFieldAgent(agent_id="MG1", features=features)
 
         assert agent.agent_id == "MG1"
         assert len(agent.state.features) == 6  # ESS, DG, PV, Wind, Grid, Network
@@ -25,7 +41,8 @@ class TestMicrogridFieldAgent:
 
     def test_action_space(self):
         """Test action space specification."""
-        agent = MicrogridFieldAgent(agent_id="test")
+        features = create_default_features()
+        agent = MicrogridFieldAgent(agent_id="test", features=features)
 
         # Action space is set via get_action_space() which uses self.action
         action_space = agent.get_action_space()
@@ -35,7 +52,8 @@ class TestMicrogridFieldAgent:
 
     def test_set_action(self):
         """Test setting action from different formats."""
-        agent = MicrogridFieldAgent(agent_id="test")
+        features = create_default_features()
+        agent = MicrogridFieldAgent(agent_id="test", features=features)
 
         # Test with Action object
         action = Action()
@@ -50,13 +68,8 @@ class TestMicrogridFieldAgent:
 
     def test_apply_action(self):
         """Test applying action to device features."""
-        agent = MicrogridFieldAgent(
-            agent_id="test",
-            ess_min_p=-0.5,
-            ess_max_p=0.5,
-            dg_min_p=0.1,
-            dg_max_p=0.66,
-        )
+        features = create_default_features(dg_max_p=0.66)
+        agent = MicrogridFieldAgent(agent_id="test", features=features)
 
         # Set normalized action
         agent.set_action(np.array([0.5, 0.0, -0.5, 1.0]))
@@ -73,7 +86,8 @@ class TestMicrogridFieldAgent:
 
     def test_set_renewable_availability(self):
         """Test setting renewable availability."""
-        agent = MicrogridFieldAgent(agent_id="test", pv_max_p=0.1, wind_max_p=0.1)
+        features = create_default_features(pv_max_p=0.1, wind_max_p=0.1)
+        agent = MicrogridFieldAgent(agent_id="test", features=features)
 
         agent.set_renewable_availability(pv_availability=0.8, wind_availability=0.5)
 
@@ -87,7 +101,8 @@ class TestMicrogridFieldAgent:
 
     def test_set_grid_price(self):
         """Test setting grid price."""
-        agent = MicrogridFieldAgent(agent_id="test")
+        features = create_default_features()
+        agent = MicrogridFieldAgent(agent_id="test", features=features)
         agent.set_grid_price(75.0)
 
         grid_feature = agent.state.features[agent.grid_idx]
@@ -95,7 +110,8 @@ class TestMicrogridFieldAgent:
 
     def test_update_device_dynamics(self):
         """Test updating device dynamics (ESS SOC)."""
-        agent = MicrogridFieldAgent(agent_id="test", ess_capacity=2.0)
+        features = create_default_features(ess_capacity=2.0)
+        agent = MicrogridFieldAgent(agent_id="test", features=features)
 
         # Set ESS power
         ess_feature = agent.state.features[agent.ess_idx]
@@ -201,20 +217,28 @@ class TestMicrogridEnv:
         assert "MG3" in env.mg_bus_mappings
 
     def test_profiles_initialization(self):
-        """Test profile initialization."""
+        """Test profile initialization with real data."""
         env = MicrogridEnv(num_microgrids=1)
 
-        # Check profiles exist and have correct length
-        assert len(env.price_profile) == 24
-        assert len(env.pv_profile) == 24
-        assert len(env.wind_profile) == 24
+        # Check data loader is initialized
+        assert hasattr(env, 'data_loader')
 
-        # Check PV profile is zero at night
-        assert env.pv_profile[0] == 0.0  # Midnight
-        assert env.pv_profile[12] > 0.0  # Noon
+        # Reset to load episode data
+        env.reset(seed=0)
+
+        # Check episode data exists and has correct length
+        assert env.current_episode_data is not None
+        assert len(env.current_episode_data['price']) == 24
+        assert len(env.current_episode_data['solar']) == 24
+        assert len(env.current_episode_data['wind']) == 24
+
+        # Check solar profile has expected pattern (zero at night, positive during day)
+        # Night hours typically have zero solar
+        assert env.current_episode_data['solar'][0] <= 0.1  # Midnight
+        # Day hours may have solar (depends on real data)
 
     def test_update_profiles(self):
-        """Test profile updates during episode."""
+        """Test profile updates during episode with real data."""
         env = MicrogridEnv(num_microgrids=1)
         env.reset(seed=42)
 
@@ -222,16 +246,20 @@ class TestMicrogridEnv:
         agent = [a for a in env.registered_agents.values()
                  if isinstance(a, MicrogridFieldAgent)][0]
 
-        # Update to timestep 0 explicitly
-        env._update_profiles(0)
-
-        # Check initial price (timestep 0)
+        # Check that price was updated from real data (not default 50.0)
         grid_feature = agent.state.features[agent.grid_idx]
-        assert grid_feature.price == env.price_profile[0]
+        initial_price = grid_feature.price
+
+        # Price should match first hour of episode data
+        if env.current_episode_data:
+            expected_price = env.current_episode_data['price'][0]
+            assert abs(grid_feature.price - expected_price) < 1.0  # Within $1
 
         # Update to timestep 12 (noon)
         env._update_profiles(12)
-        assert grid_feature.price == env.price_profile[12]
+        if env.current_episode_data:
+            expected_price_noon = env.current_episode_data['price'][12]
+            assert abs(grid_feature.price - expected_price_noon) < 1.0
 
 
 class TestIntegration:

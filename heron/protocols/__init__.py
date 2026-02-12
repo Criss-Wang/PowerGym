@@ -5,18 +5,14 @@ This module provides protocol implementations for agent coordination:
 Base Protocols:
 - Protocol: Abstract base for all protocols
 - NoProtocol: No-op protocol (agents act independently)
+- CommunicationProtocol: Abstract base for communication protocols
+- ActionProtocol: Abstract base for action coordination protocols
 
 Vertical Protocols (hierarchical coordination):
-- VerticalProtocol: Base for top-down coordination
-- SetpointProtocol: Setpoint-based control
-- PriceSignalProtocol: Price signal-based coordination
-- SystemProtocol: System-level coordination (L3 -> L2)
+- VerticalProtocol: Default vertical protocol for parent->child coordination
 
 Horizontal Protocols (peer coordination):
-- HorizontalProtocol: Base for peer-to-peer coordination
-- PeerToPeerTradingProtocol: P2P trading between agents
-- ConsensusProtocol: Distributed consensus
-- NoHorizontalProtocol: No horizontal coordination
+- HorizontalProtocol: Default horizontal protocol for peer-to-peer coordination
 """
 
 from heron.protocols.base import (
@@ -27,27 +23,8 @@ from heron.protocols.base import (
     NoCommunication,
     NoActionCoordination,
 )
-from heron.protocols.vertical import (
-    VerticalProtocol,
-    SetpointProtocol,
-    PriceSignalProtocol,
-    SetpointCommunicationProtocol,
-    CentralizedActionProtocol,
-    PriceCommunicationProtocol,
-    DecentralizedActionProtocol,
-    SystemProtocol,
-    SystemCommunicationProtocol,
-)
-from heron.protocols.horizontal import (
-    HorizontalProtocol,
-    PeerToPeerTradingProtocol,
-    ConsensusProtocol,
-    NoHorizontalProtocol,
-    TradingCommunicationProtocol,
-    TradingActionProtocol,
-    ConsensusCommunicationProtocol,
-    ConsensusActionProtocol,
-)
+from heron.protocols.vertical import VerticalProtocol
+from heron.protocols.horizontal import HorizontalProtocol
 
 __all__ = [
     # Base
@@ -59,21 +36,6 @@ __all__ = [
     "NoActionCoordination",
     # Vertical
     "VerticalProtocol",
-    "SetpointProtocol",
-    "PriceSignalProtocol",
-    "SetpointCommunicationProtocol",
-    "CentralizedActionProtocol",
-    "PriceCommunicationProtocol",
-    "DecentralizedActionProtocol",
-    "SystemProtocol",
-    "SystemCommunicationProtocol",
     # Horizontal
     "HorizontalProtocol",
-    "PeerToPeerTradingProtocol",
-    "ConsensusProtocol",
-    "NoHorizontalProtocol",
-    "TradingCommunicationProtocol",
-    "TradingActionProtocol",
-    "ConsensusCommunicationProtocol",
-    "ConsensusActionProtocol",
 ]

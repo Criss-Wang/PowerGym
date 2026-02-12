@@ -51,7 +51,14 @@ class Policy(ABC):
     For vector-based policies (most RL algorithms), subclasses can override
     _compute_action_vector() instead of forward() to get automatic observation
     extraction and action conversion.
+
+    Attributes:
+        observation_mode: Controls which observation components to use:
+            - "full": Use both local and global (default, for centralized training)
+            - "local": Use only local observations (for decentralized policies)
+            - "global": Use only global information
     """
+    observation_mode: str = "full"  # Default to full observations
 
     @abstractmethod
     def forward(self, observation: Observation) -> Optional[Action]:
@@ -79,6 +86,11 @@ class Policy(ABC):
         This is a common helper for policies that work with vector observations.
         Handles multiple formats for compatibility between training and deployment modes.
 
+        Uses self.observation_mode to determine which observation components to extract:
+        - "full": local + global (default)
+        - "local": local only (for decentralized policies)
+        - "global": global only
+
         Args:
             observation: Observation in various formats (Observation object, dict, or array)
             obs_dim: Expected observation dimension
@@ -87,7 +99,13 @@ class Policy(ABC):
             Numpy array of shape (obs_dim,)
         """
         if isinstance(observation, Observation):
-            return observation.vector()
+            # Use appropriate vectorization based on observation_mode
+            if self.observation_mode == "local":
+                return observation.local_vector()
+            elif self.observation_mode == "global":
+                return observation.global_vector()
+            else:  # "full" or any other value
+                return observation.vector()
         elif isinstance(observation, dict):
             # Event-driven mode: observation from proxy.get_observation()
             # Structure: {"local": {"FeatureName": array([...])}, "global_info": ...}

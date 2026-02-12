@@ -44,17 +44,8 @@ from heron.envs.archive.adapters import (
 
 # Protocols
 from heron.protocols.base import Protocol, NoProtocol
-from heron.protocols.vertical import (
-    VerticalProtocol,
-    SetpointProtocol,
-    PriceSignalProtocol,
-)
-from heron.protocols.horizontal import (
-    HorizontalProtocol,
-    PeerToPeerTradingProtocol,
-    ConsensusProtocol,
-    NoHorizontalProtocol,
-)
+from heron.protocols.vertical import VerticalProtocol
+from heron.protocols.horizontal import HorizontalProtocol
 
 # Messaging
 from heron.messaging import Message, MessageType, MessageBroker
@@ -96,12 +87,7 @@ __all__ = [
     "Protocol",
     "NoProtocol",
     "VerticalProtocol",
-    "SetpointProtocol",
-    "PriceSignalProtocol",
     "HorizontalProtocol",
-    "PeerToPeerTradingProtocol",
-    "ConsensusProtocol",
-    "NoHorizontalProtocol",
     # Messaging
     "Message",
     "MessageType",
