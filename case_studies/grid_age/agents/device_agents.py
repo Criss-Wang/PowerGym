@@ -93,8 +93,8 @@ class ESSFieldAgent(FieldAgent):
             P: Active power setpoint (MW). If None, computed from current action.
             **kwargs: Additional state parameters
         """
-        power_feature = self.state.features[0]  # PowerFeature
-        soc_feature = self.state.features[1]     # SOCFeature
+        power_feature = self.state.features["PowerFeature"]
+        soc_feature = self.state.features["SOCFeature"]
 
         if P is None:
             # Compute P from action if not provided
@@ -135,7 +135,7 @@ class ESSFieldAgent(FieldAgent):
         cost = abs(power) * 0.1 * self.dt
 
         # SOC violations
-        soc_feature = self.state.features[1]
+        soc_feature = self.state.features["SOCFeature"]
         safety_penalty = 0.0
         if soc < soc_feature.min_soc:
             safety_penalty = (soc_feature.min_soc - soc) * 100
@@ -213,8 +213,8 @@ class DGFieldAgent(FieldAgent):
             P: Active power setpoint (MW). If None, computed from current action.
             **kwargs: Additional state parameters
         """
-        power_feature = self.state.features[0]
-        uc_feature = self.state.features[1]
+        power_feature = self.state.features["PowerFeature"]
+        uc_feature = self.state.features["UnitCommitmentFeature"]
 
         if P is None:
             # Compute P from action if not provided
@@ -241,7 +241,7 @@ class DGFieldAgent(FieldAgent):
 
         # Fuel cost
         if on and power > 0:
-            cost_feature = self.state.features[2]
+            cost_feature = self.state.features["CostFeature"]
             cost = cost_feature.compute_cost(power, self.dt)
         else:
             cost = 0.0
@@ -313,8 +313,8 @@ class RESFieldAgent(FieldAgent):
             P: Active power setpoint (MW). If None and availability provided, computed from availability.
             **kwargs: Additional state parameters
         """
-        power_feature = self.state.features[0]
-        avail_feature = self.state.features[1]
+        power_feature = self.state.features["PowerFeature"]
+        avail_feature = self.state.features["AvailabilityFeature"]
 
         # Update reactive power
         if Q is None:

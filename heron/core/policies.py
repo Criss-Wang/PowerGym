@@ -154,35 +154,3 @@ class Policy(ABC):
         )
         action.set_values(action_vec)
         return action
-
-
-class RandomPolicy(Policy):
-    """Random policy that samples uniformly from action space.
-
-    Useful for testing and baseline comparisons.
-    """
-
-    def __init__(self, action_space, seed=None):
-        """Initialize random policy.
-
-        Args:
-            action_space: Gymnasium action space
-            seed: Optional random seed for reproducibility
-        """
-        self.action_space = action_space
-        if seed is not None:
-            self.action_space.seed(seed)
-        # Create Action template from gym space
-        self._action = Action.from_gym_space(action_space)
-
-    def forward(self, observation: Observation) -> Optional[Action]:
-        """Sample random action from action space.
-
-        Args:
-            observation: Agent observation (ignored)
-
-        Returns:
-            Action object with randomly sampled values
-        """
-        self._action.sample()
-        return self._action.copy()

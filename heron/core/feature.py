@@ -1,17 +1,3 @@
-"""Base abstract class for feature providers.
-
-Feature providers represent observable/controllable attributes of agents
-(e.g., internal state, sensor readings, parameters).
-
-The HERON framework supports 4 visibility levels:
-- public: Visible to all agents
-- owner: Only visible to the owning agent
-- upper_level: Visible to agents one level above in hierarchy
-- system: Only visible to system-level (L3) agents
-"""
-
-"""Feature Provider with auto-dataclass via __init_subclass__."""
-
 from dataclasses import dataclass, fields, asdict, MISSING
 from typing import Any, ClassVar, Dict, List, Sequence, Type, TypeVar
 import numpy as np
@@ -38,14 +24,27 @@ class FeatureMeta(type):
 
 class FeatureProvider(metaclass=FeatureMeta):
     """Base class for feature providers. Subclasses are auto-converted to dataclasses."""
-    
+
     visibility: ClassVar[Sequence[str]]
-    feature_name: ClassVar[str]
+    _class_feature_name: ClassVar[str]  # Class-level default name
+    _instance_feature_name: str = None  # Instance-level override (set via set_feature_name)
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        cls.feature_name = cls.__name__
+        cls._class_feature_name = cls.__name__
         dataclass(cls)
+
+    @property
+    def feature_name(self) -> str:
+        """Get feature name. Instance name takes precedence over class name."""
+        if self._instance_feature_name is not None:
+            return self._instance_feature_name
+        return self._class_feature_name
+
+    def set_feature_name(self, name: str) -> "FeatureProvider":
+        """Set a custom instance-level feature name. Returns self for chaining."""
+        self._instance_feature_name = name
+        return self
 
     def vector(self) -> np.ndarray:
         return np.array(

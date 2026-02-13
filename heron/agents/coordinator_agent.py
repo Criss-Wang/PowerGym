@@ -62,7 +62,7 @@ class CoordinatorAgent(Agent):
         return CoordinatorAgentState(
             owner_id=self.agent_id,
             owner_level=COORDINATOR_LEVEL,
-            features=features
+            features={f.feature_name: f for f in features}
         )
 
     def init_action(self, features: List[FeatureProvider] = []) -> Action:

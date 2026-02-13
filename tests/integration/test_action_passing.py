@@ -135,11 +135,11 @@ class DeviceAgent(FieldAgent):
 
     @property
     def power(self) -> float:
-        return self.state.features[0].power
+        return self.state.features["DevicePowerFeature"].power
 
     @property
     def capacity(self) -> float:
-        return self.state.features[0].capacity
+        return self.state.features["DevicePowerFeature"].capacity
 
     def init_action(self, features: List[FeatureProvider] = []):
         """Initialize action (power control)."""
@@ -182,7 +182,7 @@ class DeviceAgent(FieldAgent):
         # Action directly sets power (not incremental change)
         # This makes it easier to learn: reward = -power^2, and action controls power directly
         new_power = self.action.c[0] * 0.5  # Scale action to reasonable power range
-        self.state.features[0].set_values(power=new_power)
+        self.state.features["DevicePowerFeature"].set_values(power=new_power)
 
     def apply_action(self):
         self.set_state()

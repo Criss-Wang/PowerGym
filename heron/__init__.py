@@ -26,7 +26,7 @@ from heron.core.action import Action
 from heron.core.observation import Observation
 from heron.core.state import State, FieldAgentState, CoordinatorAgentState
 from heron.core.feature import FeatureProvider
-from heron.core.policies import Policy, RandomPolicy
+from heron.core.policies import Policy
 
 # Agents
 from heron.agents.base import Agent
@@ -71,7 +71,6 @@ __all__ = [
     "CoordinatorAgentState",
     "FeatureProvider",
     "Policy",
-    "RandomPolicy",
     # Agents
     "Agent",
     "FieldAgent",

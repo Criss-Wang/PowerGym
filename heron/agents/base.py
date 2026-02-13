@@ -352,19 +352,19 @@ class Agent(ABC):
             return
 
         for feature_name, feature_data in observed_state.items():
-            # Find matching feature in our state
-            for feature in self.state.features:
-                if feature.feature_name == feature_name:
-                    if isinstance(feature_data, dict):
-                        # Direct field-level update
-                        feature.set_values(**feature_data)
-                    elif isinstance(feature_data, np.ndarray):
-                        # Vector format - reconstruct field values using feature.names()
-                        field_names = feature.names()
-                        if len(field_names) == len(feature_data):
-                            updates = {name: float(val) for name, val in zip(field_names, feature_data)}
-                            feature.set_values(**updates)
-                    break
+            # O(1) lookup by feature name
+            if feature_name not in self.state.features:
+                continue
+            feature = self.state.features[feature_name]
+            if isinstance(feature_data, dict):
+                # Direct field-level update
+                feature.set_values(**feature_data)
+            elif isinstance(feature_data, np.ndarray):
+                # Vector format - reconstruct field values using feature.names()
+                field_names = feature.names()
+                if len(field_names) == len(feature_data):
+                    updates = {name: float(val) for name, val in zip(field_names, feature_data)}
+                    feature.set_values(**updates)
 
     # ============================================
     # Event-Driven Execution via scheduler

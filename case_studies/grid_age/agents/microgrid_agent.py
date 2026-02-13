@@ -84,12 +84,28 @@ class MicrogridFieldAgent(FieldAgent):
                 f"(ESS, DG, PV, Wind, Grid, Network). Got {len(features) if features else 0}"
             )
 
+        # Set unique feature names for dict-based access
+        # Expected order: [ESS, DG, PV, Wind, Grid, Network]
+        self.ess_key = "ESS"
+        self.dg_key = "DG"
+        self.pv_key = "PV"
+        self.wind_key = "Wind"
+        self.grid_key = "Grid"
+        self.network_key = "Network"
+
+        features[0].set_feature_name(self.ess_key)
+        features[1].set_feature_name(self.dg_key)
+        features[2].set_feature_name(self.pv_key)
+        features[3].set_feature_name(self.wind_key)
+        features[4].set_feature_name(self.grid_key)
+        features[5].set_feature_name(self.network_key)
+
         # Extract denormalization parameters from features
         # These are used in apply_action() to convert normalized actions to physical units
-        ess_feature = features[0]  # Assume first is ESS
-        dg_feature = features[1]   # Assume second is DG
-        pv_feature = features[2]   # Assume third is PV
-        wind_feature = features[3] # Assume fourth is Wind
+        ess_feature = features[0]
+        dg_feature = features[1]
+        pv_feature = features[2]
+        wind_feature = features[3]
 
         self.ess_min_p = getattr(ess_feature, 'min_p', -0.5)
         self.ess_max_p = getattr(ess_feature, 'max_p', 0.5)
@@ -110,14 +126,6 @@ class MicrogridFieldAgent(FieldAgent):
             policy=policy,
             protocol=protocol,
         )
-
-        # Store feature indices for easy access
-        self.ess_idx = 0
-        self.dg_idx = 1
-        self.pv_idx = 2
-        self.wind_idx = 3
-        self.grid_idx = 4
-        self.network_idx = 5
 
     def init_action(self, features: List[FeatureProvider] = []) -> Action:
         """Initialize action space.
@@ -197,12 +205,12 @@ class MicrogridFieldAgent(FieldAgent):
             **kwargs: Additional state parameters
         """
         # Get device features
-        ess_feature = self.state.features[self.ess_idx]
-        dg_feature = self.state.features[self.dg_idx]
-        pv_feature = self.state.features[self.pv_idx]
-        wind_feature = self.state.features[self.wind_idx]
-        grid_feature = self.state.features[self.grid_idx]
-        network_feature = self.state.features[self.network_idx]
+        ess_feature = self.state.features[self.ess_key]
+        dg_feature = self.state.features[self.dg_key]
+        pv_feature = self.state.features[self.pv_key]
+        wind_feature = self.state.features[self.wind_key]
+        grid_feature = self.state.features[self.grid_key]
+        network_feature = self.state.features[self.network_key]
 
         # Compute power setpoints from actions if not provided
         if P_ess is None or P_dg is None or Q_pv is None or Q_wind is None:
@@ -321,23 +329,23 @@ class MicrogridFieldAgent(FieldAgent):
 
         # DG fuel cost
         if dg_on and dg_power > 0:
-            dg_feature = self.state.features[self.dg_idx]
+            dg_feature = self.state.features[self.dg_key]
             dg_cost = dg_feature.compute_fuel_cost(self.dt)
         else:
             dg_cost = 0.0
 
         # Grid energy cost
-        grid_feature = self.state.features[self.grid_idx]
+        grid_feature = self.state.features[self.grid_key]
         grid_cost = grid_feature.compute_energy_cost(self.dt)
 
         total_cost = ess_cost + dg_cost + grid_cost
 
         # Compute safety violations
-        network_feature = self.state.features[self.network_idx]
+        network_feature = self.state.features[self.network_key]
         safety_penalty = network_feature.compute_safety_penalty()
 
         # SOC bound violations
-        ess_feature = self.state.features[self.ess_idx]
+        ess_feature = self.state.features[self.ess_key]
         if ess_soc < ess_feature.min_soc:
             safety_penalty += (ess_feature.min_soc - ess_soc) * 100
         elif ess_soc > ess_feature.max_soc:
@@ -383,26 +391,26 @@ class MicrogridFieldAgent(FieldAgent):
         """
         return {
             "ess": {
-                "P": self.state.features[self.ess_idx].P,
-                "Q": self.state.features[self.ess_idx].Q,
-                "soc": self.state.features[self.ess_idx].soc,
+                "P": self.state.features[self.ess_key].P,
+                "Q": self.state.features[self.ess_key].Q,
+                "soc": self.state.features[self.ess_key].soc,
             },
             "dg": {
-                "P": self.state.features[self.dg_idx].P,
-                "Q": self.state.features[self.dg_idx].Q,
-                "on": self.state.features[self.dg_idx].on,
+                "P": self.state.features[self.dg_key].P,
+                "Q": self.state.features[self.dg_key].Q,
+                "on": self.state.features[self.dg_key].on,
             },
             "pv": {
-                "P": self.state.features[self.pv_idx].P,
-                "Q": self.state.features[self.pv_idx].Q,
+                "P": self.state.features[self.pv_key].P,
+                "Q": self.state.features[self.pv_key].Q,
             },
             "wind": {
-                "P": self.state.features[self.wind_idx].P,
-                "Q": self.state.features[self.wind_idx].Q,
+                "P": self.state.features[self.wind_key].P,
+                "Q": self.state.features[self.wind_key].Q,
             },
             "grid": {
-                "P": self.state.features[self.grid_idx].P,
-                "Q": self.state.features[self.grid_idx].Q,
+                "P": self.state.features[self.grid_key].P,
+                "Q": self.state.features[self.grid_key].Q,
             },
         }
 
@@ -430,5 +438,5 @@ class MicrogridFieldAgent(FieldAgent):
 
     def __repr__(self) -> str:
         return (f"MicrogridFieldAgent(id={self.agent_id}, "
-                f"ess={self.state.features[self.ess_idx].capacity}MWh, "
+                f"ess={self.state.features[self.ess_key].capacity}MWh, "
                 f"dg={self.dg_max_p}MW)")

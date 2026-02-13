@@ -39,11 +39,11 @@ class BatteryAgent(FieldAgent):
 
     @property
     def soc(self) -> float:
-        return self.state.features[0].soc
+        return self.state.features["BatteryChargeFeature"].soc
 
     @property
     def capacity(self) -> float:
-        return self.state.features[0].capacity
+        return self.state.features["BatteryChargeFeature"].capacity
 
     def init_action(self, features: List[FeatureProvider] = []):
         """Initialize action (charge/discharge rate)."""
@@ -80,7 +80,7 @@ class BatteryAgent(FieldAgent):
     def set_state(self) -> None:
         """Define state: battery SOC and capacity."""
         new_soc = self.soc + self.action.c[0] * 0.01
-        self.state.features[0].set_values(soc=new_soc)
+        self.state.features["BatteryChargeFeature"].set_values(soc=new_soc)
 
     def apply_action(self):
         self.set_state()

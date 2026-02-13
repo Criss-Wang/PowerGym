@@ -119,10 +119,10 @@ class MicrogridCoordinatorAgent(CoordinatorAgent):
             **kwargs: Additional state parameters
         """
         if price is not None:
-            self.state.features[1].set_values(price=price)
+            self.state.features["PriceFeature"].set_values(price=price)
 
         if voltage is not None:
-            self.state.features[2].set_values(voltage=voltage)
+            self.state.features["VoltageFeature"].set_values(voltage=voltage)
 
         if P is not None or Q is not None:
             update_dict = {}
@@ -130,7 +130,7 @@ class MicrogridCoordinatorAgent(CoordinatorAgent):
                 update_dict['P'] = P
             if Q is not None:
                 update_dict['Q'] = Q
-            self.state.features[0].set_values(**update_dict)
+            self.state.features["PowerFeature"].set_values(**update_dict)
 
     def set_grid_price(self, price: float) -> None:
         """Set electricity price.
@@ -164,8 +164,8 @@ class MicrogridCoordinatorAgent(CoordinatorAgent):
         Returns:
             Grid cost in $
         """
-        power_feature = self.state.features[0]  # Net power
-        price_feature = self.state.features[1]
+        power_feature = self.state.features["PowerFeature"]
+        price_feature = self.state.features["PriceFeature"]
 
         if power_feature.P > 0:  # Buying
             return power_feature.P * price_feature.price * self.dt

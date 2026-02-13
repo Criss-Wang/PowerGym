@@ -190,7 +190,7 @@ def test_grid_state_reset():
 
     # Verify features still exist after reset
     assert len(gs.features) == 1
-    assert gs.features[0] is metrics
+    assert gs.features["NetworkMetrics"] is metrics
 
 
 if __name__ == "__main__":
