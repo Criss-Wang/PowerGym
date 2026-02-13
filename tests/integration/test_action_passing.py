@@ -13,7 +13,6 @@ import numpy as np
 from typing import Any, Dict, List, Optional
 
 # HERON imports
-from heron.agents.base import Agent
 from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.agents.system_agent import SystemAgent
@@ -28,7 +27,7 @@ from heron.protocols.base import (
     ActionProtocol,
 )
 from heron.utils.typing import AgentID
-from heron.scheduling import EventScheduler, Event, TickConfig, JitterType
+from heron.scheduling import TickConfig, JitterType
 from heron.scheduling.analysis import EventAnalyzer
 
 
@@ -150,36 +149,33 @@ class DeviceAgent(FieldAgent):
         return action
 
     def compute_local_reward(self, local_state: dict) -> float:
-        """Reward = maintain power near zero (minimize deviation)."""
+        """Reward = maintain power near zero (minimize deviation).
+
+        Args:
+            local_state: State dict with structure:
+                {"DevicePowerFeature": np.array([power, capacity])}
+
+        Returns:
+            Reward value (negative squared power deviation)
+        """
+        reward = 0.0
         if "DevicePowerFeature" in local_state:
-            feature_data = local_state["DevicePowerFeature"]
-            # Handle both dict and array formats
-            if isinstance(feature_data, dict):
-                power = float(feature_data.get("power", 0.0))
-            elif isinstance(feature_data, np.ndarray):
-                power = float(feature_data[0])
-            else:
-                power = float(feature_data)
-            return -power ** 2  # Penalize deviation from zero
-        return 0.0
+            feature_vec = local_state["DevicePowerFeature"]
+            power = float(feature_vec[0])  # Power is first element
+            reward = -power ** 2  # Penalize deviation from zero
+        return reward
 
     def set_action(self, action: Any) -> None:
-        """Set action from Action object or array."""
+        """Set action from Action object or compatible format."""
         if isinstance(action, Action):
-            # Handle dimension mismatch - extract appropriate portion
-            if len(action.c) > self.action.dim_c:
-                # Action has more dimensions than needed - take first component
+            # Handle potential dimension mismatch - take only what we need
+            if len(action.c) != self.action.dim_c:
                 self.action.set_values(action.c[:self.action.dim_c])
             else:
                 self.action.set_values(c=action.c)
-        elif isinstance(action, np.ndarray):
-            # Ensure array matches expected dimension
-            if len(action) > self.action.dim_c:
-                self.action.set_values(action[:self.action.dim_c])
-            else:
-                self.action.set_values(action)
         else:
-            self.action.set_values(np.array([action]))
+            # Direct value (numpy array or dict)
+            self.action.set_values(action)
 
     def set_state(self) -> None:
         """Update power based on action (direct setpoint control)."""
@@ -196,31 +192,17 @@ class ZoneCoordinator(CoordinatorAgent):
     """Coordinator - owns policy and distributes actions via protocol."""
 
     def compute_local_reward(self, local_state: dict) -> float:
-        """Coordinator reward = sum of subordinate rewards."""
-        # Aggregate rewards from field agents
-        total_reward = 0.0
-        for subordinate in self.subordinates.values():
-            if hasattr(subordinate, 'state') and subordinate.state:
-                sub_local_state = subordinate.state.to_dict()
-                if hasattr(subordinate, 'compute_local_reward'):
-                    total_reward += subordinate.compute_local_reward(sub_local_state)
-        return total_reward
+        """Compute coordinator's local reward by aggregating subordinate rewards.
 
-    def compute_action(self, obs: Any, scheduler: EventScheduler):
-        """Override to ensure coordinate is called."""
-        super().compute_action(obs, scheduler)
-        # Verify coordinate was called
-        if self._should_send_subordinate_actions():
-            print(f"[Coordinator] Coordinated actions for {len(self.subordinates)} subordinates")
+        In event-driven mode, subordinate rewards are included in local_state
+        by the proxy agent under 'subordinate_rewards' key.
+        """
+        subordinate_rewards = local_state.get("subordinate_rewards", {})
+        return sum(subordinate_rewards.values())
 
 class GridSystem(SystemAgent):
-    """System agent with periodic ticking."""
-
-    def tick(self, scheduler: EventScheduler, current_time: float) -> None:
-        """Override tick to schedule next tick for continuous operation."""
-        super().tick(scheduler, current_time)
-        # Schedule own next tick to keep simulation running
-        scheduler.schedule_agent_tick(self.agent_id)
+    """System agent for grid management."""
+    pass
 
 
 # =============================================================================
@@ -228,8 +210,9 @@ class GridSystem(SystemAgent):
 # =============================================================================
 
 class EnvState:
-    def __init__(self):
-        self.timestep = 0
+    """Environment state tracking device power levels."""
+    def __init__(self, device_powers: Optional[Dict[str, float]] = None):
+        self.device_powers = device_powers or {"device_1": 0.0, "device_2": 0.0}
 
 
 class ActionPassingEnv(MultiAgentEnv):
@@ -239,22 +222,83 @@ class ActionPassingEnv(MultiAgentEnv):
         super().__init__(**kwargs)
 
     def run_simulation(self, env_state: EnvState, *args, **kwargs) -> EnvState:
-        """Simple physics simulation."""
-        env_state.timestep += 1
+        """Physics simulation - clip power values to valid range."""
+        for device_id in env_state.device_powers:
+            # Clip power to reasonable range based on capacity (assume capacity=1.0)
+            env_state.device_powers[device_id] = np.clip(
+                env_state.device_powers[device_id], -1.0, 1.0
+            )
         return env_state
 
     def env_state_to_global_state(self, env_state: EnvState) -> Dict:
-        """Convert env state to global state."""
+        """Convert env_state to global_state format.
+
+        Constructs global state PURELY from env_state, not from agent internal states.
+        This maintains proper separation of concerns between environment and agents.
+
+        Args:
+            env_state: Environment state after simulation
+
+        Returns:
+            Dict with structure: {"agent_states": {agent_id: state_dict, ...}}
+        """
+        from heron.agents.constants import FIELD_LEVEL, COORDINATOR_LEVEL, SYSTEM_LEVEL
+
+        # Map agent level to state type
+        level_to_state_type = {
+            FIELD_LEVEL: "FieldAgentState",
+            COORDINATOR_LEVEL: "CoordinatorAgentState",
+            SYSTEM_LEVEL: "SystemAgentState"
+        }
+
         agent_states = {}
+
+        # Create state dicts for device agents based on simulation results
         for agent_id, agent in self.registered_agents.items():
-            if hasattr(agent, 'level') and agent.level == 1 and agent.state:
-                state_dict = agent.state.to_dict(include_metadata=True)
-                agent_states[agent_id] = state_dict
+            # Only create states for field-level device agents
+            if hasattr(agent, 'level') and agent.level == FIELD_LEVEL and 'device' in agent_id:
+                power_value = env_state.device_powers.get(agent_id, 0.0)
+                agent_states[agent_id] = {
+                    "_owner_id": agent_id,
+                    "_owner_level": agent.level,
+                    "_state_type": level_to_state_type[agent.level],
+                    "features": {
+                        "DevicePowerFeature": {
+                            "power": power_value,
+                            "capacity": 1.0
+                        }
+                    }
+                }
+
         return {"agent_states": agent_states}
 
     def global_state_to_env_state(self, global_state: Dict) -> EnvState:
-        """Convert global state to env state."""
-        return EnvState()
+        """Convert global state to env state.
+
+        Args:
+            global_state: Global state dict with structure:
+                {"agent_states": {agent_id: state_dict, ...}}
+
+        Returns:
+            EnvState with extracted device power values
+        """
+        # Access the nested agent_states dict
+        agent_states = global_state.get("agent_states", {})
+
+        device_powers = {}
+        # Extract power from each device agent's state dict
+        for agent_id, state_dict in agent_states.items():
+            if 'device' in agent_id and "features" in state_dict:
+                features = state_dict["features"]
+                if "DevicePowerFeature" in features:
+                    power_feature = features["DevicePowerFeature"]
+                    device_powers[agent_id] = power_feature.get("power", 0.0)
+
+        # Fallback to default powers if no device states found
+        if not device_powers:
+            device_powers = {"device_1": 0.0, "device_2": 0.0}
+
+        return EnvState(device_powers=device_powers)
 
 
 # =============================================================================
@@ -673,6 +717,78 @@ print(f"  - Devices received and applied {device_ticks * coord_ticks // 2} total
 print(f"  - Vector decomposition verified {coord_ticks} times")
 print(f"  - {event_analyzer.action_result_count} rewards collected and computed")
 print(f"  → Sufficient activity to validate action passing mechanism!")
+
+# Extract and plot reward trends from event-driven execution
+print(f"\n{'='*80}")
+print("Event-Driven Reward Trends")
+print(f"{'='*80}")
+
+# Extract reward data from event analyzer
+import matplotlib.pyplot as plt
+
+# Get reward history directly from EventAnalyzer (tracked via MSG_SET_TICK_RESULT)
+reward_history = event_analyzer.get_reward_history()
+reward_data = {"coordinator": [], "device_1": [], "device_2": []}
+timestamps = {"coordinator": [], "device_1": [], "device_2": []}
+
+for agent_id in ["coordinator", "device_1", "device_2"]:
+    if agent_id in reward_history:
+        for ts, reward in reward_history[agent_id]:
+            timestamps[agent_id].append(ts)
+            reward_data[agent_id].append(reward)
+        print(f"  {agent_id}: {len(reward_history[agent_id])} reward data points")
+
+# Plot reward trends
+if any(len(rewards) > 0 for rewards in reward_data.values()):
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Plot 1: Individual agent rewards over time
+    for agent_id, rewards in reward_data.items():
+        if len(rewards) > 0:
+            ax1.plot(timestamps[agent_id], rewards, 'o-', label=agent_id, alpha=0.7, markersize=4)
+
+    ax1.set_xlabel('Time (s)')
+    ax1.set_ylabel('Reward')
+    ax1.set_title('Event-Driven Reward Trends by Agent')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Plot 2: Coordinator vs Device comparison
+    if len(reward_data["coordinator"]) > 0:
+        ax2.plot(timestamps["coordinator"], reward_data["coordinator"],
+                'ro-', label='Coordinator (aggregated)', markersize=6, linewidth=2)
+
+    if len(reward_data["device_1"]) > 0:
+        ax2.plot(timestamps["device_1"], reward_data["device_1"],
+                'bs-', label='device_1', markersize=4, alpha=0.6)
+
+    if len(reward_data["device_2"]) > 0:
+        ax2.plot(timestamps["device_2"], reward_data["device_2"],
+                'g^-', label='device_2', markersize=4, alpha=0.6)
+
+    ax2.set_xlabel('Time (s)')
+    ax2.set_ylabel('Reward')
+    ax2.set_title('Coordinator Aggregation vs Individual Devices')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig('/tmp/event_driven_rewards.png', dpi=150, bbox_inches='tight')
+    print(f"\n✓ Reward trends plotted and saved to /tmp/event_driven_rewards.png")
+    print(f"  - Coordinator rewards: {len(reward_data['coordinator'])} data points")
+    print(f"  - device_1 rewards: {len(reward_data['device_1'])} data points")
+    print(f"  - device_2 rewards: {len(reward_data['device_2'])} data points")
+
+    # Print summary statistics
+    if len(reward_data["coordinator"]) > 0:
+        coord_rewards = reward_data["coordinator"]
+        print(f"\nCoordinator Reward Stats (aggregated):")
+        print(f"  Mean: {np.mean(coord_rewards):.4f}")
+        print(f"  Std:  {np.std(coord_rewards):.4f}")
+        print(f"  Min:  {np.min(coord_rewards):.4f}")
+        print(f"  Max:  {np.max(coord_rewards):.4f}")
+else:
+    print(f"\n⚠ No reward data captured from event analyzer")
 
 print(f"\n{'='*80}")
 print("Action Passing Test Complete")

@@ -75,6 +75,9 @@ class EventAnalyzer:
         self.state_update_count = 0
         self.action_result_count = 0
 
+        # Track reward history per agent: {agent_id: [(timestamp, reward), ...]}
+        self.reward_history: Dict[str, List[tuple]] = {}
+
     def parser_event(self, event: Event) -> EventAnalysis:
         """Parse and analyze a single event.
 
@@ -128,6 +131,13 @@ class EventAnalyzer:
                 self.action_result_count += 1
                 result_data = message_content.get("body", {})
                 data_summary = self._summarize_action_result(result_data)
+
+                # Track reward history per agent
+                sender_id = payload.get("sender")
+                if sender_id and isinstance(result_data, dict) and "reward" in result_data:
+                    if sender_id not in self.reward_history:
+                        self.reward_history[sender_id] = []
+                    self.reward_history[sender_id].append((event.timestamp, result_data["reward"]))
 
         # Create analysis
         analysis = EventAnalysis(
@@ -209,6 +219,7 @@ class EventAnalyzer:
         self.local_state_count = 0
         self.state_update_count = 0
         self.action_result_count = 0
+        self.reward_history = {}
 
     def get_summary(self) -> Dict[str, int]:
         """Get summary of tracked message types.
@@ -223,6 +234,20 @@ class EventAnalyzer:
             "state_updates": self.state_update_count,
             "action_results": self.action_result_count,
         }
+
+    def get_reward_history(self, agent_id: Optional[str] = None) -> Dict[str, List[tuple]]:
+        """Get reward history for agents.
+
+        Args:
+            agent_id: If provided, return only that agent's history.
+                     If None, return all agents' histories.
+
+        Returns:
+            Dict mapping agent_id to list of (timestamp, reward) tuples
+        """
+        if agent_id:
+            return {agent_id: self.reward_history.get(agent_id, [])}
+        return self.reward_history
 
 
 class EpisodeResult:

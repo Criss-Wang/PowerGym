@@ -57,6 +57,8 @@ class ProxyAgent(Agent):
         self.visibility_rules: Dict[AgentID, List[str]] = visibility_rules or {}
         self.state_cache: Dict[str, Any] = {}
         self._agent_levels: Dict[AgentID, int] = {}  # Track agent hierarchy levels for visibility
+        self._agent_upstreams: Dict[AgentID, Optional[AgentID]] = {}  # Track upstream (parent) for each agent
+        self._tick_results: Dict[AgentID, Dict[str, Any]] = {}  # Store tick results per agent
 
         if message_broker is not None:
             raise ValueError("No message broker detected!")
@@ -130,6 +132,9 @@ class ProxyAgent(Agent):
 
         if agent_id not in self.registered_agents:
             self.registered_agents.append(agent_id)
+
+        # Track upstream (parent) for hierarchy-aware operations
+        self._agent_upstreams[agent_id] = agent.upstream_id
 
         # Always update state if provided (supports both init and reset)
         if agent_state is not None:
@@ -258,7 +263,8 @@ class ProxyAgent(Agent):
         elif MSG_SET_TICK_RESULT in message_content:
             result_type = message_content[MSG_SET_TICK_RESULT]
             tick_result = message_content.get(MSG_KEY_BODY, {})
-            # TODO: save tick result per-agent in proxy for later retrieval
+            # Store tick result per-agent for retrieval by parent agents
+            self._tick_results[sender_id] = tick_result
             print(f"Received tick result from {sender_id}: {tick_result}")
         else:
             raise NotImplementedError(f"Unknown message content {message_content} in message_delivery to proxy_agent")
@@ -291,8 +297,9 @@ class ProxyAgent(Agent):
         from heron.agents.system_agent import SYSTEM_AGENT_ID
 
         # Get global and local components
+        # Note: exclude subordinate_rewards from observation (only used for reward computation)
         global_state = self.get_global_states(sender_id, protocol)
-        local_state = self.get_local_state(sender_id, protocol)
+        local_state = self.get_local_state(sender_id, protocol, include_subordinate_rewards=False)
 
         # Return Observation object
         return Observation(
@@ -328,17 +335,26 @@ class ProxyAgent(Agent):
 
         return global_filtered
 
-    def get_local_state(self, sender_id: AgentID, protocol: Optional[Protocol] = None) -> Dict:
+    def get_local_state(
+        self,
+        sender_id: AgentID,
+        protocol: Optional[Protocol] = None,
+        include_subordinate_rewards: bool = True
+    ) -> Dict:
         """Get local state information for the requesting agent with visibility filtering.
 
         NEW: Applies feature-level visibility filtering via state.observed_by()
+        Also includes subordinate rewards for parent agents (coordinators/system agents).
 
         Args:
             sender_id: ID of agent requesting local state
             protocol: Optional protocol for formatting
+            include_subordinate_rewards: Whether to include subordinate rewards (default True).
+                Set to False when building observations for action computation.
 
         Returns:
             Dict containing agent-specific local state (filtered by visibility rules)
+            For parent agents, includes 'subordinate_rewards' with rewards from children
         """
         agents_cache = self.state_cache.get("agents", {})
         state_obj = agents_cache.get(sender_id)
@@ -348,7 +364,32 @@ class ProxyAgent(Agent):
 
         # Apply visibility filtering using observed_by()
         requestor_level = self._agent_levels.get(sender_id, 1)
-        return state_obj.observed_by(sender_id, requestor_level)
+        local_state = state_obj.observed_by(sender_id, requestor_level)
+
+        # Include subordinate rewards for parent agents (only for reward computation, not observations)
+        if include_subordinate_rewards:
+            subordinate_rewards = self._get_subordinate_rewards(sender_id)
+            if subordinate_rewards:
+                local_state["subordinate_rewards"] = subordinate_rewards
+
+        return local_state
+
+    def _get_subordinate_rewards(self, parent_id: AgentID) -> Dict[AgentID, float]:
+        """Get rewards from agents whose upstream is the given parent.
+
+        Args:
+            parent_id: ID of the parent agent
+
+        Returns:
+            Dict mapping subordinate agent IDs to their rewards
+        """
+        subordinate_rewards = {}
+        for agent_id, upstream_id in self._agent_upstreams.items():
+            if upstream_id == parent_id and agent_id in self._tick_results:
+                tick_result = self._tick_results[agent_id]
+                if "reward" in tick_result:
+                    subordinate_rewards[agent_id] = tick_result["reward"]
+        return subordinate_rewards
 
     def set_global_state(self, global_state: Dict) -> None:
         """Update the global state in cache.

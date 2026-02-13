@@ -9,6 +9,7 @@ from gymnasium.spaces import Box, Dict as DictSpace
 from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.agents.system_agent import SystemAgent
+from heron.agents.constants import FIELD_LEVEL, COORDINATOR_LEVEL, SYSTEM_LEVEL
 from heron.core.observation import Observation
 from heron.core.feature import FeatureProvider
 from heron.core.action import Action
@@ -101,62 +102,50 @@ class EnergyManagementEnv(MultiAgentEnv):
         super().__init__(**kwargs)
 
     def run_simulation(self, env_state: EnvState, *args, **kwargs) -> EnvState:
-        """ Custom simulation logic post-system_agent.act and before system_agent.update_from_environment().
-        
-        In the long run, this can be eventually turned into a static SimulatorAgent.
-        """
         env_state.battery_soc = np.clip(env_state.battery_soc, 0.0, 1.0)
         return env_state
 
     def env_state_to_global_state(self, env_state: EnvState) -> Dict:
-        """Convert custom environment state to HERON global state format.
+        """Convert env_state to global_state format.
 
-        Gets serialized state from existing agents and updates only the simulation-affected fields.
-        Agents will apply updates via update_from_environment().
+        Constructs global state PURELY from env_state, not from agent internal states.
+        This maintains proper separation of concerns between environment and agents.
 
         Args:
-            env_state: Custom environment state after simulation
+            env_state: Environment state after simulation
 
         Returns:
-            Dict with structure: {"agent_states": {agent_id: state_dict_with_metadata, ...}}
+            Dict with structure: {"agent_states": {agent_id: state_dict, ...}}
         """
-        # Get serialized states from existing agents and update simulation results
+        # Construct global state purely from env_state
         agent_states = {}
+
+        # Map agent level to state type
+        level_to_state_type = {
+            FIELD_LEVEL: "FieldAgentState",
+            COORDINATOR_LEVEL: "CoordinatorAgentState",
+            SYSTEM_LEVEL: "SystemAgentState"
+        }
+
+        # Create state dicts for battery agents based on simulation results
         for agent_id, agent in self.registered_agents.items():
-            # Only update field agents (level 1) that have battery features
-            if hasattr(agent, 'level') and agent.level == 1 and agent.state:
-                # Get the current serialized state
-                state_dict = agent.state.to_dict(include_metadata=True)
-
-                # Update only the simulation-affected fields (SOC from physics)
-                if "features" in state_dict and "BatteryChargeFeature" in state_dict["features"]:
-                    state_dict["features"]["BatteryChargeFeature"]["soc"] = env_state.battery_soc
-
-                agent_states[agent_id] = state_dict
+            # Only create states for field-level battery agents
+            if hasattr(agent, 'level') and agent.level == FIELD_LEVEL and 'battery' in agent_id:
+                agent_states[agent_id] = {
+                    "_owner_id": agent_id,
+                    "_owner_level": agent.level,
+                    "_state_type": level_to_state_type[agent.level],
+                    "features": {
+                        "BatteryChargeFeature": {
+                            "soc": env_state.battery_soc,
+                            "capacity": 100.0
+                        }
+                    }
+                }
 
         return {"agent_states": agent_states}
 
     def global_state_to_env_state(self, global_state: Dict) -> EnvState:
-        """Convert global state dict (from proxy) to custom env state.
-
-        BUG FIX: global_state is proxy.state_cache["global"] which has structure:
-        {
-            "agent_states": {
-                "agent_id": {"FeatureName": {"field": value, ...}},
-                ...
-            },
-            ... other global fields ...
-        }
-
-        Must access the nested "agent_states" dict and work with dict representation,
-        NOT State objects!
-
-        Args:
-            global_state: Dict from proxy.state_cache["global"]
-
-        Returns:
-            EnvState for running simulation
-        """
         # Access the nested agent_states dict
         agent_states = global_state.get("agent_states", {})
 

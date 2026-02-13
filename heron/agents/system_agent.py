@@ -244,6 +244,10 @@ class SystemAgent(Agent):
                 message={MSG_SET_TICK_RESULT: INFO_TYPE_LOCAL_STATE, MSG_KEY_BODY: tick_result},
                 delay=self._tick_config.msg_delay,
             )
+
+            # Schedule next tick for continuous operation if not terminated/truncated
+            if not tick_result["terminated"] and not tick_result["truncated"]:
+                scheduler.schedule_agent_tick(self.agent_id)
         elif MSG_SET_STATE_COMPLETION in message_content:
             if message_content[MSG_SET_STATE_COMPLETION] != "success":
                 raise ValueError(f"State update failed in proxy, cannot proceed with reward computation")
