@@ -150,7 +150,21 @@ class PettingZooParallelEnv(ParallelEnv):  # type: ignore[misc]
         return self.observation_spaces[agent]
 
     def action_space(self, agent: AgentID) -> gym.Space:
+        if agent not in self.action_spaces:
+            self.init_spaces()
+
+        if agent not in self.action_spaces:
+            raise KeyError(f"Action space for agent '{agent}' not found after sync. "
+                           f"Check if the agent is registered and has an action_space attribute.")
         return self.action_spaces[agent]
+
+    def observation_space(self, agent: AgentID) -> gym.Space:
+        if agent not in self.observation_spaces:
+            self.init_spaces()
+
+        if agent not in self.observation_spaces:
+            raise KeyError(f"Observation space for agent '{agent}' not found.")
+        return self.observation_spaces[agent]
 
     # ----------------------------
     # PettingZoo Parallel API
