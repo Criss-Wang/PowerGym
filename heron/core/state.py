@@ -4,9 +4,9 @@ This module provides generic state containers that compose FeatureProviders
 and support visibility-based observation filtering.
 """
 
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -16,101 +16,51 @@ from heron.utils.array_utils import cat_f32
 
 @dataclass(slots=True)
 class State(ABC):
-    """Generic agent state, defined by a list of feature providers.
-
-    States aggregate multiple FeatureProviders and provide:
-    - Vector representation for ML
-    - Visibility-filtered observations
-    - Batch update operations
-    - Serialization
-
-    Attributes:
-        owner_id: ID of the agent that owns this state
-        owner_level: Hierarchy level of owning agent (1=field, 2=coordinator, 3=system)
-        features: List of feature providers composing this state
-    """
     owner_id: str
     owner_level: int
 
-    # Raw features that make up this state
-    features: List[FeatureProvider] = field(default_factory=list)
+    # Features stored as dict for O(1) lookup by name
+    features: Dict[str, FeatureProvider] = field(default_factory=dict)
 
     def vector(self) -> np.ndarray:
         """Concatenate all feature vectors into an array."""
         feature_vectors: List[np.ndarray] = []
-        for feature in self.features:
+        for feature in self.features.values():
             feature_vectors.append(feature.vector())
 
         return cat_f32(feature_vectors)
 
     def reset(self, overrides: Optional[Dict[str, Dict[str, Any]]] = None) -> None:
-        """Reset all feature providers to their initial state.
-
-        This does not recreate the feature list; it just forwards
-        the reset to each feature that supports it.
-
-        Args:
-            overrides: Optional dict mapping feature names to override values
-        """
-        for feature in self.features:
+        for feature in self.features.values():
             feature.reset()
 
         if overrides is not None:
             self.update(overrides)
 
-    @abstractmethod
-    def update(self, *args: Any, **kwargs: Any) -> None:
-        """Abstract state-update hook.
+    def update(self, updates: Dict[str, Dict[str, Any]]) -> None:
+        """Apply batch updates to features. O(m) where m = len(updates).
 
-        Subclasses must implement this with their own semantics.
-        For convenience, subclasses can use `update_feature(...)` for
-        individual feature updates.
+        Args:
+            updates: Mapping of feature names to field updates:
+                {
+                    "FeatureA": {"field1": 5.0, "field2": 1.0},
+                    "FeatureB": {"state": "active"},
+                    ...
+                }
         """
-        raise NotImplementedError
+        for feature_name, values in updates.items():
+            if values is not None and feature_name in self.features:
+                self.features[feature_name].set_values(**values)
 
     def update_feature(self, feature_name: str, **values: Any) -> None:
-        """Update a single feature identified by its class name.
-
-        Args:
-            feature_name: Feature class name string
-            **values: Field values to update
-
-        Example:
-            state.update_feature("SomeFeature", field1=10.0, field2=2.0)
-        """
-        for feature in self.features:
-            if feature.feature_name == feature_name:
-                feature.set_values(**values)
-                break
+        """Update a feature by name. O(1) lookup."""
+        if feature_name in self.features:
+            self.features[feature_name].set_values(**values)
 
     def observed_by(self, requestor_id: str, requestor_level: int) -> Dict[str, np.ndarray]:
-        """Build observation dictionary visible to the requesting agent.
-
-        Filters state features based on visibility rules. Each feature's
-        `is_observable_by()` method determines if the requestor can see it.
-
-        Args:
-            requestor_id: ID of agent requesting observation
-            requestor_level: Hierarchy level of requesting agent
-                           (1=field, 2=coordinator, 3=system)
-
-        Returns:
-            Dict mapping feature names to observation vectors (float32 numpy arrays).
-            Only includes features the requestor is allowed to observe.
-
-        Example:
-            >>> state = FieldAgentState(owner_id="agent1", owner_level=1)
-            >>> # Owner observes own state
-            >>> obs = state.observed_by("agent1", requestor_level=1)
-            >>> # {"SomeFeature": array([1.0, 0.5, ...]), ...}
-            >>>
-            >>> # Non-owner with insufficient permissions
-            >>> obs = state.observed_by("agent2", requestor_level=1)
-            >>> # {} (empty - no observable features)
-        """
         observable_feature_dict = {}
 
-        for feature in self.features:
+        for feature in self.features.values():
             if feature.is_observable_by(
                 requestor_id, requestor_level, self.owner_id, self.owner_level
             ):
@@ -119,18 +69,69 @@ class State(ABC):
         self.validate_observation_dict(observable_feature_dict)
         return observable_feature_dict
 
-    def to_dict(self) -> Dict[str, Dict[str, Any]]:
-        """Serialize the State into a plain dict.
-
-        Returns:
-            Dict mapping feature names to their serialized representations.
-        """
+    def to_dict(self, include_metadata: bool = False) -> Dict[str, Any]:
         feature_dict: Dict[str, Any] = {}
 
-        for feature in self.features:
+        for feature in self.features.values():
             feature_dict[feature.feature_name] = feature.to_dict()
 
+        if include_metadata:
+            return {
+                "_owner_id": self.owner_id,
+                "_owner_level": self.owner_level,
+                "_state_type": self.__class__.__name__,
+                "features": feature_dict
+            }
+
         return feature_dict
+
+    @classmethod
+    def from_dict(cls, state_dict: Dict[str, Any]) -> "State":
+        from heron.core.feature import get_feature_class
+
+        # Extract metadata if present
+        if "_owner_id" in state_dict and "_owner_level" in state_dict:
+            owner_id = state_dict["_owner_id"]
+            owner_level = state_dict["_owner_level"]
+            state_type = state_dict.get("_state_type")
+            features_dict = state_dict.get("features", {})
+        else:
+            # Fallback: no metadata, assume features are at top level
+            owner_id = state_dict.get("owner_id", "unknown")
+            owner_level = state_dict.get("owner_level", 1)
+            state_type = None
+            features_dict = {k: v for k, v in state_dict.items() if not k.startswith("_") and k not in ["owner_id", "owner_level"]}
+
+        # Determine which State class to instantiate
+        if state_type and cls == State:
+            # If called on base State class, use the type from metadata
+            # Use globals() for late binding (classes defined later in file)
+            import sys
+            current_module = sys.modules[__name__]
+            state_class = getattr(current_module, state_type, None)
+            if state_class is None:
+                raise ValueError(f"Unknown state type: {state_type}")
+        else:
+            # Called on concrete subclass, use it directly
+            state_class = cls
+
+        # Create State instance
+        state = state_class(owner_id=owner_id, owner_level=owner_level)
+
+        # Reconstruct features using registry
+        for feature_name, feature_data in features_dict.items():
+            if feature_name.startswith("_"):
+                continue  # Skip internal metadata fields
+
+            try:
+                feature_class = get_feature_class(feature_name)
+                feature_obj = feature_class.from_dict(feature_data)
+                state.features[feature_name] = feature_obj
+            except ValueError as e:
+                # Feature not registered - skip with warning
+                print(f"Warning: Skipping unregistered feature '{feature_name}': {e}")
+
+        return state
 
     def validate_observation_dict(self, obs_dict: Dict[str, np.ndarray]) -> None:
         """Validate the collected feature vectors for consistency.
@@ -142,27 +143,6 @@ class State(ABC):
 
 @dataclass(slots=True)
 class FieldAgentState(State):
-    """State for field-level (L1) agents.
-
-    Field agents are the lowest level in the hierarchy, typically
-    representing individual devices or units.
-    """
-    def update(self, updates: Dict[str, Dict[str, Any]]) -> None:
-        """Apply batch updates to features.
-
-        Args:
-            updates: Mapping of feature names to field updates:
-                {
-                    "FeatureA": {"field1": 5.0, "field2": 1.0},
-                    "FeatureB": {"state": "active"},
-                    ...
-                }
-        """
-        for feature in self.features:
-            if feature.feature_name in updates:
-                values = updates.get(feature.feature_name)
-                self.update_feature(feature.feature_name, **values)
-
     def validate_observation_dict(self, obs_dict: Dict[str, np.ndarray]) -> None:
         """Validate that all observation vectors are 1D."""
         for vector in obs_dict.values():
@@ -175,20 +155,11 @@ class FieldAgentState(State):
 
 @dataclass(slots=True)
 class CoordinatorAgentState(State):
-    """State for coordinator-level (L2) agents.
+    pass
 
-    Coordinator agents manage groups of field agents and aggregate
-    information from their subordinates.
-    """
-    def update(self, updates: Dict[str, Dict[str, Any]]) -> None:
-        """Apply batch updates to coordinator-level features.
 
-        Args:
-            updates: Mapping of feature names to field updates
-        """
-        for feature in self.features:
-            if feature.feature_name in updates:
-                values = updates.get(feature.feature_name)
-                self.update_feature(feature.feature_name, **values)
+@dataclass(slots=True)
+class SystemAgentState(State):
+    pass
 
 

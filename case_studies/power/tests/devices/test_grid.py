@@ -63,7 +63,7 @@ class TestGridStateTracking:
             sn_mva=5.0,
         )
 
-        grid.reset_device()
+        grid.reset_agent()
 
         # Check initial values
         assert grid.state.P == 0.0
@@ -78,7 +78,7 @@ class TestGridStateTracking:
             sn_mva=5.0,
         )
 
-        grid.reset_device()
+        grid.reset_agent()
 
         # Update P and Q
         grid.update_state(P=2.5, Q=1.0)
@@ -94,7 +94,7 @@ class TestGridStateTracking:
             sn_mva=5.0,
         )
 
-        grid.reset_device()
+        grid.reset_agent()
 
         # Update price
         grid.update_state(price=50.0)
@@ -109,7 +109,7 @@ class TestGridStateTracking:
             sn_mva=5.0,
         )
 
-        grid.reset_device()
+        grid.reset_agent()
 
         # Set initial values
         grid.update_state(P=2.0, Q=1.0, price=40.0)
@@ -135,7 +135,7 @@ class TestGridCost:
             dt=1.0,
         )
 
-        grid.reset_device()
+        grid.reset_agent()
 
         # Buy 3 MW at $50/MWh for 1 hour
         grid.update_state(P=3.0, price=50.0)
@@ -155,7 +155,7 @@ class TestGridCost:
             dt=1.0,
         )
 
-        grid.reset_device()
+        grid.reset_agent()
 
         # Sell 2 MW at $50/MWh for 1 hour
         # Revenue = 2 * 50 * 0.8 (sell discount) * 1 hr = $80
@@ -176,7 +176,7 @@ class TestGridCost:
             dt=1.0,
         )
 
-        grid.reset_device()
+        grid.reset_agent()
 
         grid.update_state(P=0.0, price=50.0)
         grid.update_cost_safety()
@@ -192,7 +192,7 @@ class TestGridCost:
             dt=1.0,
         )
 
-        grid.reset_device()
+        grid.reset_agent()
 
         total_cost = 0.0
 
@@ -250,7 +250,7 @@ class TestGridSafety:
             sn_mva=5.0,
         )
 
-        grid.reset_device()
+        grid.reset_agent()
 
         # Even with high power
         grid.update_state(P=10.0, Q=5.0)
@@ -278,7 +278,7 @@ class TestGridReset:
         assert grid.cost != 0.0
 
         # Reset
-        grid.reset_device()
+        grid.reset_agent()
 
         # Should be cleared
         assert grid.state.P == 0.0
@@ -300,7 +300,7 @@ class TestGridConventions:
             dt=1.0,
         )
 
-        grid.reset_device()
+        grid.reset_agent()
         grid.update_state(P=2.0, price=50.0)
         grid.update_cost_safety()
 
@@ -316,7 +316,7 @@ class TestGridConventions:
             dt=1.0,
         )
 
-        grid.reset_device()
+        grid.reset_agent()
         grid.update_state(P=-2.0, price=50.0)
         grid.update_cost_safety()
 

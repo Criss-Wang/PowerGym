@@ -13,59 +13,34 @@ from heron.utils.typing import AgentID
 
 
 class CommunicationProtocol(ABC):
-    """Handles message-passing coordination between agents.
-
-    Communication protocols define WHAT information is shared and HOW
-    agents exchange coordination signals (prices, bids, consensus values, etc.).
-    This is the "coordination signal computation" layer.
-    """
-    neighbors: Set["Agent"]  # Neighboring agents that are reachable
+    neighbors: Set[AgentID]  # Neighboring agents that are reachable
 
     @abstractmethod
     def compute_coordination_messages(
         self,
         sender_state: Any,
-        receiver_states: Dict[AgentID, Any],
+        receiver_infos: Dict[AgentID, Any],
         context: Optional[Dict[str, Any]] = None
     ) -> Dict[AgentID, Dict[str, Any]]:
-        """Compute coordination messages to send to receivers.
-
-        Pure function - computes what messages should be sent based on
-        current state, without side effects.
-
-        Args:
-            sender_state: State of the coordinating agent
-            receiver_states: States of agents receiving coordination signals
-            context: Additional context (coordinator_action, topology, etc.)
-
-        Returns:
-            Dict mapping receiver_id -> message content
-        """
         pass
 
-    def add_neighbor(self, agent: "Agent") -> None:
+    def add_neighbor(self, agent: AgentID) -> None:
         """Add a neighbor agent."""
         self.neighbors.add(agent)
 
-    def init_neighbors(self, neighbors: List["Agent"]) -> None:
+    def init_neighbors(self, neighbors: List[AgentID]) -> None:
         """Initialize neighbor set."""
         self.neighbors = set(neighbors)
 
 
 class ActionProtocol(ABC):
-    """Handles action coordination between agents.
-
-    Action protocols define HOW actions are coordinated - whether through
-    direct control (setpoints), indirect incentives (prices), or consensus.
-    This is the "action execution" layer.
-    """
-
     @abstractmethod
     def compute_action_coordination(
         self,
         coordinator_action: Optional[Any],
-        subordinate_states: Dict[AgentID, Any],
-        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None
+        info_for_subordinates: Optional[Dict[AgentID, Any]] = None,
+        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None,
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[AgentID, Any]:
         """Compute coordinated actions for subordinates.
 
@@ -105,16 +80,21 @@ class Protocol(ABC):
 
     def no_op(self) -> bool:
         """Check if this is a no-operation protocol."""
-        return (
-            isinstance(self.communication_protocol, NoCommunication) and
-            isinstance(self.action_protocol, NoActionCoordination)
-        )
+        return self.no_action() and self.no_communication()
+    
+    def no_action(self) -> bool:
+        """Check if this protocol has no action coordination."""
+        return isinstance(self.action_protocol, NoActionCoordination)
+    
+    def no_communication(self) -> bool:
+        """Check if this protocol has no communication."""
+        return isinstance(self.communication_protocol, NoCommunication)
 
     def coordinate(
         self,
         coordinator_state: Any,
-        subordinate_states: Dict[AgentID, Any],
         coordinator_action: Optional[Any] = None,
+        info_for_subordinates: Optional[Dict[AgentID, Any]] = None,
         context: Optional[Dict[str, Any]] = None
     ) -> Tuple[Dict[AgentID, Dict[str, Any]], Dict[AgentID, Any]]:
         """Execute full coordination cycle.
@@ -125,7 +105,7 @@ class Protocol(ABC):
 
         Args:
             coordinator_state: State of coordinating agent
-            subordinate_states: States of subordinate agents
+            info_for_subordinates: Information for subordinate agents
             coordinator_action: Action from coordinator policy (if any)
             context: Additional context (subordinates dict, timestamp, etc.)
 
@@ -134,21 +114,19 @@ class Protocol(ABC):
         """
         context = context or {}
 
-        # Enrich context with coordinator_action
-        context_with_action = {**context, "coordinator_action": coordinator_action}
-
         # Step 1: Communication coordination
         messages = self.communication_protocol.compute_coordination_messages(
             sender_state=coordinator_state,
-            receiver_states=subordinate_states,
-            context=context_with_action
+            receiver_infos=info_for_subordinates,
+            context=context
         )
 
         # Step 2: Action coordination
         actions = self.action_protocol.compute_action_coordination(
             coordinator_action=coordinator_action,
-            subordinate_states=subordinate_states,
-            coordination_messages=messages
+            subordinate_states=info_for_subordinates,
+            coordination_messages=messages,
+            context=context
         )
         return messages, actions
 
@@ -166,10 +144,10 @@ class NoCommunication(CommunicationProtocol):
     def compute_coordination_messages(
         self,
         sender_state: Any,
-        receiver_states: Dict[AgentID, Any],
+        receiver_infos: Dict[AgentID, Any],
         context: Optional[Dict[str, Any]] = None
     ) -> Dict[AgentID, Dict[str, Any]]:
-        return {r_id: {} for r_id in receiver_states}
+        return {r_id: {} for r_id in receiver_infos}
 
 
 class NoActionCoordination(ActionProtocol):
@@ -178,10 +156,11 @@ class NoActionCoordination(ActionProtocol):
     def compute_action_coordination(
         self,
         coordinator_action: Optional[Any],
-        subordinate_states: Dict[AgentID, Any],
-        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None
+        info_for_subordinates: Optional[Dict[AgentID, Any]] = None,
+        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None,
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[AgentID, Any]:
-        return {sub_id: None for sub_id in subordinate_states}
+        return {sub_id: None for sub_id in (info_for_subordinates or {})}
 
 
 class NoProtocol(Protocol):

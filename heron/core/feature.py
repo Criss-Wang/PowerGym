@@ -1,110 +1,88 @@
-"""Base abstract class for feature providers.
-
-Feature providers represent observable/controllable attributes of agents
-(e.g., internal state, sensor readings, parameters).
-
-The HERON framework supports 4 visibility levels:
-- public: Visible to all agents
-- owner: Only visible to the owning agent
-- upper_level: Visible to agents one level above in hierarchy
-- system: Only visible to system-level (L3) agents
-"""
-
-from abc import ABC, abstractmethod
-from typing import Any, ClassVar, Dict, List, Sequence
-
+from dataclasses import dataclass, fields, asdict, MISSING
+from typing import Any, ClassVar, Dict, List, Sequence, Type, TypeVar
 import numpy as np
 
+T = TypeVar("T", bound="FeatureProvider")
 
-class FeatureProvider(ABC):
-    """Abstract base class for feature providers used in agent states.
+# Global feature registry for State.from_dict() reconstruction
+_FEATURE_REGISTRY: Dict[str, Type["FeatureProvider"]] = {}
 
-    Feature providers encapsulate observable state attributes with:
-    - Vectorization for ML observations
-    - Observability rules for multi-agent visibility
-    - Serialization for communication/logging
 
-    Subclasses must implement:
-        - vector(): Convert state to numpy array
-        - names(): Get field names corresponding to vector elements
-        - to_dict(): Serialize to dictionary
-        - from_dict(): Deserialize from dictionary
-        - set_values(): Update state from keyword arguments
+class FeatureMeta(type):
+    """Metaclass that auto-registers FeatureProvider subclasses."""
 
-    Attributes:
-        visibility: Class variable defining who can observe this feature
-                   Options: "public", "owner", "system", "upper_level"
-        feature_name: Auto-set to class name for registration/lookup
-    """
+    def __new__(mcs, name, bases, namespace, **kwargs):
+        cls = super().__new__(mcs, name, bases, namespace, **kwargs)
+
+        # Auto-register all FeatureProvider subclasses (but not FeatureProvider itself)
+        # Check if the class being created (name) is not FeatureProvider AND has FeatureProvider as a base
+        if name != 'FeatureProvider' and bases:
+            _FEATURE_REGISTRY[name] = cls
+
+        return cls
+
+
+class FeatureProvider(metaclass=FeatureMeta):
+    """Base class for feature providers. Subclasses are auto-converted to dataclasses."""
 
     visibility: ClassVar[Sequence[str]]
-    feature_name: ClassVar[str]
+    _class_feature_name: ClassVar[str]  # Class-level default name
+    _instance_feature_name: str = None  # Instance-level override (set via set_feature_name)
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        cls.feature_name = cls.__name__
+        cls._class_feature_name = cls.__name__
+        dataclass(cls)
 
-    @abstractmethod
+    @property
+    def feature_name(self) -> str:
+        """Get feature name. Instance name takes precedence over class name."""
+        if self._instance_feature_name is not None:
+            return self._instance_feature_name
+        return self._class_feature_name
+
+    def set_feature_name(self, name: str) -> "FeatureProvider":
+        """Set a custom instance-level feature name. Returns self for chaining."""
+        self._instance_feature_name = name
+        return self
+
     def vector(self) -> np.ndarray:
-        """Convert feature state to numpy array for observations.
+        return np.array(
+            [getattr(self, f.name) for f in fields(self)],
+            dtype=np.float32
+        )
 
-        Returns:
-            1D numpy array of feature values
-        """
-        pass
-
-    @abstractmethod
     def names(self) -> List[str]:
-        """Get names of fields in the vector representation.
+        return [f.name for f in fields(self)]
 
-        Returns:
-            List of field names corresponding to vector elements
-        """
-        pass
-
-    @abstractmethod
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize feature to dictionary.
-
-        Returns:
-            Dictionary representation of feature state
-        """
-        pass
+        return asdict(self)
 
     @classmethod
-    @abstractmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "FeatureProvider":
-        """Deserialize feature from dictionary.
+    def from_dict(cls: type[T], d: Dict[str, Any]) -> T:
+        kwargs = {}
+        for f in fields(cls):
+            if f.name in d:
+                kwargs[f.name] = d[f.name]
+            elif f.default is not MISSING:
+                kwargs[f.name] = f.default
+            elif f.default_factory is not MISSING:
+                kwargs[f.name] = f.default_factory()
+        return cls(**kwargs)
 
-        Args:
-            d: Dictionary representation
-
-        Returns:
-            Feature provider instance
-        """
-        pass
-
-    @abstractmethod
     def set_values(self, **kwargs: Any) -> None:
-        """Update feature values from keyword arguments.
+        """Override this method to add validation logic."""
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
 
-        Args:
-            **kwargs: Field names and values to update
-        """
-        pass
-
-    def reset(self, **overrides: Any) -> "FeatureProvider":
-        """Reset feature to initial/neutral state.
-
-        Default implementation does nothing. Subclasses should override
-        to provide meaningful reset behavior.
-
-        Args:
-            **overrides: Optional overrides to apply after reset
-
-        Returns:
-            self for chaining
-        """
+    def reset(self: T, **overrides: Any) -> T:
+        for f in fields(self):
+            if f.default is not MISSING:
+                setattr(self, f.name, f.default)
+            elif f.default_factory is not MISSING:
+                setattr(self, f.name, f.default_factory())
+        self.set_values(**overrides)
         return self
 
     def is_observable_by(
@@ -114,29 +92,6 @@ class FeatureProvider(ABC):
         owner_id: str,
         owner_level: int
     ) -> bool:
-        """Check if this feature is observable by the requesting agent.
-
-        Visibility rules are OR-ed together. A feature with visibility
-        ["owner", "upper_level"] is visible to both the owner AND agents
-        one level above.
-
-        Visibility options:
-            - "public": All agents can observe
-            - "owner": Owner (requestor_id == owner_id) can observe
-            - "system": System-level agents (level >= 3) can observe
-            - "upper_level": Agents one level above owner can observe
-
-        Args:
-            requestor_id: ID of agent requesting observation
-            requestor_level: Hierarchy level of requesting agent
-                           (1=field, 2=coordinator, 3=system)
-            owner_id: ID of agent that owns this feature
-            owner_level: Hierarchy level of owning agent
-
-        Returns:
-            True if requestor can observe this feature, False otherwise
-        """
-        # OR logic: any matching visibility grants access
         if "public" in self.visibility:
             return True
         if "owner" in self.visibility and requestor_id == owner_id:
@@ -145,5 +100,31 @@ class FeatureProvider(ABC):
             return True
         if "upper_level" in self.visibility and requestor_level == owner_level + 1:
             return True
-        # Default: no visibility rules matched
         return False
+
+
+# Registry access functions
+def get_feature_class(feature_name: str) -> Type[FeatureProvider]:
+    """Get feature class by name from registry.
+
+    Args:
+        feature_name: Name of the feature class
+
+    Returns:
+        Feature class type
+
+    Raises:
+        ValueError: If feature not registered
+    """
+    if feature_name not in _FEATURE_REGISTRY:
+        raise ValueError(f"Feature '{feature_name}' not found in registry. Available: {list(_FEATURE_REGISTRY.keys())}")
+    return _FEATURE_REGISTRY[feature_name]
+
+
+def get_all_registered_features() -> Dict[str, Type[FeatureProvider]]:
+    """Get all registered feature classes.
+
+    Returns:
+        Dict mapping feature names to feature classes
+    """
+    return _FEATURE_REGISTRY.copy()

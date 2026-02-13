@@ -1,320 +1,338 @@
-"""System-level agents (L3) for the HERON framework.
-
-SystemAgent is the top level in the agent hierarchy, typically handling
-system-wide coordination, visibility filtering, and environment interaction.
-
-In synchronous mode (Option A - Training), the system agent:
-1. Collects observations from all coordinators
-2. Optionally computes system-level actions
-3. Distributes actions to coordinators
-"""
-
-from abc import abstractmethod
-from typing import Any, Dict as DictType, List, Optional
-
-import numpy as np
+from typing import List, Any, Callable, Dict, Optional, Tuple
+from enum import Enum
 
 from heron.agents.base import Agent
 from heron.agents.coordinator_agent import CoordinatorAgent
+from heron.agents.proxy_agent import ProxyAgent
+from heron.core.action import Action
+from heron.core.feature import FeatureProvider
 from heron.core.observation import Observation
-from heron.core.state import State
-from heron.utils.typing import AgentID
-
-
-SYSTEM_LEVEL = 3  # Level identifier for system-level agents
+from heron.core.state import State, SystemAgentState
+from heron.utils.typing import AgentID, MultiAgentDict
+from heron.core.policies import Policy
+from heron.protocols.base import Protocol
+from heron.scheduling.scheduler import Event, EventScheduler
+from heron.scheduling.tick_config import TickConfig
+from gymnasium.spaces import Box, Space
+from heron.agents.constants import (
+    SYSTEM_LEVEL,
+    SYSTEM_AGENT_ID,
+    PROXY_AGENT_ID,
+    DEFAULT_SYSTEM_TICK_INTERVAL,
+    MSG_GET_INFO,
+    MSG_SET_STATE,
+    MSG_SET_STATE_COMPLETION,
+    MSG_SET_TICK_RESULT,
+    INFO_TYPE_OBS,
+    INFO_TYPE_GLOBAL_STATE,
+    INFO_TYPE_LOCAL_STATE,
+    STATE_TYPE_GLOBAL,
+    MSG_KEY_BODY,
+    MSG_KEY_PROTOCOL,
+)
 
 
 class SystemAgent(Agent):
-    """System-level agent for top-level coordination and environment interface.
-
-    SystemAgent serves as the interface between the environment and the agent
-    hierarchy. It handles:
-    - System-wide state management
-    - Visibility filtering for constrained information
-    - Communication with coordinators
-
-    Attributes:
-        coordinators: Dictionary mapping coordinator IDs to CoordinatorAgent instances
-    """
-
     def __init__(
         self,
         agent_id: Optional[AgentID] = None,
-
+        features: List[FeatureProvider] = [],
         # hierarchy params
+        subordinates: Optional[Dict[AgentID, "Agent"]] = None,
         env_id: Optional[str] = None,
-
-        # SystemAgent specific params
-        config: Optional[DictType[str, Any]] = None,
-
-        # timing params (for event-driven scheduling)
-        tick_interval: float = 300.0,  # System agents tick least frequently
-        obs_delay: float = 0.0,
-        act_delay: float = 0.0,
-        msg_delay: float = 0.0,
+        # timing config (for event-driven scheduling)
+        tick_config: Optional[TickConfig] = None,
+        # execution params
+        policy: Optional[Policy] = None,
+        # coordination params
+        protocol: Optional[Protocol] = None
     ):
-        """Initialize system agent.
-
-        Args:
-            agent_id: Unique identifier
-            env_id: Optional environment ID for multi-environment isolation
-            config: System agent configuration dictionary
-            tick_interval: Time between agent ticks (default 300s for system level)
-            obs_delay: Observation delay
-            act_delay: Action delay
-            msg_delay: Message delay
-        """
-        config = config or {}
-
-        # Build coordinator agents
-        coordinator_configs = config.get('coordinators', [])
-        self.coordinators = self._build_coordinators(
-            coordinator_configs,
-            env_id=env_id,
-            upstream_id=agent_id
-        )
+        # Store protocol and policy
+        self.protocol = protocol
+        self.policy = policy
 
         super().__init__(
-            agent_id=agent_id or "system_agent",
+            agent_id=agent_id or SYSTEM_AGENT_ID,
             level=SYSTEM_LEVEL,
+            features=features,
+            subordinates=subordinates,
             upstream_id=None,  # System agent has no upstream
             env_id=env_id,
-            subordinates=self.coordinators,
-            tick_interval=tick_interval,
-            obs_delay=obs_delay,
-            act_delay=act_delay,
-            msg_delay=msg_delay,
+            tick_config=tick_config or TickConfig.deterministic(tick_interval=DEFAULT_SYSTEM_TICK_INTERVAL),
+            policy=policy,
+            protocol=protocol
         )
 
-    def _build_coordinators(
-        self,
-        coordinator_configs: List[DictType[str, Any]],
-        env_id: Optional[str] = None,
-        upstream_id: Optional[AgentID] = None,
-    ) -> DictType[AgentID, CoordinatorAgent]:
-        """Build coordinator agents from configuration.
+    def init_state(self, features: List[FeatureProvider] = []) -> State:
+        return SystemAgentState(
+            owner_id=self.agent_id,
+            owner_level=SYSTEM_LEVEL,
+            features={f.feature_name: f for f in features}
+        )
 
-        Override this in domain-specific subclasses to create appropriate
-        coordinator types based on configuration.
+    def init_action(self, features: List[FeatureProvider] = []) -> Action:
+        return Action()
 
-        Args:
-            coordinator_configs: List of coordinator configuration dictionaries
-            env_id: Environment ID for multi-environment isolation
-            upstream_id: Upstream agent ID (this system agent)
+    
+    def set_state(self, *args, **kwargs) -> None:
+        pass
 
-        Returns:
-            Dictionary mapping coordinator IDs to CoordinatorAgent instances
-        """
-        # Default implementation - override in subclasses
-        return {}
+    def set_action(self, action: Any, *args, **kwargs) -> None:
+        pass
 
     # ============================================
-    # Core Agent Lifecycle Methods (Both Modes)
+    # Core Lifecycle Methods Overrides (see heron/agents/base.py for more details)
     # ============================================
-
-    def reset(self, *, seed: Optional[int] = None, **kwargs) -> None:
+    def reset(self, *, seed: Optional[int] = None, proxy: Optional[ProxyAgent] = None, **kwargs) -> Any:
         """Reset system agent and all coordinators. [Both Modes]
 
         Args:
             seed: Random seed
             **kwargs: Additional reset parameters
         """
-        super().reset(seed=seed)
+        super().reset(seed=seed, proxy=proxy, **kwargs)
 
-        # Reset coordinators
-        for _, coordinator in self.coordinators.items():
-            coordinator.reset(seed=seed, **kwargs)
+        return self.observe(proxy=proxy), {}
+    
+    def execute(self, actions: Dict[AgentID, Any], proxy: Optional[ProxyAgent] = None) -> None:
+        """Execute actions with hierarchical coordination and simulation. [Training Mode]"""
+        if not proxy:
+            raise ValueError("We still require a valid proxy agent so far")
 
-    # ============================================
-    # Synchronous Execution (Option A - Training)
-    # ============================================
+        # Sync state first (by-product of proxy having updated global state)
+        local_state = proxy.get_local_state(self.agent_id, self.protocol)
+        self.sync_state_from_observed(local_state)
 
-    def observe(self, global_state: Optional[DictType[str, Any]] = None, *args, **kwargs) -> Observation:
-        """Collect observations from coordinators. [Both Modes]
+        # Layer actions for hierarchical structure and act
+        actions = self.layer_actions(actions)
+        self.act(actions, proxy)
+        
+        # get latest global state (after the above local state updates are accounted for)
+        global_state = proxy.get_global_states(self.agent_id, self.protocol) 
+        # run external environment simulation step (upon action -> agent state update)
+        updated_global_state = self.simulate(global_state)
+        
+        # broadcast updated global state via proxy
+        proxy.set_global_state(updated_global_state)
 
-        - Training (Option A): Called by environment
-        - Testing (Option B): Called internally by tick()
+        # get current step statistics
+        obs = self.observe(proxy=proxy)
+        rewards = self.compute_rewards(proxy)
+        infos = self.get_info(proxy)
+        terminateds = self.get_terminateds(proxy)
+        truncateds = self.get_truncateds(proxy)
 
-        Args:
-            global_state: Environment state
+        # set step results in proxy agent
+        proxy.set_step_result(obs, rewards, terminateds, truncateds, infos)
 
-        Returns:
-            Aggregated observation from all coordinators
-        """
-        # Collect coordinator observations
-        coordinator_obs = {}
-        for coord_id, coordinator in self.coordinators.items():
-            coordinator_obs[coord_id] = coordinator.observe(global_state)
-
-        return Observation(
-            timestamp=self._timestep,
-            local={"coordinator_obs": coordinator_obs},
-            global_info=global_state or {},
-        )
-
-    def act(self, observation: Observation, upstream_action: Any = None) -> None:
-        """Distribute actions to coordinators. [Training Only - Direct Call]
-
-        Note: In Testing (Option B), tick() handles action distribution via
-        MESSAGE_DELIVERY events instead of calling this method directly.
-
-        Args:
-            observation: Aggregated observation
-            upstream_action: Action to distribute
-        """
-        if upstream_action is None:
-            return
-
-        # Distribute actions to coordinators
-        coordinator_obs = observation.local.get("coordinator_obs", {})
-
-        if isinstance(upstream_action, dict):
-            # Per-coordinator actions
-            for coord_id, action in upstream_action.items():
-                if coord_id in self.coordinators:
-                    obs = coordinator_obs.get(coord_id)
-                    if obs:
-                        self.coordinators[coord_id].act(obs, upstream_action=action)
-        else:
-            # Single action for all coordinators
-            for coord_id, coordinator in self.coordinators.items():
-                obs = coordinator_obs.get(coord_id)
-                if obs:
-                    coordinator.act(obs, upstream_action=upstream_action)
-
-    # ============================================
-    # Event-Driven Execution (Option B - Testing)
-    # ============================================
 
     def tick(
         self,
-        scheduler: "EventScheduler",
+        scheduler: EventScheduler,
         current_time: float,
-        global_state: Optional[DictType[str, Any]] = None,
-        proxy: Optional["Agent"] = None,
     ) -> None:
-        """Execute one tick in event-driven mode. [Testing Only]
-
-        In Option B, SystemAgent:
-        1. Updates timestep
-        2. Gets observation from coordinators
-        3. Optionally computes system-level action
-        4. Schedules MESSAGE_DELIVERY events to coordinators with msg_delay
-
-        Args:
-            scheduler: EventScheduler for scheduling future events
-            current_time: Current simulation time
-            global_state: Optional global state for observation
-            proxy: Optional ProxyAgent for delayed observations
         """
-        self._timestep = current_time
+        Action phase - equivalent to `self.act`
+        - Initiate tick for suborindates
+        - Initiate self
+        - Schedule for simulation
 
-        # Get observation from coordinators
-        observation = self.observe(global_state)
-        self._last_observation = observation
+        Note on entire event-driven flow:
+        - Schedule Actions
+        - Schedule Simulation (tick handles until this part)
+        (following steps are handled by individual event handlers)
+        - Actions take effect (some may fail to take effect before next step)
+        - Run simulation
+        - Update states
+        - Compute rewards
+        - Schedule next tick
+        """
+        super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
 
-        # SystemAgent typically doesn't have a policy - it distributes
-        # external actions or signals. Override in subclasses for custom behavior.
-        # Check message broker for any external actions
-        upstream_action = None
-        actions = self.receive_action_messages()
-        if actions:
-            upstream_action = actions[-1]  # Use most recent action
-
-        if upstream_action is None:
-            # No action to distribute
-            return
-
-        # Distribute actions to coordinators via MESSAGE_DELIVERY events
-        if isinstance(upstream_action, dict):
-            # Per-coordinator actions
-            for coord_id, action in upstream_action.items():
-                if coord_id in self.coordinators:
-                    scheduler.schedule_message_delivery(
-                        sender_id=self.agent_id,
-                        recipient_id=coord_id,
-                        message={"action": action},
-                        delay=self.msg_delay,
-                    )
+        # Schedule subordinate ticks
+        for subordinate_id in self.subordinates:
+            scheduler.schedule_agent_tick(subordinate_id)
+        
+        if self.policy:
+            # Compute & execute self action
+            # Ask proxy_agent for global state to compute local action
+            scheduler.schedule_message_delivery(
+                sender_id=self.agent_id,
+                recipient_id=PROXY_AGENT_ID,
+                message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
+                delay=self._tick_config.msg_delay,
+            )
         else:
-            # Single action for all coordinators
-            for coord_id in self.coordinators:
+            print(f"{self} doesn't act iself, becase there's no action policy")
+        
+        # schedule simulation
+        scheduler.schedule_simulation(self.agent_id, self._simulation_wait_interval)
+
+
+    # ============================================
+    # Custom Handlers for Event-Driven Execution
+    # ============================================
+    @Agent.handler("agent_tick")
+    def agent_tick_handler(self, event: Event, scheduler: EventScheduler) -> None:
+        self.tick(scheduler, event.timestamp)
+
+    @Agent.handler("action_effect")
+    def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
+        """System agent actions don't update local state (they manage simulation).
+
+        No-op handler to handle action_effect events scheduled by compute_action.
+        """
+        pass
+
+    @Agent.handler("message_delivery")
+    def message_delivery_handler(self, event: Event, scheduler: EventScheduler) -> None:
+        """Deliver message via message broker."""
+        recipient_id = event.agent_id
+        assert recipient_id == self.agent_id
+        message_content = event.payload.get("message", {})
+
+        # 4 cases:
+        # a. getting observation -> computing actions
+        # b. getting global state -> starting simulation
+        # c. getting local state -> compute rewards
+        # d. receiving "state set completion" message from proxy -> schedule reward computation
+        assert isinstance(message_content, dict)
+        if "get_obs_response" in message_content:
+            response_data = message_content["get_obs_response"]
+            body = response_data[MSG_KEY_BODY]
+
+            # Proxy sends both obs and local_state (design principle: agent asks for obs, proxy gives both)
+            obs_dict = body["obs"]
+            local_state = body["local_state"]
+
+            # Deserialize observation dict back to Observation object
+            obs = Observation.from_dict(obs_dict)
+
+            # Sync state first (proxy gives both obs & state)
+            self.sync_state_from_observed(local_state)
+
+            # Compute action - policy decides which parts of observation to use
+            self.compute_action(obs, scheduler)
+        elif "get_global_state_response" in message_content:
+            # The response structure is {'get_global_state_response': {'body': {...}}}
+            response_data = message_content["get_global_state_response"]
+            global_state = response_data[MSG_KEY_BODY] # a dict of {agent_id: state}
+            updated_global_state = self.simulate(global_state)
+            scheduler.schedule_message_delivery(
+                sender_id=self.agent_id,
+                recipient_id=PROXY_AGENT_ID,
+                message={MSG_SET_STATE: STATE_TYPE_GLOBAL, MSG_KEY_BODY: updated_global_state},
+                delay=self._tick_config.msg_delay,
+            )
+        elif "get_local_state_response" in message_content:
+            response_data = message_content["get_local_state_response"]
+            local_state = response_data[MSG_KEY_BODY]
+
+            # Sync internal state with what's stored in proxy (may have been modified by simulation)
+            self.sync_state_from_observed(local_state)
+
+            tick_result = {
+                "reward": self.compute_local_reward(local_state),
+                "terminated": self.is_terminated(local_state),
+                "truncated": self.is_truncated(local_state),
+                "info": self.get_local_info(local_state)
+            }
+
+            scheduler.schedule_message_delivery(
+                sender_id=self.agent_id,
+                recipient_id=PROXY_AGENT_ID,
+                message={MSG_SET_TICK_RESULT: INFO_TYPE_LOCAL_STATE, MSG_KEY_BODY: tick_result},
+                delay=self._tick_config.msg_delay,
+            )
+
+            # Schedule next tick for continuous operation if not terminated/truncated
+            if not tick_result["terminated"] and not tick_result["truncated"]:
+                scheduler.schedule_agent_tick(self.agent_id)
+        elif MSG_SET_STATE_COMPLETION in message_content:
+            if message_content[MSG_SET_STATE_COMPLETION] != "success":
+                raise ValueError(f"State update failed in proxy, cannot proceed with reward computation")
+
+            # Initiate reward computation after state update by retrieving local states from proxy agent
+
+            # Note: Parent agent will help initiate reward computation for subordinates.
+            # The alternative options is to let proxy agent directly send reward computation message to subordinates,
+            # but we want to keep the logic of "when to compute rewards" in the agent itself for better modularity and
+            # flexibility (e.g. parent agent may choose to delay subordinate reward computation until certain
+            # conditions are met, instead of immediately after state update)
+            for subordinate_id in self.subordinates:
                 scheduler.schedule_message_delivery(
-                    sender_id=self.agent_id,
-                    recipient_id=coord_id,
-                    message={"action": upstream_action},
-                    delay=self.msg_delay,
+                    sender_id=subordinate_id,
+                    recipient_id=PROXY_AGENT_ID,
+                    message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
+                    delay=self._tick_config.msg_delay,
                 )
 
-    # ============================================
-    # Environment Interface Methods (Both Modes)
-    # ============================================
+            scheduler.schedule_message_delivery(
+                sender_id=self.agent_id,
+                recipient_id=PROXY_AGENT_ID,
+                message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
+                delay=self._tick_config.msg_delay,
+            )
+        else:
+            raise NotImplementedError
 
-    @abstractmethod
-    def update_from_environment(self, env_state: DictType[str, Any]) -> None:
-        """Update internal state from environment. [Both Modes]
-
-        This method should be called by the environment to provide
-        the system agent with the current environment state.
-
-        Args:
-            env_state: Current environment state
+    @Agent.handler("simulation")
+    def simulation_handler(self, event: Event, scheduler: EventScheduler) -> None:
         """
-        pass
-
-    @abstractmethod
-    def get_state_for_environment(self) -> DictType[str, Any]:
-        """Get agent actions/state for environment. [Both Modes]
-
-        This method should be called by the environment to get
-        the agents' actions to apply.
-
-        Returns:
-            Dict containing agent actions/state updates
+        Simulation cycle:
+        1. Ask for proxy for global states
+        2. Proxy returns the global states via message delivery
+        3. Run simulation
+        4. Gather updated global state and broadcast via proxy
         """
-        pass
+        scheduler.schedule_message_delivery(
+            sender_id=self.agent_id,
+            recipient_id=PROXY_AGENT_ID,
+            message={MSG_GET_INFO: INFO_TYPE_GLOBAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
+            delay=self._tick_config.msg_delay,
+        )
+    
 
     # ============================================
-    # Visibility Filtering Methods (Both Modes)
+    # Simulation related functions - SystemAgent-specific
     # ============================================
-
-    def filter_state_for_agent(
-        self,
-        state: State,
-        requestor_id: AgentID,
-        requestor_level: int
-    ) -> DictType[str, np.ndarray]:
-        """Filter state based on agent's visibility level. [Both Modes]
-
-        Uses the FeatureProvider visibility rules to filter which
-        parts of the state are visible to the requesting agent.
-
-        Args:
-            state: State to filter
-            requestor_id: ID of requesting agent
-            requestor_level: Hierarchy level of requesting agent
-
-        Returns:
-            Dict of observable features
+    def set_simulation(
+        self, 
+        simulation_func: Callable, 
+        env_state_to_global_state: Callable,
+        global_state_to_env_state: Callable,
+        wait_interval: Optional[float] = None
+    ):
         """
-        return state.observed_by(requestor_id, requestor_level)
-
-    def broadcast_to_coordinators(self, message: DictType[str, Any]) -> None:
-        """Broadcast a message to all coordinators. [Both Modes]
-
-        Uses message broker if available for distributed communication.
-
-        Args:
-            message: Message content to broadcast
+        simulation_func: simulation function passed from environment
+        wait_interval: waiting time between action kick-off and simulation starts
         """
-        if self._message_broker is not None:
-            for coord_id in self.coordinators:
-                self.send_message(message, recipient_id=coord_id)
+        self._simulation_func = simulation_func
+        self._env_state_to_global_state = env_state_to_global_state
+        self._global_state_to_env_state = global_state_to_env_state
+        self._simulation_wait_interval = wait_interval or self.tick_config.tick_interval
+
+    def simulate(self, global_state: Dict[AgentID, Any]) -> Any:
+        env_state =  self._global_state_to_env_state(global_state)
+        updated_env_state = self._simulation_func(env_state)
+        updated_global_state = self._env_state_to_global_state(updated_env_state)
+        return updated_global_state
+
 
     # ============================================
-    # Utility Methods (Both Modes)
+    # Utility Methods
     # ============================================
+    @property
+    def coordinators(self) -> Dict[AgentID, CoordinatorAgent]:
+        """Alias for subordinates - more descriptive for SystemAgent context."""
+        return self.subordinates
+
+    @coordinators.setter
+    def coordinators(self, value: Dict[AgentID, CoordinatorAgent]) -> None:
+        """Set coordinators (subordinates)."""
+        self.subordinates = value
 
     def __repr__(self) -> str:
-        num_coords = len(self.coordinators)
-        return f"SystemAgent(id={self.agent_id}, coordinators={num_coords})"
+        num_coords = len(self.subordinates)
+        protocol_name = self.protocol.__class__.__name__ if self.protocol else "None"
+        return f"SystemAgent(id={self.agent_id}, coordinators={num_coords}, protocol={protocol_name})"

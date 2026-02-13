@@ -18,6 +18,9 @@ from heron.utils.array_utils import cat_f32
 class Action:
     """Mixed continuous/discrete action representation.
 
+    Supports continuous actions (e.g., power setpoints), discrete actions
+    (e.g., on/off switches), or mixed continuous+discrete actions.
+
     Attributes:
         c: Continuous action values in physical units, shape (dim_c,)
         d: Discrete action indices, shape (dim_d,), each d[i] in {0..ncats_i-1}
@@ -26,7 +29,39 @@ class Action:
         range: Tuple of (lower_bounds, upper_bounds) for continuous actions
         ncats: Number of categories for each discrete head
 
-    Use `scale()` / `unscale()` for continuous normalization to [-1, 1].
+    Example:
+        Create a continuous action with bounds::
+
+            import numpy as np
+            from heron.core import Action
+
+            action = Action()
+            action.set_specs(
+                dim_c=2,
+                range=(np.array([0.0, -1.0]), np.array([10.0, 1.0]))
+            )
+            action.sample()  # Random action within bounds
+            print(action.c)  # e.g., [5.2, 0.3]
+
+        Create a discrete action::
+
+            action = Action()
+            action.set_specs(dim_d=1, ncats=[5])  # 5 choices
+            action.sample()
+            print(action.d)  # e.g., [2]
+
+        Create a mixed continuous+discrete action::
+
+            action = Action()
+            action.set_specs(
+                dim_c=2,
+                dim_d=1,
+                ncats=[3],
+                range=(np.array([0.0, 0.0]), np.array([1.0, 1.0]))
+            )
+
+    Note:
+        Use `scale()` / `unscale()` for continuous normalization to [-1, 1].
     """
 
     c: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.float32))
@@ -83,7 +118,7 @@ class Action:
         if self.dim_d == 0:
             self.d = np.array([], dtype=np.int32)
         if self.dim_d == 0 and self.ncats != []:
-            raise ValueError("ncats must be >=1 when dim_d > 0.")
+            raise ValueError("ncats must be empty when dim_d == 0.")
         if self.dim_d > 0:
             if len(self.ncats) != self.dim_d:
                 raise ValueError("len(ncats) must equal dim_d.")
@@ -102,7 +137,7 @@ class Action:
         self,
         dim_c: int = 0,
         dim_d: int = 0,
-        ncats: Optional[Sequence[int]] = [],
+        ncats: Optional[Sequence[int]] = None,
         range: Optional[Tuple[np.ndarray, np.ndarray]] = None,
     ) -> None:
         """Set action space specifications.
@@ -114,6 +149,8 @@ class Action:
             range: Tuple of (lower, upper) bounds for continuous actions
         """
         self.dim_c, self.dim_d = int(dim_c), int(dim_d)
+        if ncats is None:
+            ncats = []
         if isinstance(ncats, int):
             ncats = [ncats] * self.dim_d
         self.ncats = list(ncats)
@@ -379,7 +416,7 @@ class Action:
         vec: Sequence[float],
         dim_c: int,
         dim_d: int,
-        ncats: Optional[Sequence[int]] = [],
+        ncats: Optional[Sequence[int]] = None,
         range: Optional[Tuple[np.ndarray, np.ndarray]] = None,
     ) -> "Action":
         """Create an Action from a flat vector `[c..., d...]`."""
@@ -389,6 +426,8 @@ class Action:
             raise ValueError(f"vector length {vec.size} != expected {expected}")
         c = vec[:dim_c].astype(np.float32)
         d = vec[dim_c:].astype(np.int32) if dim_d else np.array([], dtype=np.int32)
+        if ncats is None:
+            ncats = []
         return cls(
             c=c, d=d, dim_c=dim_c, dim_d=dim_d, ncats=ncats, range=range,
         )
@@ -462,3 +501,13 @@ class Action:
             raise TypeError(f"Unsupported action space type: {type(space).__name__}")
 
         return action
+
+    def __repr__(self) -> str:
+        """Return concise string representation."""
+        parts = [f"Action(dim_c={self.dim_c}"]
+        if self.dim_c > 0:
+            c_str = np.array2string(self.c, precision=3, separator=', ')
+            parts.append(f"c={c_str}")
+        if self.dim_d > 0:
+            parts.append(f"dim_d={self.dim_d}, d={self.d.tolist()}, ncats={self.ncats}")
+        return ", ".join(parts) + ")"

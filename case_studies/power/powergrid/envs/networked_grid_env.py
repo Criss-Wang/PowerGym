@@ -15,10 +15,10 @@ import pandapower as pp
 from gymnasium.spaces import Box, Dict as SpaceDict, Discrete, MultiDiscrete
 
 from powergrid.agents.power_grid_agent import PowerGridAgent
-from powergrid.agents.proxy_agent import ProxyAgent
-from heron.envs.adapters import PettingZooParallelEnv
+from heron.agents.proxy_agent import ProxyAgent
+from heron.envs.archive.adapters import PettingZooParallelEnv
 from heron.protocols.base import NoProtocol, Protocol
-from heron.messaging.base import ChannelManager, Message, MessageBroker, MessageType
+from heron.messaging import ChannelManager, Message, MessageBroker, MessageType
 from heron.messaging.in_memory_broker import InMemoryBroker
 from heron.utils.typing import AgentID
 
@@ -172,15 +172,16 @@ class NetworkedGridEnv(PettingZooParallelEnv):
             return None
 
         # Get list of all agent IDs that will receive network state
-        subordinate_agent_ids = list(self.agent_dict.keys())
+        registered_agent_ids = list(self.agent_dict.keys())
 
-        # Create proxy agent - power grid ProxyAgent requires message_broker
+        # Create proxy agent with message broker for distributed mode
         proxy = ProxyAgent(
             agent_id="proxy_agent",
-            message_broker=self.message_broker,  # Required for power grid ProxyAgent
+            message_broker=self.message_broker,
             env_id=self.env_id,
-            subordinate_agents=subordinate_agent_ids,
+            registered_agents=registered_agent_ids,
             visibility_rules=None,  # Default: all agents see all state
+            result_channel_type="power_flow",  # Power grid specific channel
         )
 
         return proxy
@@ -360,8 +361,8 @@ class NetworkedGridEnv(PettingZooParallelEnv):
         self.message_broker.publish(channel, message)
 
         # ProxyAgent receives and distributes to individual agents
-        self._local_proxy_agent.receive_network_state_from_environment()
-        self._local_proxy_agent.distribute_network_state_to_agents()
+        self._local_proxy_agent.receive_state_from_environment()
+        self._local_proxy_agent.distribute_state_to_agents()
 
     def _update_loads_distributed(self):
         """Update load scaling for all agents in distributed mode.
@@ -438,10 +439,6 @@ class NetworkedGridEnv(PettingZooParallelEnv):
                     # This is necessary because act() only sets the action, not the state
                     for device in agent.devices.values():
                         device.update_state()
-
-                    # Have devices publish state updates for environment sync
-                    for device in agent.devices.values():
-                        device.publish_state_update()
 
         # Update network states based on agent actions
         self._update_net()
@@ -635,10 +632,8 @@ class NetworkedGridEnv(PettingZooParallelEnv):
             **kwargs: Additional arguments passed to agent reset methods
         """
         for agent in self.agent_dict.values():
-            agent.reset(seed=seed, **kwargs)
-            # Reset subordinate devices if this is a PowerGridAgent
-            if isinstance(agent, PowerGridAgent):
-                agent.reset_all_devices(**kwargs)
+            # Agent.reset() now handles subordinate reset automatically via the hierarchy
+            agent.reset(seed=seed, proxy=self._local_proxy_agent, **kwargs)
 
     def get_collective_metrics(self) -> Dict[str, float]:
         """Get collective metrics across all agents for CTDE evaluation.

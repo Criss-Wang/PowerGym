@@ -4,11 +4,15 @@ This implementation stores all messages in memory using Python dictionaries.
 It's fast, simple, and perfect for testing, development, and single-process simulations.
 """
 
+import logging
 from collections import defaultdict
 from threading import Lock
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
-from heron.messaging.base import Message, MessageBroker
+from heron.messaging.broker_base import MessageBroker
+from heron.messaging.messages import Message
+
+logger = logging.getLogger(__name__)
 
 
 class InMemoryBroker(MessageBroker):
@@ -35,8 +39,24 @@ class InMemoryBroker(MessageBroker):
     def __init__(self):
         """Initialize in-memory broker."""
         self.channels: Dict[str, List[Message]] = defaultdict(list)
-        self.subscribers: Dict[str, List[Callable]] = defaultdict(list)
+        self.subscribers: Dict[str, List[Callable[[Message], None]]] = defaultdict(list)
         self.lock = Lock()
+
+    def reset(self, *, seed: Optional[int] = None, **kwargs) -> None:
+        """Reset the broker state.
+
+        Clears all messages from all channels while preserving the channel structure
+        and subscriber connections. Attached agents remain connected to the broker.
+
+        Args:
+            seed: Optional random seed (unused, provided for interface compatibility)
+            **kwargs: Additional keyword arguments (unused)
+        """
+        with self.lock:
+            # Clear all messages from all channels while keeping the channel structure
+            for channel in self.channels:
+                self.channels[channel] = []
+            # Note: We intentionally keep subscribers intact so agents remain connected
 
     def create_channel(self, channel_name: str) -> None:
         """Create a channel.
@@ -76,7 +96,7 @@ class InMemoryBroker(MessageBroker):
                 callback(message)
             except Exception as e:
                 # Don't let subscriber errors crash the broker
-                print(f"Error in subscriber callback for channel {channel}: {e}")
+                logger.warning(f"Error in subscriber callback for channel {channel}: {e}")
 
     def consume(
         self,

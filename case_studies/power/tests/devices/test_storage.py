@@ -266,7 +266,7 @@ class TestESS:
         ess.cost = 100.0
 
         # Reset with specific SOC
-        ess.reset_device(soc=0.6)
+        ess.reset_agent(soc=0.6)
 
         assert ess.electrical.P_MW == 0.0
         assert ess.storage.soc == 0.6
@@ -285,7 +285,7 @@ class TestESS:
         )
 
         # Reset with random init
-        ess.reset_device(random_init_soc=True, seed=42)
+        ess.reset_agent(random_init_soc=True, seed=42)
 
         # SOC should be between soc_min and soc_max
         assert ess._storage_config.soc_min <= ess.storage.soc <= ess._storage_config.soc_max

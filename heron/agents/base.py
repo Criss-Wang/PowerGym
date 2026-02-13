@@ -1,167 +1,392 @@
-"""Base agent abstraction for hierarchical multi-agent control.
 
-This module provides the core abstractions for agents in the HERON framework,
-supporting hierarchical control, agent-to-agent communication, and flexible
-observation/action interfaces.
-
-Execution Modes:
-    1. Synchronous (Option A - Training): observe() -> act() with CTDE pattern
-       - Coordinator collects observations from subordinates
-       - Centralized policy computes joint action
-       - Coordinator distributes actions to subordinates
-       - All operations are synchronous within env.step()
-
-    2. Event-Driven (Option B - Testing): EventScheduler with independent agent ticks
-       - Each agent ticks at its own interval (tick_interval)
-       - Observations/actions have configurable delays (obs_delay, act_delay)
-       - Messages between agents have delays (msg_delay)
-       - No hierarchical waiting - agents act on potentially stale information
-"""
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from builtins import float
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Callable
 
 import gymnasium as gym
-
-from heron.core.action import Action
-from heron.core.observation import Observation
-from heron.messaging.base import ChannelManager, Message as BrokerMessage, MessageType
-from heron.utils.typing import AgentID
+import numpy as np
 
 if TYPE_CHECKING:
-    from heron.messaging.base import MessageBroker
-    from heron.scheduling.tick_config import TickConfig, JitterType
+    from heron.agents.proxy_agent import ProxyAgent
+
+from heron.core.feature import FeatureProvider
+from heron.messaging import MessageBroker, ChannelManager, Message as BrokerMessage, MessageType
+from heron.utils.typing import AgentID
+from heron.scheduling.tick_config import TickConfig, JitterType
+from heron.scheduling.scheduler import EventScheduler
+from heron.scheduling.event import Event, EventType, EVENT_TYPE_FROM_STRING
+from heron.core.policies import Policy
+from heron.core.state import State
+from heron.core.action import Action
+from heron.protocols.base import Protocol
+from heron.agents.constants import PROXY_AGENT_ID, FIELD_LEVEL
 
 
 class Agent(ABC):
-    """Abstract base class for all agents in the hierarchy.
+    # class-level handler function mapping
+    _event_handler_funcs: Dict[EventType, Callable[[Event, "EventScheduler"], None]] = {}
 
-    Agents can operate at different levels of the control hierarchy:
-    - Field level (L1): Individual units, sensors, actuators
-    - Coordinator level (L2): Regional controllers, aggregators
-    - System level (L3): Central controller, market operator
+    def __init_subclass__(cls, **kwargs):
+        """Ensure each subclass gets its own copy of the handlers dict and register handlers."""
+        super().__init_subclass__(**kwargs)
+        # Create a new dict for this subclass, inheriting parent handlers
+        cls._event_handler_funcs = cls._event_handler_funcs.copy()
 
-    Attributes:
-        agent_id: Unique identifier for this agent
-        level: Hierarchy level (1=field, 2=coordinator, 3=system)
-        observation_space: Gymnasium space for observations
-        action_space: Gymnasium space for actions
-        upstream_id: Optional upstream agent ID for hierarchy structure
-        subordinates: Dict of subordinate agents for hierarchy structure
-        env_id: Environment ID for multi-environment isolation
-        tick_interval: Time between agent steps (for event-driven scheduling)
-        obs_delay: Observation delay - agent sees state from t - obs_delay
-        act_delay: Action delay - action takes effect at t + act_delay
-        msg_delay: Message delay - messages arrive after msg_delay
-    """
+        # Register any handlers marked with _handler_event_type
+        for name in dir(cls):
+            # Skip special attributes (dunder methods)
+            if name.startswith('__'):
+                continue
+            try:
+                attr = getattr(cls, name)
+                if callable(attr) and hasattr(attr, '_handler_event_type'):
+                    cls._event_handler_funcs[attr._handler_event_type] = attr
+            except AttributeError:
+                # Skip attributes that can't be accessed
+                pass
 
     def __init__(
         self,
         agent_id: AgentID,
         level: int = 1,
+        features: List[FeatureProvider] = [],
         observation_space: Optional[gym.Space] = None,
         action_space: Optional[gym.Space] = None,
-
         # hierarchy params
         upstream_id: Optional[AgentID] = None,
         subordinates: Optional[Dict[AgentID, "Agent"]] = None,
         env_id: Optional[str] = None,
-
-        # timing/latency params (for event-driven scheduling)
-        tick_interval: float = 1.0,
-        obs_delay: float = 0.0,
-        act_delay: float = 0.0,
-        msg_delay: float = 0.0,
-
-        # NEW: TickConfig for full control (overrides individual timing params)
-        tick_config: Optional["TickConfig"] = None,
+        # timing config (for event-driven scheduling)
+        tick_config: Optional[TickConfig] = None,
+        # execution params
+        policy: Optional[Policy] = None,
+        # coordination params
+        protocol: Optional[Protocol] = None
     ):
-        """Initialize agent.
-
-        Args:
-            agent_id: Unique identifier
-            level: Hierarchy level (1=field, 2=coordinator, 3=system)
-            observation_space: Gymnasium observation space
-            action_space: Gymnasium action space
-            upstream_id: Optional upstream agent ID for hierarchy structure
-            subordinates: Optional dict of subordinate agents
-            env_id: Optional environment ID for multi-environment isolation
-            tick_interval: Time between agent steps (ignored if tick_config provided)
-            obs_delay: Observation delay (ignored if tick_config provided)
-            act_delay: Action delay (ignored if tick_config provided)
-            msg_delay: Message delay (ignored if tick_config provided)
-            tick_config: Optional TickConfig for full control including jitter
-        """
         self.agent_id = agent_id
         self.level = level
         self.observation_space = observation_space
         self.action_space = action_space
+        self.policy = policy
+        self.protocol = protocol
+        self.action = self.init_action(features=features)
+        self.state = self.init_state(features=features)
 
         # Execution state
         self._timestep: float = 0.0
-        self._last_observation: Optional[Observation] = None  # Cached obs for tick()
 
         # Message broker reference (set by environment in distributed mode)
-        self._message_broker: Optional["MessageBroker"] = None
+        self._message_broker: Optional[MessageBroker] = None
 
         # Timing configuration (via TickConfig)
-        if tick_config is not None:
-            self._tick_config = tick_config
-        else:
-            # Create deterministic config from legacy params
-            from heron.scheduling.tick_config import TickConfig as TC
-
-            self._tick_config = TC.deterministic(
-                tick_interval=tick_interval,
-                obs_delay=obs_delay,
-                act_delay=act_delay,
-                msg_delay=msg_delay,
-            )
+        self._tick_config = tick_config or TickConfig.deterministic()
 
         # Hierarchy structure (used by coordinators)
-        self.upstream_id = upstream_id
-        self.subordinates = subordinates or {}
         self.env_id = env_id
-        self.subordinates_info: Dict[AgentID, Dict[str, Any]] = {}
+        self.upstream_id = upstream_id
+        self.subordinates = self._build_subordinates(subordinates)
+
+    def _build_subordinates(self, subordinates: Optional[Dict[AgentID, "Agent"]] = None,) -> Dict[AgentID, "Agent"]:
+        if not subordinates:
+            return {}
+        for _, agent in subordinates.items():
+            agent.upstream_id = self.agent_id
+            agent.env_id = self.env_id
+        return subordinates
+
+    @abstractmethod
+    def init_state(self, features: List[FeatureProvider] = []) -> State:
+        pass
+    
+    @abstractmethod
+    def init_action(self, features: List[FeatureProvider] = []) -> Action:
+        pass
+
+    @abstractmethod
+    def set_state(self, *args, **kwargs) -> None:
+        pass
+
+    @abstractmethod
+    def set_action(self, action: Any, *args, **kwargs) -> None:
+        pass
+
+    def post_proxy_attach(self, proxy: "ProxyAgent") -> None:
+        """Hook for any additional setup after proxy attachment and global state initialization."""
+        pass
 
     # ============================================
-    # Tick Configuration (Event-Driven Mode)
+    # Core Lifecycle Methods (Both Modes)
+    # - reset: reseting fields and states, potentially returning current states
+    # - execute: Synchronous Execution (for Training phase)
+    # - tick: Event-Driven Execution (for Testing phase)
     # ============================================
+    def reset(self, *, seed: Optional[int] = None, proxy: Optional["ProxyAgent"] = None, **kwargs) -> Any:
+        self._timestep = 0.0
+        self.action.reset(**kwargs)  # Reset action to initial values, with optional overrides
+        self.state.reset(**kwargs)  # Reset state to initial values, with optional overrides
 
+        # Cache initial state in proxy
+        if not proxy:
+            raise ValueError("Agent requires a proxy agent to reset states")
+        if self.state is None:
+            raise ValueError("Agent state is not initialized, cannot reset. Please call initialize() first.")
+        proxy.set_local_state(self.agent_id, self.state)  # Pass State object directly
+
+        for subordinate in self.subordinates.values():
+            subordinate.reset(seed=seed, proxy=proxy, **kwargs)
+
+    def execute(self, actions: Dict[AgentID, Any], proxy: Optional["ProxyAgent"] = None) -> None:
+        """Execute actions in CTDE mode. [Training Mode]
+
+        Default implementation:
+        1. Sync state from proxy (state syncing as by-product of global state updates)
+        2. Act with given actions
+
+        Subclasses can override for custom behavior but should maintain state syncing.
+        """
+        if not proxy:
+            raise ValueError("Agent requires a proxy agent to execute")
+
+        # Sync state first (by-product of proxy having updated global state)
+        local_state = proxy.get_local_state(self.agent_id, self.protocol)
+        self.sync_state_from_observed(local_state)
+
+        self.act(actions, proxy)
+
+    @abstractmethod
+    def tick(
+        self,
+        scheduler: EventScheduler,
+        current_time: float,
+    ) -> None:
+        self._timestep = current_time
+        self._check_for_upstream_action()  # Check for any new upstream action at the start of the tick
+
+
+    # ============================================
+    # Observation related functions
+    # ============================================
+    def observe(self, global_state: Optional[Dict[str, Any]] = None, proxy: Optional["ProxyAgent"] = None, *args, **kwargs) -> Dict[AgentID, Any]:
+        """
+        Sample format:
+        {
+            "aid1": np.ndarray1,
+            "aid2": np.ndarray2,
+            ...
+        }
+        """
+        if not proxy:
+            raise ValueError("System Agent requires a proxy agent to observe states")
+        obs = {
+            self.agent_id: proxy.get_observation(self.agent_id, self.protocol), # local observation
+        }
+        for subordinate in self.subordinates.values():
+            obs.update(subordinate.observe(proxy=proxy))
+        return obs
+
+    # ============================================
+    # Reward related functions
+    # ============================================
+    def compute_rewards(self, proxy: "ProxyAgent") -> Dict[AgentID, float]:
+        if not proxy:
+            raise ValueError("System Agent requires a proxy agent to compute rewards")
+
+        # Local Reward computation steps:
+        # 1. get local states from proxy
+        # 2. collect reward params (e.g. safety, cost)
+        # 3. calculate reward
+        local_state = proxy.get_local_state(self.agent_id, self.protocol)
+        local_reward = self.compute_local_reward(local_state)
+        rewards = {
+            self.agent_id: local_reward,
+        }
+        for subordinate in self.subordinates.values():
+            rewards.update(subordinate.compute_rewards(proxy))
+        return rewards
+    
+    def compute_local_reward(self, local_state: dict) -> float:
+        # Default implementation returns 0 reward. Override in subclasses for custom reward logic.
+        return 0.0
+
+    # ============================================
+    # Info related functions
+    # ============================================
+    def get_info(self, proxy: "ProxyAgent") -> Dict[AgentID, Dict]:
+        if not proxy:
+            raise ValueError("System Agent requires a proxy agent to get infos")
+        # Local info derivation
+        # May use proxy to retrieve local states via proxy.get_local_state(self.agent_id)
+        local_state = proxy.get_local_state(self.agent_id, self.protocol)
+        local_info = self.get_local_info(local_state)
+        infos = {
+            self.agent_id: local_info,
+        }
+        for subordinate in self.subordinates.values():
+            infos.update(subordinate.get_info(proxy))
+        return infos
+    
+    def get_local_info(self, local_state: dict) -> Dict[AgentID, Any]:
+        return {}
+    
+    # ============================================
+    # terminateds related functions
+    # ============================================
+    def get_terminateds(self, proxy: "ProxyAgent") -> Dict[AgentID, bool]:
+        if not proxy:
+            raise ValueError("System Agent requires a proxy agent to derive termination state")
+        # May need to use env fields to decide
+        # TODO: pass in the env field elegantly
+        # e.g. done = (self._t % self.max_episode_steps) == 0
+        local_state = proxy.get_local_state(self.agent_id, self.protocol)
+        terminated = self.is_terminated(local_state)
+        terminateds = {
+            self.agent_id: terminated,
+        }
+        for subordinate in self.subordinates.values():
+            terminateds.update(subordinate.get_terminateds(proxy))
+        return terminateds
+    
+    def is_terminated(self, local_state: dict) -> bool:
+        return False
+    
+    # ============================================
+    # truncateds related functions
+    # ============================================
+    def get_truncateds(self, proxy: "ProxyAgent") -> Dict[AgentID, float]:
+        if not proxy:
+            raise ValueError("System Agent requires a proxy agent to derive truncated states")
+        # May need to use env fields to decide
+        # TODO: pass in the env field elegantly
+        # e.g. done = (self._t % self.max_episode_steps) == 0
+        local_state = proxy.get_local_state(self.agent_id, self.protocol)
+        truncated = self.is_truncated(local_state)
+        truncateds = {
+            self.agent_id: truncated
+        }
+        for subordinate in self.subordinates.values():
+            truncateds.update(subordinate.get_truncateds(proxy))
+        return truncateds
+    
+    def is_truncated(self, local_state: dict) -> bool:
+        return False
+
+    # ============================================
+    # Action taking related functions
+    # ============================================
+    def act(self, actions: Dict[str, Any], proxy: Optional["ProxyAgent"] = None) -> None:
+        self._timestep += 1
+
+        # run self action & store local state updates in proxy
+        self.handle_self_action(actions['self'], proxy)
+        # run subordinate actions & store local state updates in proxy
+        self.handle_subordinate_actions(actions['subordinates'], proxy)
+
+    def layer_actions(self, actions: Dict[AgentID, Any]) -> Dict[str, Any]:
+        """
+        Format:
+        {
+            "self": action1,
+            "subordinates: {
+                "sub1": {
+                    "self": subaction1,
+                    "subordinates": {
+                        ....
+                    }
+                },
+                ....
+            }
+        }
+        """
+        return {
+            "self": actions.get(self.agent_id),
+            "subordinates": {
+                subordinate_id: subordinate.layer_actions(actions)
+                for subordinate_id, subordinate in self.subordinates.items()
+            }
+        }
+
+    def handle_self_action(self, action: Any, proxy: Optional["ProxyAgent"] = None):
+        if action:
+            self.set_action(action)
+        elif self.policy:
+            local_obs = proxy.get_observation(self.agent_id)
+            self.set_action(self.policy.forward(observation=local_obs)) # This is where policy is needed!
+
+        else:
+            # Only warn for field agents (level 1) - higher-level agents don't need policies in CTDE
+            if self.level == 1:
+                print(f"No action built for ({self}) becase there's no upstream action and no action policy")
+
+        self.apply_action()
+        if not self.state:
+            raise ValueError("We cannot find appropriate agent state, double check your state update logic")
+        proxy.set_local_state(self.agent_id, self.state)  # Pass State object directly
+
+    def handle_subordinate_actions(self, actions: Dict[AgentID, Any], proxy: Optional["ProxyAgent"] = None):
+        # Note: Parent Agent doesn't build action for subordinates, i.e. self.policy.forward only produces local action
+        # TODO: Support parent-controlled actions
+        for subordinate_id, subordinate in self.subordinates.items():
+            if subordinate_id in actions:
+                subordinate.execute(actions[subordinate_id], proxy)
+            else:
+                print(f"{subordinate} not executed in current execution cycle")
+
+    def apply_action(self):
+        """Update self.state in agent based on self.action"""
+        pass
+
+    def sync_state_from_observed(self, observed_state: Dict[str, Any]) -> None:
+        """Synchronize internal state features from observed state data received from proxy.
+
+        This updates the agent's internal state to reflect any external changes (e.g., from simulation)
+        that were applied in the proxy. The observed_state format depends on whether it contains
+        numpy arrays (from observed_by()) or field-level dicts (from full state retrieval).
+
+        Args:
+            observed_state: State data from proxy, either:
+                - Dict[str, np.ndarray]: Feature vectors from observed_by()
+                - Dict[str, Dict[str, Any]]: Feature field dicts for direct update
+        """
+        if not observed_state:
+            return
+
+        for feature_name, feature_data in observed_state.items():
+            # O(1) lookup by feature name
+            if feature_name not in self.state.features:
+                continue
+            feature = self.state.features[feature_name]
+            if isinstance(feature_data, dict):
+                # Direct field-level update
+                feature.set_values(**feature_data)
+            elif isinstance(feature_data, np.ndarray):
+                # Vector format - reconstruct field values using feature.names()
+                field_names = feature.names()
+                if len(field_names) == len(feature_data):
+                    updates = {name: float(val) for name, val in zip(field_names, feature_data)}
+                    feature.set_values(**updates)
+
+    # ============================================
+    # Event-Driven Execution via scheduler
+    # ============================================
+    
+    # Event tick related methods. Note: these methods only define the logic of what to do when receiving certain events
+    # (e.g. message delivery), but not when to trigger these events. The latter is determined by the scheduler and 
+    # the tick configuration (e.g. tick interval, message delay, etc.) that defines the timing of event scheduling.
     @property
-    def tick_config(self) -> "TickConfig":
+    def tick_config(self) -> TickConfig:
         """Get the tick configuration for this agent."""
         return self._tick_config
 
     @tick_config.setter
-    def tick_config(self, config: "TickConfig") -> None:
+    def tick_config(self, config: TickConfig) -> None:
         """Set the tick configuration for this agent."""
         self._tick_config = config
 
-    # Backward-compatible properties (read base values from config)
-    @property
-    def tick_interval(self) -> float:
-        """Base tick interval (use tick_config.get_tick_interval() for jittered)."""
-        return self._tick_config.tick_interval
-
-    @property
-    def obs_delay(self) -> float:
-        """Base observation delay (use tick_config.get_obs_delay() for jittered)."""
-        return self._tick_config.obs_delay
-
-    @property
-    def act_delay(self) -> float:
-        """Base action delay (use tick_config.get_act_delay() for jittered)."""
-        return self._tick_config.act_delay
-
-    @property
-    def msg_delay(self) -> float:
-        """Base message delay (use tick_config.get_msg_delay() for jittered)."""
-        return self._tick_config.msg_delay
 
     def enable_jitter(
         self,
-        jitter_type: "JitterType" = None,
+        jitter_type: Optional[JitterType] = None,
         jitter_ratio: float = 0.1,
         seed: Optional[int] = None,
     ) -> None:
@@ -174,12 +399,10 @@ class Agent(ABC):
             jitter_ratio: Jitter magnitude as fraction of base
             seed: Optional RNG seed for reproducibility
         """
-        from heron.scheduling.tick_config import TickConfig as TC, JitterType
-
         if jitter_type is None:
             jitter_type = JitterType.GAUSSIAN
 
-        self._tick_config = TC.with_jitter(
+        self._tick_config = TickConfig.with_jitter(
             tick_interval=self._tick_config.tick_interval,
             obs_delay=self._tick_config.obs_delay,
             act_delay=self._tick_config.act_delay,
@@ -191,114 +414,133 @@ class Agent(ABC):
 
     def disable_jitter(self) -> None:
         """Disable jitter (switch to deterministic mode)."""
-        from heron.scheduling.tick_config import TickConfig as TC
-
-        self._tick_config = TC.deterministic(
+        self._tick_config = TickConfig.deterministic(
             tick_interval=self._tick_config.tick_interval,
             obs_delay=self._tick_config.obs_delay,
             act_delay=self._tick_config.act_delay,
             msg_delay=self._tick_config.msg_delay,
         )
 
-    # ============================================
-    # Core Lifecycle Methods (Both Modes)
-    # ============================================
+    def _check_for_upstream_action(self) -> None:
+        """Check message broker for action from upstream parent."""
+        if not self.upstream_id or not self._message_broker:
+            self._upstream_action = None
+            return
 
-    def reset(self, *, seed: Optional[int] = None, **kwargs) -> None:
-        """Reset agent to initial state. [Both Modes]
+        actions = self.receive_upstream_actions(
+            sender_id=self.upstream_id,
+            clear=True,
+        )
+        self._upstream_action = actions[-1] if actions else None
 
-        Args:
-            seed: Random seed for reproducibility
-            **kwargs: Additional reset parameters
-        """
-        self._timestep = 0.0
-        self._last_observation = None
+    # Action-related functions for event-driven execution (testing mode)
+    def compute_action(self, obs: Any, scheduler: EventScheduler):
+        # Priority: upstream action > policy > no action
+        # Action construction: 
+        #   - Option A: Get from message_broker
+        #   - Option B: Get from policy forward function (for coordinators with policies)
+        # Action decomposition: decomposition defined by protocol (for coordinators with protocols)
+        if self._upstream_action is not None:
+            action = self._upstream_action
+            self._upstream_action = None  # Clear after use
+        elif self.policy:
+            action = self.policy.forward(observation=obs)
+        else:
+            if self.level == FIELD_LEVEL and not self.upstream_id:
+                raise ValueError(f"Warning: {self} has no policy and no upstream action")
 
-    # ============================================
-    # Synchronous Execution (Option A - Training)
-    # ============================================
 
-    @abstractmethod
-    def observe(self, global_state: Optional[Dict[str, Any]] = None, *args, **kwargs) -> Observation:
-        """Extract relevant observations from global state. [Both Modes]
+        # Coordinate subordinate actions if needed
+        if self._should_send_subordinate_actions():
+            self.coordinate(obs, action)
 
-        - Training (Option A): Called directly by coordinator to collect observations
-        - Testing (Option B): Called internally by tick() to get current observation
-
-        Args:
-            global_state: Complete environment state
-
-        Returns:
-            Structured observation for this agent
-        """
-        pass
-
-    @abstractmethod
-    def act(self, observation: Observation, *args, **kwargs) -> Optional[Action]:
-        """Compute action from observation. [Both Modes]
-
-        - Training (Option A): Called directly by coordinator to apply actions
-        - Testing (Option B): Called internally by tick() to compute action
-
-        Args:
-            observation: Structured observation from observe()
-
-        Returns:
-            Action object, or None if action is stored internally / agent doesn't act
-        """
-        pass
-
-    # ============================================
-    # Event-Driven Execution (Option B - Testing)
-    # ============================================
-
-    def tick(
-        self,
-        scheduler: "EventScheduler",
-        current_time: float,
-        global_state: Optional[Dict[str, Any]] = None,
-        proxy: Optional["Agent"] = None,
-    ) -> None:
-        """Execute one tick in event-driven mode. [Testing Only]
-
-        Called by EventScheduler when AGENT_TICK event fires. The default
-        implementation provides a simple observe-act cycle. Override for
-        custom behavior.
-
-        Default behavior:
-        1. Update internal timestep
-        2. Get observation (using cached or fresh)
-        3. Compute action via act()
-        4. Schedule ACTION_EFFECT event with act_delay
-
-        Args:
-            scheduler: EventScheduler instance for scheduling future events
-            current_time: Current simulation time
-            global_state: Optional global state for observation
-            proxy: Optional ProxyAgent for delayed observations
-        """
-        self._timestep = current_time
-
-        # Get observation (may use delayed state via ProxyAgent in subclasses)
-        observation = self.observe(global_state)
-        self._last_observation = observation
-
-        # Compute action
-        self.act(observation)
-
-        # Schedule delayed action effect if act_delay > 0
-        if self.act_delay > 0 and hasattr(self, 'action'):
+        # Set self action 
+        self.set_action(action)
+        if self.action:
+            # if action is not None, apply it to update state and sync with proxy
             scheduler.schedule_action_effect(
                 agent_id=self.agent_id,
-                action=getattr(self, 'action', None),
-                delay=self.act_delay,
+                delay=self._tick_config.act_delay,
             )
 
     # ============================================
-    # Messaging via Message Broker (Both Modes)
+    # Handler-related utils
     # ============================================
+    class handler:
+        """Decorator for registering event handlers.
 
-    def set_message_broker(self, broker: "MessageBroker") -> None:
+        This is a descriptor that works both as @Agent.handler (from outside/subclasses)
+        and as @handler (from inside the Agent class definition).
+        """
+        def __init__(self, event_type_str: str):
+            self.event_type_str = event_type_str
+            event_type = EVENT_TYPE_FROM_STRING.get(event_type_str)
+            if not event_type:
+                raise KeyError(f"Event type '{event_type_str}' not found. Choose from: {list(EVENT_TYPE_FROM_STRING.keys())}")
+            self.event_type = event_type
+
+        def __call__(self, func: Callable):
+            """Called when used as @handler("event_type")."""
+            # Store event type on the function itself for later registration
+            func._handler_event_type = self.event_type
+            return func
+
+    def get_handlers(self) -> Dict[EventType, Callable[[Event, "EventScheduler"], None]]:
+        """Return handlers bound to this agent instance.
+
+        Handlers are stored as unbound methods at the class level, but need to be
+        bound to the specific agent instance when retrieved.
+        """
+        bound_handlers = {}
+        for event_type, func in self._event_handler_funcs.items():
+            # Bind the unbound method to this agent instance
+            bound_handlers[event_type] = lambda e, s, f=func: f(self, e, s)
+        return bound_handlers
+    
+    # ============================================
+    # Additional subordinate controls (Protocol Usage)
+    # ============================================
+    def _should_send_subordinate_actions(self) -> bool:
+        """Check if agent should coordinate subordinate actions."""
+        if not self.subordinates or not self.protocol:
+            return False
+        return not self.protocol.no_action()
+    
+    def coordinate(self, obs: Any, action: Any) -> None:
+        """Coordinate subordinate actions based on protocol."""
+        if not self.protocol or not self.subordinates:
+            return
+        
+        messages, actions = self.protocol.coordinate(
+            coordinator_state=self.state,
+            coordinator_action=action,
+            info_for_subordinates={sub_id: obs for sub_id in self.subordinates},  # Placeholder: in practice, get actual states
+        )
+        # Send coordinated actions to subordinates via message broker
+        for sub_id, sub_action in actions.items():
+            self.send_subordinate_action(sub_id, sub_action)
+
+        # Send coordination messages to subordinates via message broker
+        # Note: the message passed is not used yet
+        for sub_id, message in messages.items():
+            self.send_info(
+                broker=self._message_broker,
+                recipient_id=sub_id,
+                info=message,
+            )
+    
+    # ============================================
+    # Messaging via message broker
+    #
+    # Key utils:
+    # - publish
+    # - consume
+    # - send_action
+    # - send_info
+    # - receive_actions
+    # - receive_info
+    # ============================================
+    def set_message_broker(self, broker: MessageBroker) -> None:
         """Set the message broker for this agent. [Both Modes]
 
         Called by the environment to configure distributed messaging.
@@ -309,80 +551,17 @@ class Agent(ABC):
         self._message_broker = broker
 
     @property
-    def message_broker(self) -> Optional["MessageBroker"]:
+    def message_broker(self) -> Optional[MessageBroker]:
         """Get the message broker for this agent. [Both Modes]"""
         return self._message_broker
 
-    def send_message(
-        self,
-        content: Dict[str, Any],
-        recipient_id: str,
-        message_type: str = "INFO",
-    ) -> None:
-        """Send a message to another agent via message broker. [Both Modes]
 
-        Args:
-            content: Message payload
-            recipient_id: Target agent ID
-            message_type: Type of message (ACTION, INFO, BROADCAST, etc.)
-
-        Raises:
-            RuntimeError: If no message broker is configured
-        """
-        if self._message_broker is None:
-            raise RuntimeError(
-                f"Agent {self.agent_id} has no message broker configured. "
-                "Call set_message_broker() first."
-            )
-
-        channel = ChannelManager.info_channel(
-            self.agent_id, recipient_id, self.env_id or "default"
-        )
-        self.publish_to_broker(
-            broker=self._message_broker,
-            channel=channel,
-            payload=content,
-            recipient_id=recipient_id,
-            message_type=message_type,
-        )
-
-    def receive_messages(
-        self,
-        sender_id: Optional[str] = None,
-        clear: bool = True,
-    ) -> List[Dict[str, Any]]:
-        """Receive messages from the message broker. [Both Modes]
-
-        Args:
-            sender_id: Optional sender ID to filter messages from (uses upstream_id if not provided)
-            clear: If True, remove consumed messages
-
-        Returns:
-            List of message payloads
-
-        Raises:
-            RuntimeError: If no message broker is configured
-        """
-        if self._message_broker is None:
-            return []  # No broker, no messages
-
-        if sender_id is None:
-            sender_id = self.upstream_id
-        if sender_id is None:
-            return []
-
-        channel = ChannelManager.info_channel(
-            sender_id, self.agent_id, self.env_id or "default"
-        )
-        messages = self.consume_from_broker(self._message_broker, channel, clear=clear)
-        return [msg.payload for msg in messages]
-
-    def receive_action_messages(
+    def receive_upstream_actions(
         self,
         sender_id: Optional[str] = None,
         clear: bool = True,
     ) -> List[Any]:
-        """Receive action messages from the message broker. [Both Modes]
+        """Receive action messages from the message broker.
 
         Convenience method for receiving action messages from upstream.
 
@@ -396,18 +575,18 @@ class Agent(ABC):
         if self._message_broker is None:
             return []
 
-        return self.receive_actions_from_broker(
+        return self.receive_actions(
             broker=self._message_broker,
             upstream_id=sender_id,
             clear=clear,
         )
 
-    def send_action_to_subordinate(
+    def send_subordinate_action(
         self,
         recipient_id: str,
         action: Any,
     ) -> None:
-        """Send an action to a subordinate agent. [Both Modes]
+        """Send an action to a subordinate agent.
 
         Convenience method for sending actions to subordinates.
 
@@ -419,88 +598,25 @@ class Agent(ABC):
             raise RuntimeError(
                 f"Agent {self.agent_id} has no message broker configured."
             )
+        if action is None:
+            print(f"Warning: No action to send to subordinate {recipient_id}")
+            return
 
-        self.send_action_via_broker(
+        self.send_action(
             broker=self._message_broker,
             recipient_id=recipient_id,
             action=action,
         )
 
-    # ============================================
-    # Utility Methods (Both Modes)
-    # ============================================
-
-    def update_timestep(self, timestep: float) -> None:
-        """Update the internal timestep. [Both Modes]
-
-        Args:
-            timestep: New timestep value
-        """
-        self._timestep = timestep
-
-    def request_state_from_proxy(
+    def _publish(
         self,
-        proxy: "Agent",
-        owner_id: Optional[AgentID] = None,
-        at_time: Optional[float] = None,
-    ) -> Dict[str, Any]:
-        """Request filtered state from ProxyAgent. [Both Modes]
-
-        This is the recommended pattern for agents to access state in
-        information-constrained environments. The ProxyAgent applies
-        visibility rules before returning state.
-
-        In Option B (Testing), use at_time to get delayed observations:
-            state = self.request_state_from_proxy(
-                proxy, at_time=current_time - self.obs_delay
-            )
-
-        Args:
-            proxy: ProxyAgent instance to request state from
-            owner_id: ID of agent whose state to request (defaults to self)
-            at_time: Optional timestamp for delayed observations (Option B)
-
-        Returns:
-            Filtered state dict based on visibility rules
-
-        Example:
-            # In agent's observe() or act() method:
-            state = self.request_state_from_proxy(self.proxy_agent)
-
-            # With observation delay (Option B):
-            state = self.request_state_from_proxy(
-                self.proxy_agent, at_time=current_time - self.obs_delay
-            )
-        """
-        # Import here to avoid circular dependency
-        from heron.agents.proxy_agent import ProxyAgent
-
-        if not isinstance(proxy, ProxyAgent):
-            raise TypeError(f"Expected ProxyAgent, got {type(proxy).__name__}")
-
-        if owner_id is None:
-            owner_id = self.agent_id
-
-        return proxy.get_state_for_agent(
-            agent_id=self.agent_id,
-            requestor_level=self.level,
-            owner_id=owner_id,
-            at_time=at_time,
-        )
-
-    # ============================================
-    # Distributed Mode (Message Broker)
-    # ============================================
-
-    def publish_to_broker(
-        self,
-        broker: "MessageBroker",
+        broker: MessageBroker,
         channel: str,
         payload: Dict[str, Any],
         recipient_id: str = "broadcast",
         message_type: str = "INFO",
     ) -> None:
-        """Publish a message via the message broker. [Distributed Mode]
+        """Publish a message to a channel.
 
         Args:
             broker: MessageBroker instance
@@ -519,13 +635,13 @@ class Agent(ABC):
         )
         broker.publish(channel, msg)
 
-    def consume_from_broker(
+    def _consume(
         self,
-        broker: "MessageBroker",
+        broker: MessageBroker,
         channel: str,
         clear: bool = True,
-    ) -> List["BrokerMessage"]:
-        """Consume messages from the message broker. [Distributed Mode]
+    ) -> List[BrokerMessage]:
+        """Consume messages from a channel.
 
         Args:
             broker: MessageBroker instance
@@ -542,13 +658,13 @@ class Agent(ABC):
             clear=clear,
         )
 
-    def send_action_via_broker(
+    def send_action(
         self,
-        broker: "MessageBroker",
+        broker: MessageBroker,
         recipient_id: str,
         action: Any,
     ) -> None:
-        """Send an action to a subordinate via the message broker. [Distributed Mode]
+        """Send an action to a subordinate.
 
         Args:
             broker: MessageBroker instance
@@ -558,7 +674,7 @@ class Agent(ABC):
         channel = ChannelManager.action_channel(
             self.agent_id, recipient_id, self.env_id or "default"
         )
-        self.publish_to_broker(
+        self._publish(
             broker=broker,
             channel=channel,
             payload={"action": action},
@@ -566,13 +682,13 @@ class Agent(ABC):
             message_type="ACTION",
         )
 
-    def send_info_via_broker(
+    def send_info(
         self,
-        broker: "MessageBroker",
+        broker: MessageBroker,
         recipient_id: str,
         info: Dict[str, Any],
     ) -> None:
-        """Send info to an upstream agent via the message broker. [Distributed Mode]
+        """Send info to an upstream agent.
 
         Args:
             broker: MessageBroker instance
@@ -582,7 +698,7 @@ class Agent(ABC):
         channel = ChannelManager.info_channel(
             self.agent_id, recipient_id, self.env_id or "default"
         )
-        self.publish_to_broker(
+        self._publish(
             broker=broker,
             channel=channel,
             payload=info,
@@ -590,13 +706,13 @@ class Agent(ABC):
             message_type="INFO",
         )
 
-    def receive_actions_from_broker(
+    def receive_actions(
         self,
-        broker: "MessageBroker",
+        broker: MessageBroker,
         upstream_id: Optional[str] = None,
         clear: bool = True,
     ) -> List[Any]:
-        """Receive actions from upstream via the message broker. [Distributed Mode]
+        """Receive actions from upstream.
 
         Args:
             broker: MessageBroker instance
@@ -614,15 +730,15 @@ class Agent(ABC):
         channel = ChannelManager.action_channel(
             upstream_id, self.agent_id, self.env_id or "default"
         )
-        messages = self.consume_from_broker(broker, channel, clear=clear)
+        messages = self._consume(broker, channel, clear=clear)
         return [msg.payload.get("action") for msg in messages if "action" in msg.payload]
 
-    def receive_info_from_broker(
+    def receive_info(
         self,
-        broker: "MessageBroker",
+        broker: MessageBroker,
         subordinate_ids: Optional[List[str]] = None,
     ) -> Dict[str, List[Dict[str, Any]]]:
-        """Receive info from subordinates via the message broker. [Distributed Mode]
+        """Receive info from subordinates.
 
         Args:
             broker: MessageBroker instance
@@ -639,11 +755,15 @@ class Agent(ABC):
             channel = ChannelManager.info_channel(
                 sub_id, self.agent_id, self.env_id or "default"
             )
-            messages = self.consume_from_broker(broker, channel)
+            messages = self._consume(broker, channel)
             if messages:
                 result[sub_id] = [msg.payload for msg in messages]
 
         return result
+    
+    # ============================================
+    # Utility Methods
+    # ============================================
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(id={self.agent_id}, level={self.level})"

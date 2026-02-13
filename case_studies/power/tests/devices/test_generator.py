@@ -80,7 +80,7 @@ def test_projection_applies_limits():
     # ask for an over-limit action: P>pmax and Q>qmax → must be projected
     # Set action directly
     dg.action.c[:] = np.array([9.0, 4.0], dtype=np.float32)
-    dg.update_state()
+    dg.apply_action()  # Modern pattern: apply_action() updates state
     e = dg.electrical
     lim = dg.limits
 
@@ -101,35 +101,35 @@ def test_uc_shutdown_then_startup_costs_and_states():
         agent_id="G1",
         device_config=make_config(with_q=True, with_uc=True)
     )
-    dg.reset_device()
+    # State is initialized during __init__, no need for reset_agent()
     # dg.status.state == "online"
 
     # Request OFF: d=0; set continuous c as well
     dg.action.c[:] = np.array([5.0, 0.0], dtype=np.float32)
     dg.action.d[:] = np.array([0], dtype=np.int32)  # UC command: turn off
-    dg.update_state()
+    dg.apply_action()  # Modern pattern: apply_action() updates state
     # first step: entering "shutdown"
     assert dg.status.state == "shutdown"
 
     # advance one more step to complete shutdown (shutdown_time_hr=2)
     dg.action.d[:] = np.array([0], dtype=np.int32)
-    dg.update_state()
+    dg.apply_action()
     dg.update_cost_safety()
     assert dg.status.state == "offline"
     # shutdown cost applied on completion
-    assert dg.cost >= dg._generator_config.shutdown_cost * dg._generator_config.dt_h
+    assert dg.cost >= dg._shutdown_cost * dg._dt_h
 
     # Now request ON: d=1, two steps to start (startup_time_hr=2)
     dg.action.d[:] = np.array([1], dtype=np.int32)  # UC command: turn on
-    dg.update_state()
+    dg.apply_action()
     assert dg.status.state == "startup"
 
     dg.action.d[:] = np.array([1], dtype=np.int32)
-    dg.update_state()
+    dg.apply_action()
     dg.update_cost_safety()
     assert dg.status.state == "online"
     # startup cost applied on completion
-    assert dg.cost >= dg._generator_config.startup_cost * dg._generator_config.dt_h
+    assert dg.cost >= dg._startup_cost * dg._dt_h
 
 
 def test_uc_timers_startup_shutdown():
@@ -137,30 +137,30 @@ def test_uc_timers_startup_shutdown():
         agent_id="G1",
         device_config=make_config(with_q=True, with_uc=True)
     )
-    dg.reset_device()
+    # State is initialized during __init__, no need for reset_agent()
 
     # Request OFF (d=0) → enter shutdown → next step complete → offline
     dg.action.c[:] = np.array([5.0, 0.0], dtype=np.float32)
     dg.action.d[:] = np.array([0], dtype=np.int32)
-    dg.update_state()
+    dg.apply_action()  # Modern pattern: apply_action() updates state
     assert dg.status.state == "shutdown"
 
     dg.action.d[:] = np.array([0], dtype=np.int32)
-    dg.update_state()
+    dg.apply_action()
     dg.update_cost_safety()
     assert dg.status.state == "offline"
-    assert dg.cost >= dg._generator_config.shutdown_cost * dg._generator_config.dt_h
+    assert dg.cost >= dg._shutdown_cost * dg._dt_h
 
     # Request ON (d=1) → startup spans 2 steps → online and startup_cost
     dg.action.d[:] = np.array([1], dtype=np.int32)
-    dg.update_state()
+    dg.apply_action()
     assert dg.status.state == "startup"
 
     dg.action.d[:] = np.array([1], dtype=np.int32)
-    dg.update_state()
+    dg.apply_action()
     dg.update_cost_safety()
     assert dg.status.state == "online"
-    assert dg.cost >= dg._generator_config.startup_cost * dg._generator_config.dt_h
+    assert dg.cost >= dg._startup_cost * dg._dt_h
 
 
 def test_cost_and_safety_accounting():
@@ -170,7 +170,7 @@ def test_cost_and_safety_accounting():
     )
     # Set a feasible but nonzero (P,Q)
     dg.action.c[:] = np.array([6.0, 2.0], dtype=np.float32)
-    dg.update_state()
+    dg.apply_action()  # Modern pattern: apply_action() updates state
     dg.update_cost_safety()
     # Cost should be positive when online and P>0
     assert dg.cost > 0.0

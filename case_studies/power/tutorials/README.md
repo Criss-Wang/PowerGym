@@ -23,20 +23,19 @@ pip install ray[rllib] pettingzoo gymnasium numpy
 
 | Notebook | Topic | Time | What You'll Learn |
 |----------|-------|------|-------------------|
-| [01_understanding_heron](01_understanding_heron.ipynb) | Concepts | 5 min | HERON's agent-centric approach, key abstractions |
-| [02_features_and_state](02_features_and_state.ipynb) | Features | 10 min | Building `FeatureProvider` for observations |
-| [03_building_agents](03_building_agents.ipynb) | Agents | 15 min | `FieldAgent` (devices), `CoordinatorAgent` (hierarchy) |
-| [04_building_environment](04_building_environment.ipynb) | Environment | 15 min | PettingZoo-compatible multi-agent env |
-| [05_training_with_rllib](05_training_with_rllib.ipynb) | Training | 10 min | MAPPO training with RLlib |
-| [06_event_driven_testing](06_event_driven_testing.ipynb) | Dual Mode | 15 min | Event-driven testing, `EventScheduler`, `TickConfig` |
+| [01_features_and_state](01_features_and_state.ipynb) | Features | 15 min | HERON concepts, `FeatureProvider`, visibility |
+| [02_building_agents](02_building_agents.ipynb) | Agents | 15 min | `FieldAgent` (devices), `CoordinatorAgent` (hierarchy) |
+| [03_building_environment](03_building_environment.ipynb) | Environment | 15 min | PettingZoo-compatible multi-agent env |
+| [04_training_with_rllib](04_training_with_rllib.ipynb) | Training | 10 min | MAPPO training with RLlib |
+| [05_event_driven_testing](05_event_driven_testing.ipynb) | Dual Mode | 15 min | Event-driven testing, `EventScheduler`, `TickConfig` |
 
 ### Advanced Tutorials (Customization & Extension)
 
 | Notebook | Topic | Time | What You'll Learn |
 |----------|-------|------|-------------------|
-| [07_configuration_and_datasets](07_configuration_and_datasets.ipynb) | Configuration | 10 min | YAML configs, pickle datasets, time-series data |
-| [08_custom_protocols](08_custom_protocols.ipynb) | Protocols | 10 min | Building coordination protocols (setpoint, price, consensus) |
-| [09_adding_custom_devices](09_adding_custom_devices.ipynb) | Devices | 15 min | Creating custom device agents with `DeviceAgent` |
+| [06_configuration_and_datasets](06_configuration_and_datasets.ipynb) | Configuration | 10 min | YAML configs, pickle datasets, time-series data |
+| [07_custom_protocols](07_custom_protocols.ipynb) | Protocols | 10 min | Building coordination protocols (setpoint, price, consensus) |
+| [08_adding_custom_devices](08_adding_custom_devices.ipynb) | Devices | 15 min | Creating custom device agents with `DeviceAgent` |
 
 **Total time:** ~105 minutes (reading + coding)
 
@@ -46,7 +45,7 @@ If you just want to see the end result:
 
 ```bash
 # Run the simplified training example
-jupyter notebook 05_training_with_rllib.ipynb
+jupyter notebook 04_training_with_rllib.ipynb
 ```
 
 ## What You'll Build
@@ -66,20 +65,24 @@ SimpleMicrogridEnv (Environment)
 
 ## Key HERON Contributions (Demonstrated in Tutorials)
 
-### 1. Declarative Visibility (Tutorial 02)
+### 1. Declarative Visibility (Tutorial 01)
 No manual filtering—features declare who can see them:
 ```python
 class BatterySOC(FeatureProvider):
     visibility = ['owner', 'upper_level']  # Automatic filtering
 ```
 
-### 2. Agent-Centric Architecture (Tutorial 03)
+### 2. Agent-Centric Architecture (Tutorial 02)
 Agents are first-class citizens with state, timing, and hierarchy:
 ```python
-battery = SimpleBattery(agent_id='bat_1', upstream_id='mg_1', tick_interval=1.0)
+battery = SimpleBattery(
+    agent_id='bat_1',
+    upstream_id='mg_1',
+    tick_config=TickConfig.deterministic(tick_interval=1.0)
+)
 ```
 
-### 3. HERON Adapters (Tutorial 04)
+### 3. HERON Adapters (Tutorial 03)
 Use `PettingZooParallelEnv` (not raw `ParallelEnv`) for full HERON features:
 ```python
 class MyEnv(PettingZooParallelEnv):
@@ -88,7 +91,7 @@ class MyEnv(PettingZooParallelEnv):
         self.register_agent(agent)  # Enables event-driven, messaging, etc.
 ```
 
-### 4. Dual Execution Modes (Tutorial 06 — Key Differentiator)
+### 4. Dual Execution Modes (Tutorial 05 — Key Differentiator)
 Train fast, test realistically—**this cannot be achieved by wrapping PettingZoo**:
 ```python
 # Training: synchronous (fast)
@@ -99,7 +102,7 @@ env.setup_event_driven()
 env.run_event_driven(t_end=100.0)
 ```
 
-### 5. Pluggable Protocols (Tutorial 08)
+### 5. Pluggable Protocols (Tutorial 07)
 Swap coordination strategies without changing environment code:
 ```python
 protocol = SetpointProtocol()      # Direct control
@@ -107,7 +110,7 @@ protocol = PriceSignalProtocol()   # Market-based
 protocol = ConsensusProtocol()     # Peer negotiation
 ```
 
-### 6. Extensible Device Registry (Tutorial 09)
+### 6. Extensible Device Registry (Tutorial 08)
 Add new device types with a standard interface:
 ```python
 class WindTurbine(DeviceAgent):
@@ -120,26 +123,26 @@ DEVICE_REGISTRY['WindTurbine'] = WindTurbine
 
 ## Comparison with Production Code
 
-| Tutorial Code | Production Code (`examples/05_mappo_training.py`) |
-|---------------|---------------------------------------------------|
+| Tutorial Code | Production Code (`powergrid/scripts/mappo_training.py`) |
+|---------------|----------------------------------------------------------|
 | 3 microgrids | 3 microgrids + DSO |
 | 2 features | 14 features |
 | Simplified physics | PandaPower integration |
-| Single protocol (Tutorial 08) | 4 swappable protocols |
-| Sync + event-driven (Tutorial 06) | Full dual-mode with CPS timing |
-| 2 device types (Tutorial 09) | Generator, ESS, Transformer, Renewables |
+| Single protocol (Tutorial 07) | 4 swappable protocols |
+| Sync + event-driven (Tutorial 05) | Full dual-mode with CPS timing |
+| 2 device types (Tutorial 08) | Generator, ESS, Transformer, Renewables |
 
 ## Next Steps
 
-After completing the core tutorials (01-06):
+After completing the core tutorials (01-05):
 
 1. **Explore the full case study**: `powergrid/` directory
-2. **Run production training**: `python examples/05_mappo_training.py --test`
-3. **Test with realistic timing**: Use Tutorial 06 patterns for event-driven validation
+2. **Run production training**: `python -m powergrid.scripts.mappo_training --test`
+3. **Test with realistic timing**: Use Tutorial 05 patterns for event-driven validation
 
-After completing the advanced tutorials (07-09):
+After completing the advanced tutorials (06-08):
 
-4. **Configure environments**: Use Tutorial 07 patterns for YAML + datasets
-5. **Create custom protocols**: Use Tutorial 08 to add domain-specific coordination
-6. **Add custom devices**: Use Tutorial 09 to extend with new device types
+4. **Configure environments**: Use Tutorial 06 patterns for YAML + datasets
+5. **Create custom protocols**: Use Tutorial 07 to add domain-specific coordination
+6. **Add custom devices**: Use Tutorial 08 to extend with new device types
 7. **Add your own domain**: Use these patterns for traffic, robotics, etc.
