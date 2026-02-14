@@ -9,10 +9,10 @@ from heron.agents.system_agent import SystemAgent
 from heron.core.observation import Observation
 from heron.core.policies import Policy
 from heron.protocols.base import Protocol, NoProtocol
-from heron.scheduling.tick_config import TickConfig, JitterType
+from heron.scheduling.tick_config import TickConfig
 from heron.utils.typing import AgentID
 from powergrid.agents.power_grid_agent import PowerGridAgent
-from powergrid.core.state.state import GridSystemState
+from heron.core.state import SystemAgentState
 
 
 class GridSystemAgent(SystemAgent):
@@ -67,8 +67,8 @@ class GridSystemAgent(SystemAgent):
             tick_config=tick_config,
         )
 
-        # Use GridSystemState for power-grid domain
-        self.state = GridSystemState(
+        # Use SystemAgentState for power-grid domain
+        self.state = SystemAgentState(
             owner_id=self.agent_id,
             owner_level=self.level
         )
@@ -86,8 +86,8 @@ class GridSystemAgent(SystemAgent):
         self.total_load: float = 0.0
         self.frequency: float = 60.0  # Hz (nominal)
 
-        # Re-initialize state with domain-specific features
-        self._init_state()
+        # Initialize state with domain-specific features
+        self.set_state()
 
     # ============================================
     # Backward Compatibility: grids <-> coordinators

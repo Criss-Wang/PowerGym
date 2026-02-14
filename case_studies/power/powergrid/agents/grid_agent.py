@@ -1,12 +1,6 @@
-from typing import Any, Dict as DictType, Iterable, List, Optional, Protocol, Union
+from typing import Any, Dict as DictType, List, Optional
 
-import gymnasium as gym
-import numpy as np
-import pandapower as pp
-from gymnasium.spaces import Box, Dict, Discrete, MultiDiscrete
-from paramiko import Agent
-
-from heron.agents.constants import COORDINATOR_LEVEL, DEFAULT_COORDINATOR_TICK_INTERVAL
+from heron.agents.base import Agent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.core.feature import FeatureProvider
 from heron.core.policies import Policy
@@ -31,16 +25,14 @@ class GridAgent(CoordinatorAgent):
         protocol: Optional[Protocol] = None
     ):
 
-        self.protocol = protocol
-        self.policy = policy
-       
         super().__init__(
             agent_id=agent_id,
-            level=COORDINATOR_LEVEL,
             features=features,
             upstream_id=upstream_id,
             subordinates=subordinates,
             env_id=env_id,
-            tick_config=tick_config or TickConfig.deterministic(tick_interval=DEFAULT_COORDINATOR_TICK_INTERVAL),
+            tick_config=tick_config,
+            policy=policy,
+            protocol=protocol,
         )
 

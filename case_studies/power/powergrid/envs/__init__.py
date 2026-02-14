@@ -1,18 +1,19 @@
 """Power grid environment implementations.
 
-This module provides power-grid specific environments built on HERON:
-
-- NetworkedGridEnv: Base environment for networked microgrids
-- MultiAgentMicrogrids: Concrete 3-microgrid environment
-- HierarchicalGridEnv: Environment with full HERON 3-level hierarchy (GridSystemAgent)
+This module provides power-grid specific environments built on HERON,
+following the grid_age style:
+- EnvState: Custom environment state for power flow simulation
+- HierarchicalMicrogridEnv: Multi-agent environment with hierarchical agents
+- create_hierarchical_env: Factory function for creating environments
 """
 
-from powergrid.envs.networked_grid_env import NetworkedGridEnv
-from powergrid.envs.multi_agent_microgrids import MultiAgentMicrogrids
-from powergrid.envs.hierarchical_grid_env import HierarchicalGridEnv
+from powergrid.envs.common import EnvState
+from powergrid.envs.hierarchical_microgrid_env import HierarchicalMicrogridEnv
+from powergrid.envs.factory import create_hierarchical_env, create_default_3_microgrid_env
 
 __all__ = [
-    "NetworkedGridEnv",
-    "MultiAgentMicrogrids",
-    "HierarchicalGridEnv",
+    "EnvState",
+    "HierarchicalMicrogridEnv",
+    "create_hierarchical_env",
+    "create_default_3_microgrid_env",
 ]

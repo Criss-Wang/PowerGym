@@ -93,6 +93,9 @@ class Agent(ABC):
         for _, agent in subordinates.items():
             agent.upstream_id = self.agent_id
             agent.env_id = self.env_id
+        # Register subordinates with protocol for action decomposition
+        if self.protocol:
+            self.protocol.register_subordinates(subordinates)
         return subordinates
 
     @abstractmethod
@@ -510,11 +513,11 @@ class Agent(ABC):
         """Coordinate subordinate actions based on protocol."""
         if not self.protocol or not self.subordinates:
             return
-        
+
         messages, actions = self.protocol.coordinate(
             coordinator_state=self.state,
             coordinator_action=action,
-            info_for_subordinates={sub_id: obs for sub_id in self.subordinates},  # Placeholder: in practice, get actual states
+            info_for_subordinates={sub_id: obs for sub_id in self.subordinates},
         )
         # Send coordinated actions to subordinates via message broker
         for sub_id, sub_action in actions.items():

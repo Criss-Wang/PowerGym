@@ -5,11 +5,9 @@ import numpy as np
 
 from heron.core.feature import FeatureProvider
 from powergrid.utils.phase import PhaseModel, PhaseSpec
-from heron.utils.registry import provider
 from powergrid.utils.typing import CtrlMode
 
 
-@provider()
 @dataclass(slots=True)
 class InverterBasedSource(FeatureProvider):
     """

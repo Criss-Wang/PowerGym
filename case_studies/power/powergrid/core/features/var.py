@@ -6,10 +6,8 @@ import numpy as np
 from heron.core.feature import FeatureProvider
 from heron.utils.array_utils import as_f32, cat_f32
 from powergrid.utils.phase import PhaseModel, PhaseSpec
-from heron.utils.registry import provider
 
 
-@provider()
 @dataclass(slots=True)
 class ShuntCapacitorBlock(FeatureProvider):
     """
@@ -437,7 +435,6 @@ class ShuntCapacitorBlock(FeatureProvider):
         self._ensure_shapes_()
 
 
-@provider()
 @dataclass(slots=True)
 class VoltVarCurve(FeatureProvider):
     """

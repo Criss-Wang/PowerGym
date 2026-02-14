@@ -16,10 +16,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from heron.core.feature import FeatureProvider
-from heron.utils.registry import provider
 
 
-@provider()
 @dataclass(slots=True)
 class SystemFrequency(FeatureProvider):
     """System frequency feature for power grid.
@@ -79,7 +77,6 @@ class SystemFrequency(FeatureProvider):
         return self
 
 
-@provider()
 @dataclass(slots=True)
 class AggregateGeneration(FeatureProvider):
     """Aggregate generation across all areas/grids.
@@ -148,7 +145,6 @@ class AggregateGeneration(FeatureProvider):
         return self
 
 
-@provider()
 @dataclass(slots=True)
 class AggregateLoad(FeatureProvider):
     """Aggregate load across all areas/grids.
@@ -217,7 +213,6 @@ class AggregateLoad(FeatureProvider):
         return self
 
 
-@provider()
 @dataclass(slots=True)
 class InterAreaFlows(FeatureProvider):
     """Power flows between interconnected areas.
@@ -294,7 +289,6 @@ class InterAreaFlows(FeatureProvider):
         return self
 
 
-@provider()
 @dataclass(slots=True)
 class SystemImbalance(FeatureProvider):
     """System power imbalance (generation - load - losses).

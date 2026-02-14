@@ -4,11 +4,9 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from heron.core.feature import FeatureProvider
-from heron.utils.registry import provider
 from heron.utils.array_utils import cat_f32
 
 
-@provider()
 @dataclass(slots=True)
 class StorageBlock(FeatureProvider):
     """

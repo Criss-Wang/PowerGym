@@ -1,18 +1,20 @@
 """PowerGrid: Multi-agent power system simulation using HERON.
 
-This module provides power system components:
+This module provides power system components following the grid_age style:
 - Agents: Generator, ESS (Energy Storage), Transformer, DeviceAgent
 - Grid Coordination: PowerGridAgent
-- Environments: NetworkedGridEnv, MultiAgentMicrogrids
+- Environments: HierarchicalMicrogridEnv, EnvState
 - Features: Electrical, Storage, Network state providers
 
 Example:
-    Basic usage with a generator agent::
+    Basic usage with factory function::
 
-        from powergrid.agents import Generator
-        from powergrid.envs import MultiAgentMicrogrids
+        from powergrid.envs import create_hierarchical_env
 
-        env = MultiAgentMicrogrids(env_config)
+        env = create_hierarchical_env(
+            microgrid_configs=[...],
+            dataset_path="path/to/data.h5",
+        )
         obs, info = env.reset()
 """
 
@@ -20,9 +22,10 @@ __version__ = "0.1.0"
 
 # Device Agents
 from powergrid.agents.device_agent import DeviceAgent
-from powergrid.agents.generator import Generator, GeneratorConfig
-from powergrid.agents.storage import ESS, StorageConfig
-from powergrid.agents.transformer import Transformer, TransformerConfig
+from powergrid.agents.generator import Generator
+from powergrid.agents.storage import ESS
+from powergrid.agents.transformer import Transformer
+from powergrid.core.features.metrics import CostSafetyMetrics
 
 # Grid Agents
 from powergrid.agents.power_grid_agent import PowerGridAgent
@@ -30,8 +33,9 @@ from heron.agents.proxy_agent import ProxyAgent, PROXY_LEVEL
 from powergrid.agents import POWER_FLOW_CHANNEL_TYPE
 
 # Environments
-from powergrid.envs.networked_grid_env import NetworkedGridEnv
-from powergrid.envs.multi_agent_microgrids import MultiAgentMicrogrids
+from powergrid.envs.common import EnvState
+from powergrid.envs.hierarchical_microgrid_env import HierarchicalMicrogridEnv
+from powergrid.envs.factory import create_hierarchical_env, create_default_3_microgrid_env
 
 # Features
 from powergrid.core.features.electrical import ElectricalBasePh
@@ -50,20 +54,20 @@ __all__ = [
     "__version__",
     # Device Agents
     "DeviceAgent",
+    "CostSafetyMetrics",
     "Generator",
-    "GeneratorConfig",
     "ESS",
-    "StorageConfig",
     "Transformer",
-    "TransformerConfig",
     # Grid Agents
     "PowerGridAgent",
     "ProxyAgent",
     "PROXY_LEVEL",
     "POWER_FLOW_CHANNEL_TYPE",
     # Environments
-    "NetworkedGridEnv",
-    "MultiAgentMicrogrids",
+    "EnvState",
+    "HierarchicalMicrogridEnv",
+    "create_hierarchical_env",
+    "create_default_3_microgrid_env",
     # Features
     "ElectricalBasePh",
     "StorageBlock",

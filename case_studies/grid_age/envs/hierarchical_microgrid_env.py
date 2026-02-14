@@ -106,13 +106,13 @@ class HierarchicalMicrogridEnv(MultiAgentEnv):
                 if not dev_agent or not hasattr(dev_agent, 'state'):
                     continue
 
-                # Get feature names from agent's state features
-                feature_names = [f.feature_name for f in dev_agent.state.features]
+                # Get feature names from agent's state features (features is a dict)
+                feature_names = list(dev_agent.state.features.keys())
 
                 # Feature-based device detection
                 if "SOCFeature" in feature_names:
                     # Storage device - get capacity from ESS feature
-                    soc_feature = next((f for f in dev_agent.state.features if f.feature_name == "SOCFeature"), None)
+                    soc_feature = dev_agent.state.features.get("SOCFeature")
                     capacity = soc_feature.capacity if soc_feature else 1.0
                     pp.create_storage(
                         net, bus=mg_bus, p_mw=0.0, max_e_mwh=capacity,
@@ -121,7 +121,7 @@ class HierarchicalMicrogridEnv(MultiAgentEnv):
 
                 elif "UnitCommitmentFeature" in feature_names:
                     # Dispatchable generator - get max_p from power feature
-                    power_feature = next((f for f in dev_agent.state.features if f.feature_name == "PowerFeature"), None)
+                    power_feature = dev_agent.state.features.get("PowerFeature")
                     max_p = power_feature.max_p if power_feature else 1.0
                     pp.create_sgen(
                         net, bus=mg_bus, p_mw=max_p * 0.5, q_mvar=0.0,
@@ -130,7 +130,7 @@ class HierarchicalMicrogridEnv(MultiAgentEnv):
 
                 elif "AvailabilityFeature" in feature_names:
                     # Renewable generator - get max_p from power feature
-                    power_feature = next((f for f in dev_agent.state.features if f.feature_name == "PowerFeature"), None)
+                    power_feature = dev_agent.state.features.get("PowerFeature")
                     max_p = power_feature.max_p if power_feature else 0.1
                     pp.create_sgen(
                         net, bus=mg_bus, p_mw=0.0, q_mvar=0.0,

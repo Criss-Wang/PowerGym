@@ -47,10 +47,6 @@ class SystemAgent(Agent):
         # coordination params
         protocol: Optional[Protocol] = None
     ):
-        # Store protocol and policy
-        self.protocol = protocol
-        self.policy = policy
-
         super().__init__(
             agent_id=agent_id or SYSTEM_AGENT_ID,
             level=SYSTEM_LEVEL,
@@ -326,11 +322,6 @@ class SystemAgent(Agent):
     def coordinators(self) -> Dict[AgentID, CoordinatorAgent]:
         """Alias for subordinates - more descriptive for SystemAgent context."""
         return self.subordinates
-
-    @coordinators.setter
-    def coordinators(self, value: Dict[AgentID, CoordinatorAgent]) -> None:
-        """Set coordinators (subordinates)."""
-        self.subordinates = value
 
     def __repr__(self) -> str:
         num_coords = len(self.subordinates)

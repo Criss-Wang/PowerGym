@@ -35,6 +35,21 @@ class VectorDecompositionActionProtocol(ActionProtocol):
         Subordinate 2 has action_dim=2 → receives [0.2, 0.1]
     """
 
+    def __init__(self):
+        self._subordinate_action_dims: Dict[AgentID, int] = {}
+
+    def register_subordinates(self, subordinates: Dict[AgentID, Any]) -> None:
+        """Register subordinate action dimensions at setup time.
+
+        Args:
+            subordinates: Dict mapping subordinate_id -> agent object
+        """
+        self._subordinate_action_dims = {
+            sub_id: sub.action.dim_c + sub.action.dim_d
+            for sub_id, sub in subordinates.items()
+            if hasattr(sub, 'action') and sub.action is not None
+        }
+
     def compute_action_coordination(
         self,
         coordinator_action: Optional[Any],
@@ -60,17 +75,14 @@ class VectorDecompositionActionProtocol(ActionProtocol):
         if isinstance(coordinator_action, dict):
             return coordinator_action
 
-        # Get subordinates from context for action dimension info
-        context = context or {}
-        subordinates = context.get("subordinates", {})
-
-        if not subordinates:
-            # No subordinate info - distribute same action to all
+        # Use stored action dimensions (registered at setup time)
+        if not self._subordinate_action_dims:
+            # No dimension info - distribute same action to all
             return {sub_id: coordinator_action for sub_id in subordinate_states}
 
-        # Extract action vector from Action object or array
-        if hasattr(coordinator_action, 'c'):
-            action_vector = coordinator_action.c
+        # Extract action vector
+        if hasattr(coordinator_action, 'as_array'):
+            action_vector = coordinator_action.as_array()
         elif isinstance(coordinator_action, np.ndarray):
             action_vector = coordinator_action
         else:
@@ -82,10 +94,8 @@ class VectorDecompositionActionProtocol(ActionProtocol):
         offset = 0
 
         for sub_id in subordinate_states.keys():
-            subordinate = subordinates.get(sub_id)
-            if subordinate and hasattr(subordinate, 'action'):
-                # Get subordinate's action dimension
-                action_dim = subordinate.action.dim_c + subordinate.action.dim_d
+            action_dim = self._subordinate_action_dims.get(sub_id)
+            if action_dim is not None:
                 if offset + action_dim <= len(action_vector):
                     actions[sub_id] = action_vector[offset:offset + action_dim]
                     offset += action_dim
@@ -93,7 +103,7 @@ class VectorDecompositionActionProtocol(ActionProtocol):
                     # Not enough elements - give None
                     actions[sub_id] = None
             else:
-                # No action info - give portion assuming equal split
+                # No dimension info - give portion assuming equal split
                 sub_ids_list = list(subordinate_states.keys())
                 portion_size = max(1, len(action_vector) // len(sub_ids_list))
                 if offset + portion_size <= len(action_vector):
@@ -102,8 +112,8 @@ class VectorDecompositionActionProtocol(ActionProtocol):
                 else:
                     actions[sub_id] = None
 
-        # Debug output during event-driven (when context has subordinates)
-        if context and "subordinates" in context:
+        # Debug output when action dimensions are provided
+        if self._subordinate_action_dims:
             action_str = np.array2string(action_vector, precision=4, suppress_small=True)
             decomp_str = [(sid, np.array2string(a, precision=4, suppress_small=True) if a is not None else "None")
                          for sid, a in actions.items()]
@@ -153,3 +163,11 @@ class VerticalProtocol(Protocol):
             communication_protocol=communication_protocol or NoCommunication(),
             action_protocol=action_protocol or VectorDecompositionActionProtocol()
         )
+
+    def register_subordinates(self, subordinates: Dict[AgentID, Any]) -> None:
+        """Register subordinates for action decomposition.
+
+        Args:
+            subordinates: Dict mapping subordinate_id -> agent object
+        """
+        self.action_protocol.register_subordinates(subordinates)

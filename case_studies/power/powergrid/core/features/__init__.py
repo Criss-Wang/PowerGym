@@ -11,6 +11,7 @@ from powergrid.core.features.status import StatusBlock
 from powergrid.core.features.power_limits import PowerLimits
 from powergrid.core.features.connection import PhaseConnection
 from powergrid.core.features.step_state import StepState
+from powergrid.core.features.metrics import CostSafetyMetrics
 
 # Grid-level features
 from powergrid.core.features.network import BusVoltages, LineFlows, NetworkMetrics
@@ -32,6 +33,7 @@ __all__ = [
     "PowerLimits",
     "PhaseConnection",
     "StepState",
+    "CostSafetyMetrics",
     # Grid-level features
     "BusVoltages",
     "LineFlows",

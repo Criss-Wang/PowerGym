@@ -7,12 +7,10 @@ import numpy as np
 
 from heron.core.feature import FeatureProvider
 from powergrid.utils.phase import PhaseModel, PhaseSpec
-from heron.utils.registry import provider
 
 _CONN_SET = {"A", "B", "C", "AB", "BC", "CA", "ABC"}
 
 
-@provider()
 @dataclass(slots=True)
 class PhaseConnection(FeatureProvider):
     phase_model: PhaseModel = PhaseModel.BALANCED_1PH

@@ -57,6 +57,10 @@ class ActionProtocol(ABC):
         """
         pass
 
+    def register_subordinates(self, _subordinates: Dict[AgentID, Any]) -> None:
+        """Register subordinates. Override in subclasses that need action dims."""
+        pass
+
 
 class Protocol(ABC):
     """Base protocol combining communication and action coordination.
@@ -89,6 +93,10 @@ class Protocol(ABC):
     def no_communication(self) -> bool:
         """Check if this protocol has no communication."""
         return isinstance(self.communication_protocol, NoCommunication)
+
+    def register_subordinates(self, _subordinates: Dict[AgentID, Any]) -> None:
+        """Register subordinates for action coordination. Override in subclasses."""
+        pass
 
     def coordinate(
         self,

@@ -734,8 +734,7 @@ powergrid/
 
 ### Pattern 1: Create Device with Features
 ```python
-from powergrid.devices.generator import Generator
-from powergrid.core.state import DeviceState, PhaseModel
+from powergrid.agents.generator import Generator
 
 gen = Generator(
     agent_id="dg1",
