@@ -1,21 +1,31 @@
 """PowerGrid: Multi-agent power system simulation using HERON.
 
-This module provides power system components following the grid_age style:
+This module provides power system components following Heron's agent hierarchy:
 - Agents: Generator, ESS (Energy Storage), Transformer, DeviceAgent
-- Grid Coordination: PowerGridAgent
+- Grid Coordination: PowerGridAgent, GridSystemAgent
 - Environments: HierarchicalMicrogridEnv, EnvState
 - Features: Electrical, Storage, Network state providers
 
 Example:
-    Basic usage with factory function::
+    Create agents manually and pass to environment::
 
-        from powergrid.envs import create_hierarchical_env
+        from powergrid import Generator, ESS, PowerGridAgent, HierarchicalMicrogridEnv
+        from heron.agents.system_agent import SystemAgent
 
-        env = create_hierarchical_env(
-            microgrid_configs=[...],
-            dataset_path="path/to/data.h5",
-        )
-        obs, info = env.reset()
+        # Create device agents
+        devices = {
+            "gen_1": Generator(agent_id="gen_1", ...),
+            "ess_1": ESS(agent_id="ess_1", ...),
+        }
+
+        # Create coordinator
+        grid = PowerGridAgent(agent_id="grid_1", subordinates=devices)
+
+        # Create system agent
+        system = SystemAgent(agent_id="system", subordinates={"grid_1": grid})
+
+        # Create environment
+        env = HierarchicalMicrogridEnv(system_agent=system, dataset_path="...")
 """
 
 __version__ = "0.1.0"
@@ -29,13 +39,13 @@ from powergrid.core.features.metrics import CostSafetyMetrics
 
 # Grid Agents
 from powergrid.agents.power_grid_agent import PowerGridAgent
+from powergrid.agents.grid_system_agent import GridSystemAgent
 from heron.agents.proxy_agent import ProxyAgent, PROXY_LEVEL
 from powergrid.agents import POWER_FLOW_CHANNEL_TYPE
 
 # Environments
 from powergrid.envs.common import EnvState
 from powergrid.envs.hierarchical_microgrid_env import HierarchicalMicrogridEnv
-from powergrid.envs.factory import create_hierarchical_env, create_default_3_microgrid_env
 
 # Features
 from powergrid.core.features.electrical import ElectricalBasePh
@@ -60,14 +70,13 @@ __all__ = [
     "Transformer",
     # Grid Agents
     "PowerGridAgent",
+    "GridSystemAgent",
     "ProxyAgent",
     "PROXY_LEVEL",
     "POWER_FLOW_CHANNEL_TYPE",
     # Environments
     "EnvState",
     "HierarchicalMicrogridEnv",
-    "create_hierarchical_env",
-    "create_default_3_microgrid_env",
     # Features
     "ElectricalBasePh",
     "StorageBlock",

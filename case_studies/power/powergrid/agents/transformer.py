@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from powergrid.agents.device_agent import DeviceAgent
-from powergrid.core.features.metrics import CostSafetyMetrics
 from heron.core.action import Action
 from heron.core.feature import FeatureProvider
 from heron.core.policies import Policy
@@ -197,57 +196,12 @@ class Transformer(DeviceAgent):
 
         self.metrics.set_values(cost=cost, safety=safety)
 
-    def compute_local_reward(self, local_state: dict) -> float:
-        """Compute reward based on cost and safety.
-
-        Reward = -cost - safety
-
-        Args:
-            local_state: State dict with feature vectors
-
-        Returns:
-            Reward value (higher is better)
-        """
-        cost = 0.0
-        safety = 0.0
-
-        if "CostSafetyMetrics" in local_state:
-            metrics_vec = local_state["CostSafetyMetrics"]
-            cost = float(metrics_vec[0])
-            safety = float(metrics_vec[1])
-
-        return -cost - safety
-
-    def reset_agent(self, **kwargs) -> None:
-        """Reset transformer to neutral tap position.
-
-        Args:
-            **kwargs: Optional keyword arguments (unused)
-        """
-        self.state.reset()
-        self.action.reset()
-
-        self._last_tap_position = 0
-
-        # Reset to neutral tap
-        neutral_index = -self._tap_min
-        self.action.set_values(d=np.array([neutral_index], dtype=np.int32))
-        self.tap_changer.set_values(tap_position=0)
-
-        # Reset cost/safety
-        self.metrics.set_values(cost=0.0, safety=0.0)
-
     @property
     def tap_changer(self) -> TapChangerPh:
         """Get tap changer feature."""
         for f in self.state.features.values():
             if isinstance(f, TapChangerPh):
                 return f
-
-    @property
-    def name(self) -> str:
-        """Get agent name."""
-        return self.agent_id
 
     @property
     def tap_position(self) -> int:

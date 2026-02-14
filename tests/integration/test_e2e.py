@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, ClassVar, Dict, List, Optional, Sequence, Tuple
 
 import gymnasium as gym
 from gymnasium.spaces import Box, Dict as DictSpace
@@ -19,9 +20,10 @@ from heron.scheduling import EventScheduler, EventType, TickConfig, JitterType
 from heron.scheduling.analysis import EventAnalyzer
 
 
+@dataclass(slots=True)
 class BatteryChargeFeature(FeatureProvider):
     """Battery state of charge feature - auto-registered via FeatureMeta."""
-    visibility = ["public"]
+    visibility: ClassVar[Sequence[str]] = ["public"]
 
     soc: float = 0.5
     capacity: float = 100.0
@@ -475,6 +477,14 @@ battery_agent_1.tick_config = field_tick_config
 battery_agent_2.tick_config = field_tick_config
 zone_coordinator.tick_config = coordinator_tick_config
 grid_system_agent.tick_config = system_tick_config
+
+# Update scheduler's tick config cache (it caches during attach())
+for agent_id, agent in env.registered_agents.items():
+    if hasattr(agent, 'tick_config'):
+        env.scheduler._agent_tick_configs[agent_id] = agent.tick_config
+
+# Reset environment to apply new tick configs
+env.reset(seed=200)
 
 event_analyzer = EventAnalyzer(verbose=True, track_data=True)
 episode = env.run_event_driven(event_analyzer=event_analyzer, t_end=300.0)

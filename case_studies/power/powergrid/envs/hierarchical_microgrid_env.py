@@ -11,6 +11,7 @@ import numpy as np
 import pandapower as pp
 
 from heron.envs.base import MultiAgentEnv
+from heron.agents.base import AgentID, Agent
 from heron.agents.system_agent import SystemAgent, SYSTEM_AGENT_ID
 from powergrid.envs.common import EnvState
 from powergrid.agents import (
@@ -64,6 +65,9 @@ class HierarchicalMicrogridEnv(MultiAgentEnv):
         self._timestep = 0
         self._train = True
 
+        # Current profiles (updated each timestep, accessible to agents via observations)
+        self._current_profiles: Dict[str, Dict[str, float]] = {}
+
         # Call parent init (registers agents)
         super().__init__(
             system_agent=system_agent,
@@ -112,7 +116,7 @@ class HierarchicalMicrogridEnv(MultiAgentEnv):
         pp.create_ext_grid(net, bus=slack_bus, vm_pu=1.0)
 
         # Build network from registered microgrid coordinators
-        microgrids = {}
+        microgrids: Dict[AgentID, Agent] = {}
         for agent_id, agent in self.registered_agents.items():
             if isinstance(agent, PowerGridAgent):
                 microgrids[agent_id] = agent
@@ -137,13 +141,8 @@ class HierarchicalMicrogridEnv(MultiAgentEnv):
                 name=f"{mg_id}_Trafo",
             )
 
-            # Get device agents from coordinator's subordinates
-            subordinates = (
-                mg_agent.subordinates if hasattr(mg_agent, "subordinates") else {}
-            )
-
             # Create devices based on subordinate agent types
-            for dev_id, dev_agent in subordinates.items():
+            for dev_id, dev_agent in mg_agent.subordinates.items():
                 if isinstance(dev_agent, ESS):
                     # Storage device
                     capacity = dev_agent.capacity if hasattr(dev_agent, "capacity") else 1.0
@@ -186,38 +185,44 @@ class HierarchicalMicrogridEnv(MultiAgentEnv):
     def _update_profiles(self, timestep: int) -> None:
         """Update profiles for current timestep using real data.
 
+        Stores profile data in env (self._current_profiles) and pushes to
+        proxy agent so agents can access via global state observations.
+        Does NOT modify agent state directly - env should not control
+        agent state changes.
+
         Args:
             timestep: Current timestep index
         """
-        global_state = self.proxy_agent.get_global_states(
-            sender_id=SYSTEM_AGENT_ID, protocol=None
-        )
-        agent_states = global_state if isinstance(global_state, dict) else {}
+        # Read profile data from dataset
+        split = "train" if self._train else "test"
+        data = self._dataset.get(split, {})
 
-        # Update each microgrid coordinator with current price and availability
-        for agent_id, agent_state in agent_states.items():
-            metadata = agent_state.get("metadata", {})
-            agent_type = metadata.get("agent_type", "")
+        if data is None or len(data) == 0:
+            return
 
-            # Check if this is a microgrid coordinator
-            if "PowerGridAgent" in agent_type or "microgrid" in agent_id.lower():
-                agent = self.registered_agents.get(agent_id)
-                if agent and isinstance(agent, PowerGridAgent):
-                    # Get dataset for this microgrid
-                    if hasattr(agent, "dataset") and agent.dataset is not None:
-                        hour = timestep % len(agent.dataset["price"])
-                        price = float(agent.dataset["price"][hour])
-                        solar = float(agent.dataset["solar"][hour])
-                        wind = float(agent.dataset["wind"][hour])
-                        load_scale = float(agent.dataset["load"][hour])
+        # Compute hour index
+        price_data = data.get("price", {}).get("0096WD_7_N001", [])
+        if len(price_data) == 0:
+            return
+        hour = timestep % len(price_data)
 
-                        # Update agent state with current profiles
-                        if hasattr(agent, "set_grid_price"):
-                            agent.set_grid_price(price)
-                        if hasattr(agent, "set_renewable_availability"):
-                            agent.set_renewable_availability(solar, wind)
-                        if hasattr(agent, "set_load_scale"):
-                            agent.set_load_scale(load_scale)
+        # Store current profiles in env (accessible via get_current_profiles)
+        self._current_profiles = {
+            "price": float(price_data[hour]) if hour < len(price_data) else 0.0,
+            "timestep": timestep,
+            "hour": hour,
+        }
+
+        # Add area-specific data if available
+        for area_key in ["load", "solar", "wind"]:
+            area_data = data.get(area_key, {})
+            for area_name, values in area_data.items():
+                if hour < len(values):
+                    self._current_profiles[f"{area_key}_{area_name}"] = float(values[hour])
+
+        # Push profiles to proxy for agents to access via global state
+        if self.proxy_agent is not None:
+            self.proxy_agent.set_global_state({"env_context": self._current_profiles})
 
     def global_state_to_env_state(self, global_state: Dict) -> EnvState:
         """Convert global state from proxy to custom env state for simulation.
@@ -329,6 +334,11 @@ class HierarchicalMicrogridEnv(MultiAgentEnv):
             }
 
         env_state.update_power_flow_results(results)
+
+        # Update profiles for NEXT timestep (so agents see fresh data at start of next step)
+        self._timestep += 1
+        self._update_profiles(self._timestep)
+
         return env_state
 
     def env_state_to_global_state(self, env_state: EnvState) -> Dict:
@@ -340,33 +350,28 @@ class HierarchicalMicrogridEnv(MultiAgentEnv):
             env_state: EnvState with power flow results
 
         Returns:
-            Updated global state dict
+            Updated global state dict (serialized for message passing)
         """
         power_flow_results = env_state.power_flow_results
 
-        # Get current global state from proxy
-        global_state = self.proxy_agent.get_global_states(
-            sender_id=SYSTEM_AGENT_ID, protocol=None
-        )
-        agent_states = global_state if isinstance(global_state, dict) else {}
+        # Get serialized agent states (for message passing, not observations)
+        agent_states = self.proxy_agent.get_serialized_agent_states()
 
         # Update microgrid coordinator features with power flow results
         for agent_id, agent_state in agent_states.items():
-            metadata = agent_state.get("metadata", {})
-            agent_type = metadata.get("agent_type", "")
+            # Check if this is a microgrid coordinator (by checking state type)
+            state_type = agent_state.get("_state_type", "")
 
-            # Check if this is a microgrid coordinator
-            if "PowerGridAgent" in agent_type or "microgrid" in agent_id.lower():
-                # Update network features with power flow results
-                if "features" in agent_state:
-                    features = agent_state["features"]
-                    if "NetworkMetrics" in features:
-                        features["NetworkMetrics"]["voltage_avg"] = power_flow_results.get(
-                            "voltage_avg", 1.0
-                        )
-                        features["NetworkMetrics"]["converged"] = power_flow_results.get(
-                            "converged", False
-                        )
+            if "Coordinator" in state_type:
+                # Update network features with power flow results if present
+                features = agent_state.get("features", {})
+                if "NetworkMetrics" in features:
+                    features["NetworkMetrics"]["voltage_avg"] = power_flow_results.get(
+                        "voltage_avg", 1.0
+                    )
+                    features["NetworkMetrics"]["converged"] = power_flow_results.get(
+                        "converged", False
+                    )
 
         return {"agent_states": agent_states}
 
@@ -391,12 +396,11 @@ class HierarchicalMicrogridEnv(MultiAgentEnv):
             day = np.random.randint(0, self._total_days - 1)
             self._timestep = day * self.episode_steps
 
-        # Update profiles for initial timestep
-        if self.proxy_agent is not None:
-            self._update_profiles(self._timestep)
-
-        # Call parent reset
+        # Call parent reset (clears proxy state cache)
         obs, info = super().reset(seed=seed, **kwargs)
+
+        # Update profiles AFTER parent reset (proxy state cache is cleared in parent)
+        self._update_profiles(self._timestep)
 
         # Create network on first reset
         if self.net is None:
@@ -407,87 +411,6 @@ class HierarchicalMicrogridEnv(MultiAgentEnv):
 
         return obs, info
 
-    def _pre_step(self, _actions: Dict[str, Any]) -> None:
-        """Hook called before step execution.
-
-        Updates external profiles (price, solar, wind, load) for agents.
-        This is called before agents compute actions, so they observe
-        the correct external conditions.
-
-        Args:
-            _actions: Dict mapping agent_id to action (unused here)
-        """
-        self._update_profiles(self._timestep)
-        self._timestep += 1
-
-    def get_power_grid_metrics(self) -> Dict[str, Any]:
-        """Get power-grid specific metrics for evaluation.
-
-        Returns:
-            Dictionary containing power grid metrics
-        """
-        metrics = {}
-
-        # Power balance metrics
-        total_gen = 0.0
-        total_load = 0.0
-
-        for agent in self.registered_agents.values():
-            if isinstance(agent, PowerGridAgent):
-                # Sum generation from devices
-                subordinates = (
-                    agent.subordinates if hasattr(agent, "subordinates") else {}
-                )
-                for device in subordinates.values():
-                    if isinstance(device, Generator):
-                        p_mw = (
-                            device.state.features.get("ElectricalBasePh", {}).get(
-                                "P_MW", 0.0
-                            )
-                            if hasattr(device, "state")
-                            else 0.0
-                        )
-                        total_gen += abs(p_mw)
-                    elif isinstance(device, ESS):
-                        p_mw = (
-                            device.state.features.get("ElectricalBasePh", {}).get(
-                                "P_MW", 0.0
-                            )
-                            if hasattr(device, "state")
-                            else 0.0
-                        )
-                        if p_mw < 0:  # Discharging
-                            total_gen += abs(p_mw)
-                        else:  # Charging
-                            total_load += p_mw
-
-        # Network metrics
-        if self.net is not None and self.net.get("converged", False):
-            total_load += float(self.net.res_load["p_mw"].sum())
-            vm = self.net.res_bus["vm_pu"].values
-            voltage_violations = int(np.sum((vm > 1.05) | (vm < 0.95)))
-            loading = self.net.res_line["loading_percent"].values
-            line_overloads = int(np.sum(loading > 100))
-        else:
-            voltage_violations = 0
-            line_overloads = 0
-
-        metrics.update(
-            {
-                "total_generation_mw": float(total_gen),
-                "total_load_mw": float(total_load),
-                "power_balance_mw": float(total_gen - total_load),
-                "voltage_violations": voltage_violations,
-                "line_overloads": line_overloads,
-                "convergence": (
-                    bool(self.net.get("converged", False)) if self.net else False
-                ),
-                "timestep": self._timestep,
-            }
-        )
-
-        return metrics
-
     def set_train_mode(self, train: bool = True) -> None:
         """Set training/evaluation mode.
 
@@ -495,3 +418,14 @@ class HierarchicalMicrogridEnv(MultiAgentEnv):
             train: True for training, False for evaluation
         """
         self._train = train
+
+    def get_current_profiles(self) -> Dict[str, Any]:
+        """Get current timestep profiles (price, solar, wind, load).
+
+        Returns profile data that was updated in _update_profiles().
+        Agents can access this through their observation pipeline.
+
+        Returns:
+            Dict with current profile values
+        """
+        return self._current_profiles.copy()

@@ -319,6 +319,7 @@ class ProxyAgent(Agent):
 
         Returns:
             Dict containing global state information (filtered by visibility rules)
+            Also includes "env_context" if available
         """
         # Apply feature-level visibility filtering to all agents' states
         global_filtered = {}
@@ -332,6 +333,11 @@ class ProxyAgent(Agent):
             observable = state_obj.observed_by(sender_id, requestor_level)
             if observable:  # Only include if agent can see something
                 global_filtered[agent_id] = observable
+
+        # Include env_context if available (external data like price, solar, wind profiles)
+        global_cache = self.state_cache.get("global", {})
+        if "env_context" in global_cache:
+            global_filtered["env_context"] = global_cache["env_context"]
 
         return global_filtered
 

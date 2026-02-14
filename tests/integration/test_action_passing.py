@@ -10,7 +10,8 @@ This script demonstrates and tests action coordination via protocols:
 """
 
 import numpy as np
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, ClassVar, Dict, List, Optional, Sequence
 
 # HERON imports
 from heron.agents.field_agent import FieldAgent
@@ -112,14 +113,15 @@ class ProportionalProtocol(Protocol):
 # Features and Agents
 # =============================================================================
 
+@dataclass(slots=True)
 class DevicePowerFeature(FeatureProvider):
     """Power state feature for devices."""
-    visibility = ["public"]
+    visibility: ClassVar[Sequence[str]] = ["public"]
 
     power: float = 0.0
     capacity: float = 1.0
 
-    def vector(self):
+    def vector(self) -> np.ndarray:
         """Return feature as vector [power, capacity]."""
         return np.array([self.power, self.capacity], dtype=np.float32)
 
