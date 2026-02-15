@@ -95,6 +95,10 @@ class SystemAgent(Agent):
         if not proxy:
             raise ValueError("We still require a valid proxy agent so far")
 
+        # Run pre-step hook (e.g., update profiles for current timestep)
+        if self._pre_step_func is not None:
+            self._pre_step_func()
+
         # Sync state first (by-product of proxy having updated global state)
         local_state = proxy.get_local_state(self.agent_id, self.protocol)
         self.sync_state_from_observed(local_state)
@@ -143,6 +147,10 @@ class SystemAgent(Agent):
         - Compute rewards
         - Schedule next tick
         """
+        # Run pre-step hook (e.g., update profiles for current timestep)
+        if self._pre_step_func is not None:
+            self._pre_step_func()
+
         super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
 
         # Schedule subordinate ticks
@@ -293,20 +301,23 @@ class SystemAgent(Agent):
     # Simulation related functions - SystemAgent-specific
     # ============================================
     def set_simulation(
-        self, 
-        simulation_func: Callable, 
+        self,
+        simulation_func: Callable,
         env_state_to_global_state: Callable,
         global_state_to_env_state: Callable,
-        wait_interval: Optional[float] = None
+        wait_interval: Optional[float] = None,
+        pre_step_func: Optional[Callable] = None,
     ):
         """
         simulation_func: simulation function passed from environment
         wait_interval: waiting time between action kick-off and simulation starts
+        pre_step_func: optional hook called at the start of each step (before actions)
         """
         self._simulation_func = simulation_func
         self._env_state_to_global_state = env_state_to_global_state
         self._global_state_to_env_state = global_state_to_env_state
         self._simulation_wait_interval = wait_interval or self.tick_config.tick_interval
+        self._pre_step_func = pre_step_func
 
     def simulate(self, global_state: Dict[AgentID, Any]) -> Any:
         env_state =  self._global_state_to_env_state(global_state)

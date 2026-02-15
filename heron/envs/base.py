@@ -79,7 +79,8 @@ class EnvCore:
             self.run_simulation,
             self.env_state_to_global_state,
             self.global_state_to_env_state,
-            self.simulation_wait_interval
+            self.simulation_wait_interval,
+            self.pre_step,
         )
         self._register_agent(self._system_agent)
         
@@ -178,6 +179,17 @@ class EnvCore:
     # ============================================
     # Simulation-related Methods
     # ============================================
+    def pre_step(self) -> None:
+        """Hook called at the start of each step before agent actions.
+
+        Override this method in subclasses to perform environment-specific
+        setup at the beginning of each step (e.g., updating profiles, loading
+        time-series data for current timestep).
+
+        Default implementation is a no-op.
+        """
+        pass
+
     @abstractmethod
     def run_simulation(self, env_state: Any, *args, **kwargs) -> Any:
         """ Custom simulation logic post-system_agent.act and before system_agent.update_from_environment().

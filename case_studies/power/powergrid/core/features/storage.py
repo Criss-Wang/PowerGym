@@ -68,8 +68,8 @@ class StorageBlock(FeatureProvider):
         - return the incremental cost so you can add it into env.cost
     """
 
-    # Visibility tags, e.g. ["public", "owner"]
-    visibility: List[str] = field(default_factory=list)
+    # Visibility: owner can see their own SOC for reward computation
+    visibility: List[str] = field(default_factory=lambda: ["owner"])
 
     # SOC state and bounds (fractions)
     soc: Optional[float] = None

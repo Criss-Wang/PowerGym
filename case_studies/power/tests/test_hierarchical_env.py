@@ -266,8 +266,10 @@ class EventLogger:
             self.action_effects[agent_id] = self.action_effects.get(agent_id, 0) + 1
         elif event_type == "message_delivery":
             self.message_deliveries += 1
-        elif event_type == "state_update":
-            self.state_updates += 1
+            # Track state updates from set_state_completion messages
+            message = payload.get("message", {}) if payload else {}
+            if "set_state_completion" in message:
+                self.state_updates += 1
 
         if payload and "reward" in payload:
             if agent_id not in self.rewards_by_agent:

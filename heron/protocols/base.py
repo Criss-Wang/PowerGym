@@ -49,7 +49,7 @@ class ActionProtocol(ABC):
 
         Args:
             coordinator_action: Action computed by coordinator policy (if any)
-            subordinate_states: Current states of subordinate agents
+            info_for_subordinates: Information for subordinate agents
             coordination_messages: Messages computed by communication protocol
 
         Returns:
@@ -132,7 +132,7 @@ class Protocol(ABC):
         # Step 2: Action coordination
         actions = self.action_protocol.compute_action_coordination(
             coordinator_action=coordinator_action,
-            subordinate_states=info_for_subordinates,
+            info_for_subordinates=info_for_subordinates,
             coordination_messages=messages,
             context=context
         )

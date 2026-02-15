@@ -224,6 +224,14 @@ class HierarchicalMicrogridEnv(MultiAgentEnv):
         if self.proxy_agent is not None:
             self.proxy_agent.set_global_state({"env_context": self._current_profiles})
 
+    def pre_step(self) -> None:
+        """Update profiles at the start of each step.
+
+        Called by SystemAgent at the beginning of execute() and tick()
+        before agent actions are processed.
+        """
+        self._update_profiles(self._timestep)
+
     def global_state_to_env_state(self, global_state: Dict) -> EnvState:
         """Convert global state from proxy to custom env state for simulation.
 
@@ -335,9 +343,8 @@ class HierarchicalMicrogridEnv(MultiAgentEnv):
 
         env_state.update_power_flow_results(results)
 
-        # Update profiles for NEXT timestep (so agents see fresh data at start of next step)
+        # Increment timestep for next step (pre_step will update profiles)
         self._timestep += 1
-        self._update_profiles(self._timestep)
 
         return env_state
 

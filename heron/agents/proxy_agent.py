@@ -1,7 +1,7 @@
 
 
 from abc import abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -30,8 +30,7 @@ from heron.agents.constants import (
 )
 
 
-if TYPE_CHECKING:
-    from heron.core.state import State
+from heron.core.state import State
 
 class ProxyAgent(Agent):
 
@@ -421,6 +420,25 @@ class ProxyAgent(Agent):
 
         # Store State object directly!
         self.state_cache["agents"][agent_id] = state
+
+    def get_serialized_agent_states(self) -> Dict[AgentID, Dict[str, Any]]:
+        """Get serialized (dict) versions of all agent states.
+
+        Used for message passing and global state construction where
+        State objects need to be converted to serializable dicts.
+
+        Returns:
+            Dict mapping agent_id to serialized state dict with metadata
+        """
+        agents_cache = self.state_cache.get("agents", {})
+        serialized = {}
+        for agent_id, state_obj in agents_cache.items():
+            if isinstance(state_obj, State):
+                serialized[agent_id] = state_obj.to_dict(include_metadata=True)
+            else:
+                # Fallback if state is already a dict
+                serialized[agent_id] = state_obj if isinstance(state_obj, dict) else {}
+        return serialized
 
     def set_step_result(self, obs: Dict[AgentID, Observation], rewards, terminateds, truncateds, infos):
         """Cache the step results from environment execution.

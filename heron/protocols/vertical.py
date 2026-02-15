@@ -53,7 +53,7 @@ class VectorDecompositionActionProtocol(ActionProtocol):
     def compute_action_coordination(
         self,
         coordinator_action: Optional[Any],
-        subordinate_states: Optional[Dict[AgentID, Any]] = None,
+        info_for_subordinates: Optional[Dict[AgentID, Any]] = None,
         coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None,
         context: Optional[Dict[str, Any]] = None
     ) -> Dict[AgentID, Any]:
@@ -61,15 +61,15 @@ class VectorDecompositionActionProtocol(ActionProtocol):
 
         Args:
             coordinator_action: Joint action from coordinator (vector, dict, or Action object)
-            subordinate_states: Current states of subordinates
+            info_for_subordinates: Information for subordinate agents
             coordination_messages: Messages from communication protocol
             context: Additional context (should contain "subordinates" dict)
 
         Returns:
             Dict mapping subordinate_id -> action
         """
-        if coordinator_action is None or subordinate_states is None:
-            return {sub_id: None for sub_id in (subordinate_states or {})}
+        if coordinator_action is None or info_for_subordinates is None:
+            return {sub_id: None for sub_id in (info_for_subordinates or {})}
 
         # If already per-subordinate dict, use directly
         if isinstance(coordinator_action, dict):
@@ -78,7 +78,7 @@ class VectorDecompositionActionProtocol(ActionProtocol):
         # Use stored action dimensions (registered at setup time)
         if not self._subordinate_action_dims:
             # No dimension info - distribute same action to all
-            return {sub_id: coordinator_action for sub_id in subordinate_states}
+            return {sub_id: coordinator_action for sub_id in info_for_subordinates}
 
         # Extract action vector
         if hasattr(coordinator_action, 'as_array'):
@@ -87,13 +87,13 @@ class VectorDecompositionActionProtocol(ActionProtocol):
             action_vector = coordinator_action
         else:
             # Scalar - broadcast to all subordinates
-            return {sub_id: np.array([coordinator_action]) for sub_id in subordinate_states}
+            return {sub_id: np.array([coordinator_action]) for sub_id in info_for_subordinates}
 
         # Decompose vector by subordinate action dimensions
         actions = {}
         offset = 0
 
-        for sub_id in subordinate_states.keys():
+        for sub_id in info_for_subordinates.keys():
             action_dim = self._subordinate_action_dims.get(sub_id)
             if action_dim is not None:
                 if offset + action_dim <= len(action_vector):
@@ -104,7 +104,7 @@ class VectorDecompositionActionProtocol(ActionProtocol):
                     actions[sub_id] = None
             else:
                 # No dimension info - give portion assuming equal split
-                sub_ids_list = list(subordinate_states.keys())
+                sub_ids_list = list(info_for_subordinates.keys())
                 portion_size = max(1, len(action_vector) // len(sub_ids_list))
                 if offset + portion_size <= len(action_vector):
                     actions[sub_id] = action_vector[offset:offset + portion_size]

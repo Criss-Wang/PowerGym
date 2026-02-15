@@ -45,13 +45,13 @@ class ProportionalActionProtocol(ActionProtocol):
     def compute_action_coordination(
         self,
         coordinator_action: Optional[Any],
-        subordinate_states: Optional[Dict[AgentID, Any]] = None,
+        info_for_subordinates: Optional[Dict[AgentID, Any]] = None,
         coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None,
         context: Optional[Dict[str, Any]] = None
     ) -> Dict[AgentID, Any]:
         """Distribute coordinator action proportionally among subordinates."""
-        if coordinator_action is None or subordinate_states is None:
-            return {sub_id: None for sub_id in (subordinate_states or {})}
+        if coordinator_action is None or info_for_subordinates is None:
+            return {sub_id: None for sub_id in (info_for_subordinates or {})}
 
         # Extract action value from Action object or array
         if hasattr(coordinator_action, 'c'):
@@ -61,8 +61,8 @@ class ProportionalActionProtocol(ActionProtocol):
         else:
             total_action = float(coordinator_action)
 
-        # Compute weights (use subordinate IDs from subordinate_states)
-        sub_ids = list(subordinate_states.keys())
+        # Compute weights (use subordinate IDs from info_for_subordinates)
+        sub_ids = list(info_for_subordinates.keys())
         if not sub_ids:
             return {}
 
