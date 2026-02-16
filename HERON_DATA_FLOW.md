@@ -26,18 +26,26 @@ This document provides a comprehensive analysis of how data flows through the HE
 
 | Component | Internal Representation | Storage in Proxy | Message Passing |
 |-----------|------------------------|------------------|-----------------|
-| **State** | State object (FieldAgentState, etc.) | **State object** | Dict with metadata via `to_dict()` |
+| **State** | State object (features as Dict[str, FeatureProvider]) | **State object** | Dict with metadata via `to_dict()` |
 | **Action** | Action object | Not stored in proxy | Action object (direct) or Dict (messages) |
 | **Observation** | Observation object | Not stored (computed on-demand) | Dict via `obs.to_dict()` |
-| **Feature** | FeatureProvider object | Part of State object | Dict via `feature.to_dict()` |
-| **Message** | Message object | Broker queues | Serialized payload |
+| **Feature** | FeatureProvider object | Part of State.features Dict | Dict via `feature.to_dict()` |
+| **Message** | Event payload Dict | Broker queues | Serialized payload |
 
-### **Key Principle**
-**ProxyAgent stores State objects directly** - This enables feature-level visibility filtering:
-- State objects maintained with full type information
-- Direct access to `state.observed_by()` for visibility filtering
+### **Key Principles**
+
+**1. State.features is a Dict[str, FeatureProvider], keyed by feature_name:**
+- O(1) lookup by feature name: `state.features["BatteryChargeFeature"]`
 - Features maintain class identity (FeatureProvider instances)
+- Direct access to `state.observed_by()` for visibility filtering
+
+**2. ProxyAgent stores State objects directly** - This enables feature-level visibility filtering:
+- State objects maintained with full type information
 - Serialization needed only at message boundaries (State <-> Dict)
+
+**3. Observation responses bundle obs + local_state:**
+- When agent requests observation, proxy sends both
+- Enables state syncing alongside observation delivery
 
 ---
 
@@ -46,16 +54,19 @@ This document provides a comprehensive analysis of how data flows through the HE
 ### **State Object Structure**
 
 ```python
-# Agent creates State with features
-state = FieldAgentState(owner_id="battery_1", owner_level=1)
-state.features = [
-    BatteryChargeFeature(soc=0.5, capacity=100.0)
-]
+# Agent creates State with features as Dict
+state = FieldAgentState(
+    owner_id="battery_1",
+    owner_level=1,
+    features={
+        "BatteryChargeFeature": BatteryChargeFeature(soc=0.5, capacity=100.0)
+    }
+)
 
 # State object attributes:
 state.owner_id = "battery_1"
 state.owner_level = 1
-state.features = [FeatureProvider objects]
+state.features = {"BatteryChargeFeature": FeatureProvider}  # Dict keyed by name!
 ```
 
 ### **State Operations**
@@ -63,20 +74,24 @@ state.features = [FeatureProvider objects]
 #### **1. Init State (Initialization)**
 
 ```
-Agent.init_state()
-├─> Create State object (e.g., FieldAgentState)
-├─> Set owner_id = self.agent_id
-├─> Set owner_level = self.level
-├─> Create and append FeatureProvider objects
-└─> Store in self.state
+Agent.__init__()
+├─> self.state = self.init_state(features=features)
+│   ├─> FieldAgentState(
+│   │       owner_id=self.agent_id,
+│   │       owner_level=FIELD_LEVEL,
+│   │       features={f.feature_name: f for f in features}  # List -> Dict conversion!
+│   │   )
+│   └─> Returns State object
 
 Example:
-    self.state = FieldAgentState(owner_id="battery_1", owner_level=1)
-    self.state.features.append(BatteryChargeFeature(soc=0.5, capacity=100.0))
+    # Constructor receives features as List[FeatureProvider]
+    features = [BatteryChargeFeature(soc=0.5, capacity=100.0)]
+    # init_state converts to Dict:
+    state.features = {"BatteryChargeFeature": BatteryChargeFeature(soc=0.5, capacity=100.0)}
 ```
 
 **Data Outflow:**
-- `self.state` -> State object with features
+- `self.state` -> State object with features Dict
 
 ---
 
@@ -87,7 +102,7 @@ Example:
 Agent updates state -> Send to proxy
 
 agent.apply_action()
-├─> Updates self.state.features[0].soc = new_value
+├─> Updates self.state.features["BatteryChargeFeature"].soc = new_value
 └─> State object modified in-place
 
 proxy.set_local_state(agent_id, state)
@@ -113,9 +128,9 @@ action_effect_handler()
 └─> Proxy receives message
 
 proxy.message_delivery_handler()
-├─> Extract: agent_id = body["_owner_id"]
-├─> Reconstruct: state = State.from_dict(body)
-└─> Call: set_local_state(agent_id, state)
+├─> Extract: state_dict from body
+├─> Reconstruct: state = State.from_dict(state_dict)
+└─> Call: set_local_state(state.owner_id, state)
     └─> Storage: state_cache["agents"]["battery_1"] = state  # State object!
 ```
 
@@ -134,10 +149,12 @@ State object -> .to_dict() -> Message -> State.from_dict() -> State object
 ```
 Agent requests own state from proxy
 
-proxy.get_local_state(agent_id, requestor_level)
-├─> Input: agent_id="battery_1", requestor_level=1
+proxy.get_local_state(sender_id, protocol, include_subordinate_rewards=True)
+├─> Input: sender_id="battery_1"
 ├─> Retrieval: state_obj = state_cache["agents"]["battery_1"]  # State object!
-├─> Apply visibility filtering: state_obj.observed_by(agent_id, requestor_level)
+├─> Apply visibility filtering: state_obj.observed_by(sender_id, requestor_level)
+├─> Include subordinate rewards (if parent agent):
+│   └─> subordinate_rewards = _get_subordinate_rewards(agent_id)
 └─> Return: {"BatteryChargeFeature": np.array([0.53, 100.0])}  # Feature vectors!
 ```
 
@@ -146,13 +163,15 @@ proxy.get_local_state(agent_id, requestor_level)
 Agent sends message requesting state -> Proxy responds
 
 Agent:
-├─> schedule_message_delivery(message={"get_info": "local_state"})
+├─> schedule_message_delivery(
+│       message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol}
+│   )
 └─> Sent to proxy
 
 Proxy.message_delivery_handler():
 ├─> Receives request
-├─> local_state = self.get_local_state(sender_id, requestor_level)
-│   └─> Returns filtered feature vectors
+├─> local_state = self.get_local_state(sender_id, protocol)
+│   └─> Returns filtered feature vectors + optional subordinate rewards
 ├─> Send response: {"get_local_state_response": {"body": local_state}}
 └─> Agent receives dict in message
 ```
@@ -165,7 +184,7 @@ state_cache["agents"][agent_id] -> observed_by() -> Filtered vectors -> Agent
 **Usage Example (With Visibility Filtering):**
 ```python
 # Agent receives feature vectors from proxy (after visibility filtering)
-local_state = proxy.get_local_state(self.agent_id, self.level)
+local_state = proxy.get_local_state(self.agent_id, self.protocol)
 # local_state = {"BatteryChargeFeature": np.array([0.53, 100.0])}  # Numpy arrays!
 
 # Extract values from feature vector
@@ -176,16 +195,42 @@ reward = soc  # Use filtered state, not self.state!
 
 ---
 
+#### **4. Sync State (Reconciliation)**
+
+```python
+def sync_state_from_observed(self, observed_state):
+    """Reconcile internal state from proxy data (e.g., after simulation)."""
+    for feature_name, feature_data in observed_state.items():
+        if feature_name not in self.state.features:  # Dict lookup O(1)
+            continue
+        feature = self.state.features[feature_name]
+        if isinstance(feature_data, dict):
+            feature.set_values(**feature_data)           # Direct field update
+        elif isinstance(feature_data, np.ndarray):
+            field_names = feature.names()
+            updates = {name: float(val) for name, val in zip(field_names, feature_data)}
+            feature.set_values(**updates)                # Reconstruct from vector
+```
+
+**When is sync used?**
+- CTDE: In `execute()` before acting (picks up simulation changes)
+- Event-Driven: In `message_delivery_handler()` when receiving obs or local_state response
+
+---
+
 ### **State Lifecycle Summary**
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ Agent Layer (State Objects)                                     │
+│ Agent Layer (State Objects)                                      │
 ├─────────────────────────────────────────────────────────────────┤
-│ init_state() -> self.state = FieldAgentState(...)               │
-│                self.state.features = [BatteryChargeFeature(...)]│
+│ init_state(features) -> self.state = FieldAgentState(           │
+│     owner_id="battery_1",                                       │
+│     features={"BatteryChargeFeature": BatteryChargeFeature(...)}│
+│ )                                                               │
 │                                                                 │
-│ apply_action() -> self.state.features[0].soc = new_value        │
+│ apply_action() -> self.state.features["BatteryChargeFeature"]   │
+│                   .soc = new_value                              │
 │                                                                 │
 │ Send to proxy: proxy.set_local_state(aid, state)  # State obj!  │
 └─────────────────────────────────────────────────────────────────┘
@@ -193,10 +238,11 @@ reward = soc  # Use filtered state, not self.state!
 ┌─────────────────────────────────────────────────────────────────┐
 │ Proxy Layer (State Object Storage)                              │
 ├─────────────────────────────────────────────────────────────────┤
-│ state_cache["agents"]["battery_1"] = FieldAgentState(...)       │
-│     └─> Contains: [BatteryChargeFeature(soc=0.53, capacity=100)]│
+│ state_cache["agents"]["battery_1"] = FieldAgentState(           │
+│     features={"BatteryChargeFeature": BatteryChargeFeature(...)}│
+│ )                                                               │
 │                                                                 │
-│ Stores FULL State objects with FeatureProvider instances!       │
+│ Stores FULL State objects with FeatureProvider instances!        │
 └─────────────────────────────────────────────────────────────────┘
                             ↓ get_local_state() + visibility filtering
 ┌─────────────────────────────────────────────────────────────────┐
@@ -209,14 +255,15 @@ reward = soc  # Use filtered state, not self.state!
 └─────────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ Agent Layer (Filtered Vector Usage)                             │
+│ Agent Layer (Filtered Vector Usage + State Sync)                │
 ├─────────────────────────────────────────────────────────────────┤
-│ local_state = proxy.get_local_state(aid) -> Filtered vectors    │
+│ # For reward computation:                                       │
+│ local_state = proxy.get_local_state(aid, protocol)              │
+│ feature_vec = local_state["BatteryChargeFeature"]  # array      │
+│ soc = feature_vec[0]  # Extract from vector                     │
 │                                                                 │
-│ compute_local_reward(local_state):                              │
-│     feature_vec = local_state["BatteryChargeFeature"]  # array  │
-│     soc = feature_vec[0]  # Extract from vector                 │
-│     return soc                                                  │
+│ # For state syncing:                                            │
+│ sync_state_from_observed(local_state) -> Reconcile features     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -247,20 +294,19 @@ action.range = ([-1.0], [1.0])
 #### **1. Init Action (Initialization)**
 
 ```
-Agent.init_action()
-├─> Create Action object
-├─> Set action specs (dim_c, dim_d, range, ncats)
-├─> Reset to neutral values
-└─> Store in self.action
+Agent.__init__()
+├─> self.action = self.init_action(features=features)
+│   └─> Return Action()  # Empty action by default
+│
+└─> Subclasses may override to set specs based on features
 
-Example:
-    self.action = Action()
-    self.action.set_specs(dim_c=1, range=([-1.0], [1.0]))
-    self.action.set_values(np.array([0.0]))  # Neutral
+Example (default):
+    self.action = Action()  # No specs set yet
+    # Specs configured later via set_action() or policy output
 ```
 
 **Data Outflow:**
-- `self.action` -> Action object with specs
+- `self.action` -> Action object (possibly unconfigured)
 
 ---
 
@@ -272,8 +318,8 @@ env.step(actions)
 ├─> actions = {"battery_1": action_object, ...}
 ├─> SystemAgent.execute(actions, proxy)
     ├─> layered = layer_actions(actions)
-    │   └─> {"self": actions["system_agent"],
-    │        "subordinates": {"battery_1": actions["battery_1"], ...}}
+    │   └─> {"self": actions.get("system_agent"),
+    │        "subordinates": {"battery_1": {...}, ...}}
     │
     └─> handle_self_action(layered["self"], proxy)
         ├─> set_action(action)
@@ -286,7 +332,7 @@ env.step(actions)
 **CTDE Mode - From Policy:**
 ```
 handle_self_action(None, proxy)  # No external action
-├─> obs = proxy.get_observation(agent_id)
+├─> obs = proxy.get_observation(sender_id=self.agent_id)
 │   └─> Returns Observation object
 ├─> action = policy.forward(observation=obs)
 │   ├─> obs.__array__() converts to np.ndarray automatically
@@ -295,17 +341,33 @@ handle_self_action(None, proxy)  # No external action
     └─> self.action.set_values(action)
 ```
 
-**Event-Driven Mode:**
+**Event-Driven Mode - FieldAgent with Upstream Action:**
 ```
-SystemAgent.tick()
+FieldAgent.tick()
+├─> _check_for_upstream_action()
+│   └─> self._upstream_action = broker.consume(action_channel)
+│
+├─> If self._upstream_action is not None:
+│   ├─> set_action(self._upstream_action)  # Direct assignment!
+│   ├─> self._upstream_action = None       # Clear after use
+│   └─> schedule_action_effect(delay=act_delay)
+```
+
+**Event-Driven Mode - Agent with Policy:**
+```
+Agent.tick()
 ├─> Request observation via message
 └─> [Later] Receive observation response
 
 message_delivery_handler() - "get_obs_response"
-├─> obs_dict = message["body"]
+├─> body = message["get_obs_response"]["body"]
+├─> obs_dict = body["obs"]
+├─> local_state = body["local_state"]
 ├─> obs = Observation.from_dict(obs_dict)
+├─> sync_state_from_observed(local_state)  # Sync first!
 └─> compute_action(obs, scheduler)
     ├─> action = policy.forward(observation=obs)
+    ├─> If protocol: coordinate() -> send subordinate actions
     ├─> set_action(action)
     └─> schedule_action_effect(delay=act_delay)
 ```
@@ -325,10 +387,10 @@ Policy -> Action object -> set_values() -> self.action updated
 ```
 Agent.apply_action()
 └─> set_state()
-    ├─> Read: current_soc = self.soc (from self.state.features[0].soc)
+    ├─> Read: current_soc = self.state.features["BatteryChargeFeature"].soc
     ├─> Read: action_value = self.action.c[0]
     ├─> Compute: new_soc = current_soc + action_value * 0.01
-    └─> Update: self.state.features[0].set_values(soc=new_soc)
+    └─> Update: self.state.features["BatteryChargeFeature"].set_values(soc=new_soc)
         └─> State object modified in-place!
 ```
 
@@ -364,7 +426,7 @@ self.action (Action object) -> Extract values -> Update self.state (State object
 │ set_action(action) -> self.action.set_values(action)            │
 │                                                                 │
 │ apply_action() -> Read self.action.c[0]                         │
-│                -> Update self.state.features[0].soc             │
+│     -> Update self.state.features["FeatureName"].field = value  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -395,17 +457,24 @@ agent.tick() or agent.act()
 Parent sends action to subordinate:
 
 Parent (Coordinator/System):
-├─> Compute subordinate actions via protocol
+├─> Compute subordinate actions via protocol.coordinate()
 ├─> self.send_subordinate_action(sub_id, action)
 │   └─> broker.publish(action_channel, Message(action))
 └─> Actions queued for subordinates
 
-Subordinate (Field/Coordinator):
-├─> actions = self.receive_upstream_actions()
-│   └─> broker.consume(action_channel)
-├─> If upstream action exists:
-│   └─> self.set_action(upstream_action)  # Priority over policy!
-└─> Else: Use policy
+Subordinate receives:
+├─> _check_for_upstream_action() [at start of tick]
+│   └─> self._upstream_action = broker.consume(action_channel)[-1]
+│
+├─> FieldAgent: Direct assignment
+│   ├─> set_action(upstream_action)
+│   └─> schedule_action_effect(delay)
+│
+├─> CoordinatorAgent: Via compute_action pipeline
+│   └─> compute_action(upstream_action, scheduler)
+│       ├─> Uses upstream_action directly (priority!)
+│       ├─> coordinate() -> decompose for subordinates
+│       └─> schedule_action_effect(delay)
 ```
 
 ### **Action Passing Flow Diagram**
@@ -425,8 +494,8 @@ Subordinate (Field/Coordinator):
 ┌─────────────────────────────────────────────────────────────────┐
 │ CoordinatorAgent (Level 2)                                      │
 ├─────────────────────────────────────────────────────────────────┤
-│ 1. receive_upstream_actions() from system                       │
-│ 2. If upstream action exists: use it (priority!)                │
+│ 1. _check_for_upstream_action() -> consume from broker          │
+│ 2. If upstream action exists: compute_action(upstream, sched)   │
 │ 3. Else: compute own action via policy                          │
 │ 4. Protocol.coordinate() decomposes into field actions          │
 │ 5. send_subordinate_action() to each field agent                │
@@ -437,30 +506,13 @@ Subordinate (Field/Coordinator):
 ┌─────────────────────────────────────────────────────────────────┐
 │ FieldAgent (Level 1)                                            │
 ├─────────────────────────────────────────────────────────────────┤
-│ 1. receive_upstream_actions() from coordinator                  │
-│ 2. If upstream action exists: use it (priority!)                │
+│ 1. _check_for_upstream_action() -> consume from broker          │
+│ 2. If upstream action exists:                                   │
+│    - set_action(upstream_action)  # DIRECT SET (not compute!)   │
+│    - schedule_action_effect(delay)                              │
 │ 3. Else: compute own action via policy                          │
-│ 4. apply_action() -> Update state                               │
+│ 4. [ACTION_EFFECT event]: apply_action() -> Update state        │
 └─────────────────────────────────────────────────────────────────┘
-```
-
-### **Action Priority Rules**
-
-```python
-def get_action_for_tick(self) -> Action:
-    """Determine which action to use."""
-    # Priority 1: Upstream action from parent
-    upstream_actions = self.receive_upstream_actions()
-    if upstream_actions:
-        return upstream_actions[0]  # Use first upstream action
-
-    # Priority 2: Self-computed action via policy
-    if self.policy is not None:
-        obs = self.proxy.get_observation(self.agent_id)
-        return self.policy.forward(observation=obs)
-
-    # Priority 3: No action (neutral)
-    return None
 ```
 
 ### **Message Broker Integration**
@@ -468,43 +520,39 @@ def get_action_for_tick(self) -> Action:
 ```python
 # Channel naming convention
 action_channel = ChannelManager.action_channel(
-    sender_id="coordinator_1",
-    recipient_id="field_1",
+    upstream_id="coordinator_1",
+    node_id="field_1",
     env_id="default"
 )
-# Result: "env:default/action/coordinator_1->field_1"
+# Result: "env_default__action__coordinator_1_to_field_1"
 
 # Sending action (Parent)
-def send_subordinate_action(self, subordinate_id: str, action: Action):
-    channel = ChannelManager.action_channel(
-        sender_id=self.agent_id,
-        recipient_id=subordinate_id,
-        env_id=self.env_id
+def send_subordinate_action(self, recipient_id, action):
+    self.send_action(
+        broker=self._message_broker,
+        recipient_id=recipient_id,
+        action=action,
     )
-    message = Message(
-        message_type=MessageType.ACTION,
-        sender_id=self.agent_id,
-        recipient_id=subordinate_id,
-        payload={"action": action}
-    )
-    self._message_broker.publish(channel, message)
 
-# Receiving action (Subordinate)
-def receive_upstream_actions(self) -> List[Action]:
-    if self.upstream_id is None:
-        return []
-
+# Inside send_action:
+def send_action(self, broker, recipient_id, action):
     channel = ChannelManager.action_channel(
-        sender_id=self.upstream_id,
-        recipient_id=self.agent_id,
-        env_id=self.env_id
+        self.agent_id, recipient_id, self.env_id or "default"
     )
-    messages = self._message_broker.consume(
-        channel=channel,
-        recipient_id=self.agent_id,
-        env_id=self.env_id
+    self._publish(
+        broker=broker, channel=channel,
+        payload={"action": action},
+        recipient_id=recipient_id,
+        message_type="ACTION",
     )
-    return [msg.payload["action"] for msg in messages]
+
+# Receiving action (Subordinate) - at tick start
+def _check_for_upstream_action(self):
+    if not self.upstream_id or not self._message_broker:
+        self._upstream_action = None
+        return
+    actions = self.receive_upstream_actions(sender_id=self.upstream_id, clear=True)
+    self._upstream_action = actions[-1] if actions else None
 ```
 
 ### **CTDE Mode Action Passing**
@@ -514,78 +562,68 @@ env.step(actions)
 │
 └─> SystemAgent.execute(actions, proxy)
     │
-    ├─> self.act(actions, proxy)
-    │   │
-    │   ├─> layered = layer_actions(actions)
-    │   │   # Hierarchical structure:
-    │   │   # {
-    │   │   #   "self": actions["system_agent"],
-    │   │   #   "subordinates": {
-    │   │   #     "coord_1": {
-    │   │   #       "self": actions["coord_1"],
-    │   │   #       "subordinates": {"field_1": ..., "field_2": ...}
-    │   │   #     }
-    │   │   #   }
-    │   │   # }
-    │   │
-    │   ├─> handle_self_action(layered["self"], proxy)
-    │   │   ├─> set_action(action)
-    │   │   └─> apply_action()
-    │   │
-    │   └─> handle_subordinate_actions(layered["subordinates"], proxy)
-    │       │
-    │       └─> For each coordinator:
-    │           │
-    │           ├─> # Option A: Pass action directly (if in actions dict)
-    │           │   coordinator.execute(coord_actions, proxy)
-    │           │
-    │           └─> # Option B: Send via broker (for distributed)
-    │               send_subordinate_action(coord_id, coord_action)
+    ├─> actions = self.layer_actions(actions)
+    │   # Hierarchical structure:
+    │   # {
+    │   #   "self": actions.get("system_agent"),
+    │   #   "subordinates": {
+    │   #     "coord_1": {
+    │   #       "self": actions.get("coord_1"),
+    │   #       "subordinates": {"field_1": {...}, "field_2": {...}}
+    │   #     }
+    │   #   }
+    │   # }
     │
-    └─> [Coordinators recursively handle their field agents]
+    ├─> self.act(actions, proxy)
+    │   ├─> handle_self_action(actions["self"], proxy)
+    │   └─> handle_subordinate_actions(actions["subordinates"], proxy)
+    │       └─> For each coordinator:
+    │           └─> coordinator.execute(coord_actions, proxy)
+    │               ├─> Sync state from proxy
+    │               └─> coordinator.act(coord_actions, proxy)
+    │                   └─> For each field:
+    │                       └─> field.execute(field_actions, proxy)
+    │                           ├─> Sync state from proxy
+    │                           ├─> handle_self_action(action, proxy)
+    │                           │   ├─> set_action(action)
+    │                           │   ├─> apply_action()
+    │                           │   └─> proxy.set_local_state(state)
+    │                           └─> Done (no subordinates)
 ```
 
 ### **Event-Driven Mode Action Passing**
 
 ```
 t=0.0: AGENT_TICK(system_agent)
-│
 ├─> SystemAgent.tick()
-│   ├─> Compute system action
-│   ├─> Protocol.coordinate() -> subordinate actions
-│   └─> For each coordinator:
-│       └─> send_subordinate_action(coord_id, action)
-│           └─> Queued in broker
-│
-├─> schedule_agent_tick(coordinator_1) at t=tick_interval
-└─> schedule_subordinate_ticks()
+│   ├─> Schedule subordinate ticks
+│   ├─> If has policy:
+│   │   └─> Request obs -> [later] compute_action(obs, scheduler)
+│   │       ├─> coordinate() -> subordinate actions via protocol
+│   │       └─> send_subordinate_action(coord_id, action)
+│   └─> schedule_simulation()
 
-t=tick_interval: AGENT_TICK(coordinator_1)
-│
-├─> CoordinatorAgent.tick()
-│   ├─> upstream_actions = receive_upstream_actions()
-│   │   └─> Consume from broker (non-blocking)
-│   │
-│   ├─> If upstream_action:
-│   │   └─> set_action(upstream_action)  # Use parent's decision
-│   ├─> Else:
-│   │   └─> action = policy.forward(obs)  # Own decision
-│   │
-│   ├─> Protocol.coordinate() -> field actions
-│   └─> For each field agent:
-│       └─> send_subordinate_action(field_id, action)
-│
-└─> schedule_agent_tick(field_1, field_2, ...) at t=tick_interval
+t=coord_tick: AGENT_TICK(coordinator_1)
+├─> _check_for_upstream_action() -> consume from broker
+├─> Schedule subordinate ticks
+├─> If upstream_action:
+│   └─> compute_action(upstream_action, scheduler)
+│       ├─> coordinate() -> field actions via protocol
+│       └─> send_subordinate_action(field_id, action) for each
+├─> Elif has policy:
+│   └─> Request obs from proxy
 
-t=tick_interval: AGENT_TICK(field_1)
-│
-└─> FieldAgent.tick()
-    ├─> upstream_actions = receive_upstream_actions()
-    ├─> If upstream_action:
-    │   └─> set_action(upstream_action)
-    ├─> Else:
-    │   └─> action = policy.forward(obs)
-    └─> schedule_action_effect(delay=act_delay)
+t=field_tick: AGENT_TICK(field_1)
+├─> _check_for_upstream_action() -> consume from broker
+├─> If upstream_action:
+│   ├─> set_action(upstream_action)  # Direct assignment
+│   └─> schedule_action_effect(delay=act_delay)
+├─> Elif has policy:
+│   └─> Request obs from proxy
+
+t=field_tick+act_delay: ACTION_EFFECT(field_1)
+├─> apply_action() -> Update self.state
+└─> schedule message to proxy with serialized state
 ```
 
 ---
@@ -612,37 +650,69 @@ obs.timestamp = float   # Current time
 #### **1. Build Observation (Construction from Proxy State)**
 
 ```
-proxy.get_observation(sender_id, requestor_level)
-├─> global_state = get_global_states(sender_id, requestor_level)
-│   ├─> For each agent in state_cache["agents"]:
+proxy.get_observation(sender_id, protocol)
+├─> global_state = get_global_states(sender_id, protocol)
+│   ├─> For each agent in state_cache["agents"] (excluding sender):
 │   │   ├─> state_obj = state_cache["agents"][agent_id]
 │   │   ├─> filtered = state_obj.observed_by(sender_id, requestor_level)
 │   │   └─> Add to global_state if visible
 │   │
-│   └─> Returns: Dict of filtered feature vectors
+│   ├─> Include "env_context" from global cache if available
+│   └─> Returns: Dict of filtered feature vectors + env_context
 │
-├─> local_state = get_local_state(sender_id, requestor_level)
+├─> local_state = get_local_state(sender_id, protocol, include_subordinate_rewards=False)
 │   ├─> state_obj = state_cache["agents"][sender_id]
 │   ├─> filtered = state_obj.observed_by(sender_id, requestor_level)
-│   └─> Returns: Dict of filtered feature vectors
+│   └─> Returns: Dict of filtered feature vectors (NO subordinate rewards for obs)
 │
 └─> return Observation(
         local=local_state,        # Filtered vectors!
-        global_info=global_state, # Filtered vectors!
+        global_info=global_state, # Filtered vectors + env_context!
         timestamp=self._timestep
     )
 ```
 
-**Data Inflow:**
-```
-state_cache["agents"] -> observed_by() -> filtered vectors -> Observation
-```
-
 **Key Insight:** Observation contains **filtered numpy arrays**, not raw State objects!
+
+**Subordinate Rewards:** The `include_subordinate_rewards=False` parameter ensures observations
+used for action computation do not include subordinate reward data (which is only relevant for
+reward computation via `get_local_state()` with default `include_subordinate_rewards=True`).
 
 ---
 
-#### **2. Vectorize Observation (For RL Algorithms)**
+#### **2. Observation Delivery in Event-Driven Mode**
+
+```
+Agent requests obs -> Proxy bundles obs + local_state together
+
+Proxy.message_delivery_handler() on get_info request:
+├─> obs = get_observation(sender_id, protocol)  # Observation object
+├─> local_state = get_local_state(sender_id, protocol)  # Feature vectors
+│
+├─> Bundle both for response:
+│   info_data = {
+│       "obs": obs.to_dict(),         # Serialized Observation
+│       "local_state": local_state     # Feature vectors for state sync
+│   }
+│
+└─> schedule_message_delivery(
+        message={"get_obs_response": {"body": info_data}},
+        delay=msg_delay
+    )
+
+Agent.message_delivery_handler() on get_obs_response:
+├─> body = message["get_obs_response"]["body"]
+├─> obs = Observation.from_dict(body["obs"])        # Reconstruct Observation
+├─> self.sync_state_from_observed(body["local_state"])  # Sync state!
+└─> compute_action(obs, scheduler)
+```
+
+**Design Principle:** When agent asks for obs, proxy gives BOTH obs and local_state.
+This enables state syncing alongside observation delivery.
+
+---
+
+#### **3. Vectorize Observation (For RL Algorithms)**
 
 ```
 Observation -> numpy array conversion
@@ -673,7 +743,7 @@ np.ndarray([0.53, 100.0, ...])  # For neural networks
 
 ---
 
-#### **3. Serialize/Deserialize Observation (Message Passing)**
+#### **4. Serialize/Deserialize Observation (Message Passing)**
 
 **Serialization (Sending):**
 ```
@@ -685,15 +755,11 @@ obs.to_dict()
         "local": {"BatteryChargeFeature": [0.53, 100.0]},  # Arrays -> lists
         "global_info": {"agent_states": {...}}
     }
-
-# Used in message passing:
-message = {"get_obs_response": {"body": obs.to_dict()}}
 ```
 
 **Deserialization (Receiving):**
 ```
-obs_dict = message["get_obs_response"]["body"]
-# obs_dict = {"timestamp": 0.0, "local": {...}, "global_info": {...}}
+obs_dict = message["get_obs_response"]["body"]["obs"]
 
 obs = Observation.from_dict(obs_dict)
 └─> Reconstructs Observation object
@@ -708,11 +774,11 @@ obs = Observation.from_dict(obs_dict)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ Proxy State Cache (State Objects)                               │
+│ Proxy State Cache (State Objects with Dict features)            │
 ├─────────────────────────────────────────────────────────────────┤
 │ state_cache["agents"]["battery_1"] = FieldAgentState(           │
 │     owner_id="battery_1",                                       │
-│     features=[BatteryChargeFeature(soc=0.53, capacity=100.0)]   │
+│     features={"BatteryChargeFeature": BatteryChargeFeature(...)}│
 │ )                                                               │
 └─────────────────────────────────────────────────────────────────┘
                             ↓ get_observation() + observed_by()
@@ -721,9 +787,11 @@ obs = Observation.from_dict(obs_dict)
 ├─────────────────────────────────────────────────────────────────┤
 │ Observation(                                                    │
 │     local={"BatteryChargeFeature": np.array([0.53, 100.0])},   │
-│     global_info={...filtered states...},                        │
+│     global_info={...filtered states... + env_context},          │
 │     timestamp=0.0                                               │
 │ )                                                               │
+│                                                                 │
+│ Event-Driven: Also bundled with local_state for sync            │
 └─────────────────────────────────────────────────────────────────┘
                             ↓ __array__()
 ┌─────────────────────────────────────────────────────────────────┐
@@ -747,8 +815,8 @@ class BatteryChargeFeature(FeatureProvider):
     soc: float = 0.5
     capacity: float = 100.0
 
-# Feature object attributes (auto-set by metaclass):
-feature.feature_name = "BatteryChargeFeature"
+# Feature object attributes (auto-set by FeatureMeta metaclass):
+feature.feature_name = "BatteryChargeFeature"  # From _class_feature_name
 feature.visibility = ["public"]
 feature.soc = 0.5
 feature.capacity = 100.0
@@ -759,19 +827,30 @@ feature.capacity = 100.0
 #### **1. Feature Creation & Registration**
 
 ```
-Agent.init_state()
-├─> battery_feature = BatteryChargeFeature(soc=0.5, capacity=100.0)
+Agent.__init__() -> init_state(features=features_list)
+├─> For each feature in features_list:
 │   └─> FeatureProvider object created
 │   └─> Auto-registered in _FEATURE_REGISTRY via FeatureMeta
 │
-├─> self.state = FieldAgentState(owner_id="battery_1", owner_level=1)
-├─> self.state.features.append(battery_feature)
-└─> State contains list of FeatureProvider objects
+├─> self.state = FieldAgentState(
+│       owner_id="battery_1",
+│       owner_level=1,
+│       features={f.feature_name: f for f in features_list}  # List -> Dict!
+│   )
+└─> State contains Dict of FeatureProvider objects keyed by name
 ```
 
 **Data Outflow:**
 ```
-FeatureProvider object -> Appended to state.features list
+FeatureProvider object -> Stored in state.features dict by name
+```
+
+**Feature access:**
+```python
+# O(1) access by name (Dict, not List!)
+feature = state.features["BatteryChargeFeature"]
+feature.soc  # 0.5
+feature.capacity  # 100.0
 ```
 
 ---
@@ -780,11 +859,10 @@ FeatureProvider object -> Appended to state.features list
 
 ```
 state.to_dict()
-├─> For each feature in self.features:
-│   ├─> feature_name = feature.feature_name  # "BatteryChargeFeature"
+├─> For each feature_name, feature in self.features.items():
 │   ├─> feature_dict = feature.to_dict()
 │   │   └─> Returns: {"soc": 0.5, "capacity": 100.0}
-│   └─> result[feature_name] = feature_dict
+│   └─> result["features"][feature_name] = feature_dict
 │
 └─> Returns: {
         "_owner_id": "battery_1",
@@ -796,32 +874,21 @@ state.to_dict()
     }
 ```
 
-**Data Transformations:**
-```
-FeatureProvider object
-    ↓ .to_dict()
-{"soc": 0.5, "capacity": 100.0}
-    ↓ Wrapped with feature_name
-{"BatteryChargeFeature": {"soc": 0.5, "capacity": 100.0}}
-```
-
 ---
 
 #### **3. Feature Update**
 
-```
-Update feature values in State object
+```python
+# Direct field-level update via Dict access:
+state.features["BatteryChargeFeature"].set_values(soc=0.8)
 
-state.update_feature("BatteryChargeFeature", soc=0.8)
-├─> Find feature with matching feature_name
-├─> Call feature.set_values(soc=0.8)
-│   └─> feature.soc = np.clip(0.8, 0.0, 1.0)
-└─> Feature object modified in-place!
-
-# Or update via State.update():
+# Batch update via State.update():
 state.update({
     "BatteryChargeFeature": {"soc": 0.8}
 })
+
+# Reset features to defaults:
+state.reset()  # or state.reset(overrides={"BatteryChargeFeature": {"soc": 0.5}})
 ```
 
 ---
@@ -836,16 +903,10 @@ feature.vector()
     └─> Example: np.array([0.5, 100.0])
 
 state.vector()
-├─> For each feature: vectors.append(feature.vector())
+├─> For each feature_name, feature in features.items():
+│   └─> vectors.append(feature.vector())
 ├─> Concatenate all feature vectors
 └─> Returns: np.array([0.5, 100.0, ...], dtype=float32)
-```
-
-**Data Transformations:**
-```
-FeatureProvider (soc=0.5, capacity=100.0)
-    ↓ .vector()
-np.array([0.5, 100.0])
 ```
 
 ---
@@ -854,7 +915,7 @@ np.array([0.5, 100.0])
 
 ```
 state.observed_by(requestor_id, requestor_level)
-├─> For each feature in state.features:
+├─> For each feature_name, feature in state.features.items():
 │   ├─> Check: feature.is_observable_by(requestor_id, requestor_level, owner_id, owner_level)
 │   │   ├─> If visibility = ["public"]: Always True
 │   │   ├─> If visibility = ["owner"]: True if requestor_id == owner_id
@@ -875,7 +936,7 @@ state.observed_by(requestor_id, requestor_level)
 ```
 Field Agent (battery_1, level=1) requests observation:
 
-proxy.get_observation("battery_1", requestor_level=1)
+proxy.get_observation("battery_1", protocol)
 │
 ├─> LOCAL STATE (own state):
 │   state_obj = state_cache["agents"]["battery_1"]  # FieldAgentState
@@ -906,21 +967,18 @@ proxy.get_observation("battery_1", requestor_level=1)
 │       ├─> Check "owner": battery_1 != coordinator_1 -> False
 │       └─> NOT included (filtered out!)
 │
+│   Include env_context from global cache if available
+│
 └─> Return: Observation(
         local={"BatteryChargeFeature": array([0.503, 100.0])},
         global_info={
-            "battery_2": {"BatteryChargeFeature": array([0.498, 100.0])}
+            "battery_2": {"BatteryChargeFeature": array([0.498, 100.0])},
+            "env_context": {...}  # If available
             # coordinator_1 private features NOT visible!
         },
         timestamp=1.0
     )
 ```
-
-**Visibility Enforcement:**
-- battery_1 sees own state (owner visibility)
-- battery_1 sees battery_2 state (public visibility)
-- battery_1 does NOT see coordinator private features (filtered out)
-- battery_1 does NOT see system-only features (filtered out)
 
 ---
 
@@ -944,13 +1002,17 @@ proxy.get_observation("battery_1", requestor_level=1)
 │ feature = BatteryChargeFeature(soc=0.5, capacity=100.0)         │
 │ feature.feature_name = "BatteryChargeFeature"  # Auto-set       │
 └─────────────────────────────────────────────────────────────────┘
-                            ↓ Added to State
+                            ↓ Added to State (as Dict entry)
 ┌─────────────────────────────────────────────────────────────────┐
 │ State Composition                                               │
 ├─────────────────────────────────────────────────────────────────┤
-│ state.features = [feature1, feature2, ...]                      │
+│ state.features = {                                              │
+│     "BatteryChargeFeature": feature,  # Dict keyed by name!     │
+│     "AnotherFeature": feature2,                                 │
+│ }                                                               │
 │                                                                 │
 │ state.vector() -> Concatenates all feature.vector() outputs     │
+│ state.features["BatteryChargeFeature"].soc -> O(1) access       │
 └─────────────────────────────────────────────────────────────────┘
                             ↓ Proxy retrieval
 ┌─────────────────────────────────────────────────────────────────┐
@@ -969,17 +1031,17 @@ proxy.get_observation("battery_1", requestor_level=1)
 
 ### **Message System Components**
 
-#### **Message Structure**
+#### **Message Structure (imported as BrokerMessage in base.py)**
 
 ```python
 @dataclass
 class Message:
-    message_type: MessageType  # ACTION, INFO, STATE_UPDATE, etc.
+    env_id: str                # Environment identifier
     sender_id: str             # Who sent the message
     recipient_id: str          # Who receives the message
+    timestamp: float           # When message was created
+    message_type: MessageType  # ACTION, INFO, BROADCAST
     payload: Dict[str, Any]    # Message content
-    timestamp: Optional[float] = None  # When message was created
-    env_id: str = "default"    # Environment identifier
 ```
 
 #### **Message Types**
@@ -988,153 +1050,111 @@ class Message:
 class MessageType(Enum):
     ACTION = "action"          # Parent -> Child action commands
     INFO = "info"              # Information/observation requests
-    STATE_UPDATE = "state"     # State synchronization
     BROADCAST = "broadcast"    # Multi-recipient messages
-    CUSTOM = "custom"          # Domain-specific types
+    STATE_UPDATE = "state_update"  # State update messages
+    RESULT = "result"          # Generic result message
+    CUSTOM = "custom"          # For domain-specific message types
 ```
 
 ### **Message Broker**
 
 ```python
 class MessageBroker(ABC):
-    """Abstract base for message delivery."""
-
     @abstractmethod
     def publish(self, channel: str, message: Message) -> None:
         """Send message to channel."""
-        pass
 
     @abstractmethod
-    def consume(
-        self,
-        channel: str,
-        recipient_id: str,
-        env_id: str
-    ) -> List[Message]:
+    def consume(self, channel: str, recipient_id: str, env_id: str, clear: bool = True) -> List[Message]:
         """Receive messages from channel (non-blocking)."""
-        pass
 
     @abstractmethod
     def create_channel(self, channel_name: str) -> None:
         """Create a new channel."""
-        pass
-```
 
-#### **In-Memory Broker Implementation**
-
-```python
-class InMemoryBroker(MessageBroker):
-    """In-process message broker for single-machine execution."""
-
-    def __init__(self):
-        self._channels: Dict[str, Queue] = {}
-
-    def publish(self, channel: str, message: Message) -> None:
-        if channel not in self._channels:
-            self.create_channel(channel)
-        self._channels[channel].put(message)
-
-    def consume(self, channel, recipient_id, env_id) -> List[Message]:
-        if channel not in self._channels:
-            return []
-
-        messages = []
-        while not self._channels[channel].empty():
-            msg = self._channels[channel].get_nowait()
-            if msg.recipient_id == recipient_id:
-                messages.append(msg)
-        return messages
+    @abstractmethod
+    def clear_environment(self, env_id: str) -> None:
+        """Clear all channels for an environment."""
 ```
 
 ### **Channel Management**
 
 ```python
 class ChannelManager:
-    """Creates standardized channel names."""
+    @staticmethod
+    def action_channel(upstream_id: str, node_id: str, env_id: str = "default") -> str:
+        return f"env_{env_id}__action__{upstream_id}_to_{node_id}"
 
     @staticmethod
-    def action_channel(sender_id: str, recipient_id: str, env_id: str) -> str:
-        return f"env:{env_id}/action/{sender_id}->{recipient_id}"
-
-    @staticmethod
-    def info_channel(sender_id: str, recipient_id: str, env_id: str) -> str:
-        return f"env:{env_id}/info/{sender_id}->{recipient_id}"
-
-    @staticmethod
-    def state_channel(agent_id: str, env_id: str) -> str:
-        return f"env:{env_id}/state/{agent_id}"
-
-    @staticmethod
-    def broadcast_channel(env_id: str) -> str:
-        return f"env:{env_id}/broadcast"
+    def info_channel(node_id: str, upstream_id: str, env_id: str = "default") -> str:
+        return f"env_{env_id}__info__{node_id}_to_{upstream_id}"
 ```
 
 ### **Message Flow Patterns**
 
-#### **1. Observation Request/Response**
+#### **1. Observation Request/Response (Event-Driven)**
 
 ```
-Agent -> Proxy (Request):
-├─> channel = info_channel(agent_id, PROXY_ID, env_id)
-├─> message = Message(
-│       message_type=MessageType.INFO,
+Agent -> Proxy (Request via scheduler):
+├─> schedule_message_delivery(
 │       sender_id=agent_id,
-│       recipient_id=PROXY_ID,
-│       payload={"get_info": "obs"}
+│       recipient_id=PROXY_AGENT_ID,
+│       message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: protocol},
+│       delay=msg_delay
 │   )
-└─> broker.publish(channel, message)
 
-Proxy -> Agent (Response):
-├─> obs = get_observation(sender_id, requestor_level)
-├─> response = Message(
-│       message_type=MessageType.INFO,
-│       sender_id=PROXY_ID,
-│       recipient_id=agent_id,
-│       payload={"get_obs_response": {"body": obs.to_dict()}}
+Proxy -> Agent (Response with BOTH obs and local_state):
+├─> obs = get_observation(sender_id, protocol)
+├─> local_state = get_local_state(sender_id, protocol)
+├─> schedule_message_delivery(
+│       message={"get_obs_response": {
+│           "body": {
+│               "obs": obs.to_dict(),
+│               "local_state": local_state
+│           }
+│       }}
 │   )
-└─> broker.publish(response_channel, response)
 ```
 
-#### **2. Action Passing**
+#### **2. Action Passing (via Broker)**
 
 ```
-Coordinator -> FieldAgent:
+Coordinator -> FieldAgent (via message broker):
 ├─> channel = action_channel(coord_id, field_id, env_id)
 ├─> message = Message(
-│       message_type=MessageType.ACTION,
+│       env_id=env_id,
 │       sender_id=coord_id,
 │       recipient_id=field_id,
-│       payload={"action": action}  # Action object or dict
+│       message_type=MessageType.ACTION,
+│       payload={"action": action}
 │   )
 └─> broker.publish(channel, message)
 
-FieldAgent receives:
-├─> channel = action_channel(coord_id, field_id, env_id)
-├─> messages = broker.consume(channel, field_id, env_id)
-└─> For msg in messages:
-    └─> upstream_action = msg.payload["action"]
+FieldAgent receives (at tick start):
+├─> _check_for_upstream_action()
+│   ├─> actions = receive_upstream_actions(sender_id=upstream_id, clear=True)
+│   │   └─> receive_actions(broker, upstream_id, clear=True)
+│   │       ├─> channel = ChannelManager.action_channel(upstream_id, self.agent_id, env_id)
+│   │       ├─> messages = broker.consume(channel, self.agent_id, env_id, clear=True)
+│   │       └─> return [msg.payload["action"] for msg in messages]
+│   └─> self._upstream_action = actions[-1] if actions else None
 ```
 
-#### **3. State Update**
+#### **3. State Update (Event-Driven)**
 
 ```
-Agent -> Proxy:
-├─> channel = state_channel(agent_id, env_id)
-├─> message = Message(
-│       message_type=MessageType.STATE_UPDATE,
-│       sender_id=agent_id,
-│       recipient_id=PROXY_ID,
-│       payload={
-│           "set_state": "local",
-│           "body": state.to_dict(include_metadata=True)
-│       }
+Agent -> Proxy (after apply_action):
+├─> schedule_message_delivery(
+│       message={"set_state": "local", "body": state.to_dict(include_metadata=True)}
 │   )
-└─> broker.publish(channel, message)
 
 Proxy receives and updates:
-├─> state_dict = message.payload["body"]
+├─> state_dict = message["body"]
 ├─> state = State.from_dict(state_dict)
-└─> set_local_state(agent_id, state)
+├─> set_local_state(state.owner_id, state)  # State object!
+└─> schedule_message_delivery(
+        message={MSG_SET_STATE_COMPLETION: "success"}
+    )
 ```
 
 ### **Event-Driven Message Scheduling**
@@ -1142,24 +1162,22 @@ Proxy receives and updates:
 ```python
 def schedule_message_delivery(
     self,
-    scheduler: EventScheduler,
     sender_id: str,
     recipient_id: str,
     message: Dict,
-    delay: float = 0.0
+    delay: Optional[float] = None,
 ):
     """Schedule a message to be delivered after delay."""
-    event = Event(
+    if delay is None:
+        delay = self.get_msg_delay(sender_id)
+
+    self.schedule(Event(
+        timestamp=self.current_time + delay,
         event_type=EventType.MESSAGE_DELIVERY,
-        timestamp=scheduler.current_time + delay,
         agent_id=recipient_id,
-        payload={
-            "sender": sender_id,
-            "recipient": recipient_id,
-            "message": message
-        }
-    )
-    scheduler.schedule(event)
+        priority=2,  # Communication-level (after state changes)
+        payload={"sender": sender_id, "message": message}
+    ))
 ```
 
 ---
@@ -1169,46 +1187,39 @@ def schedule_message_delivery(
 ### **Phase 0: Initialization**
 
 ```
-env = EnergyManagementEnv(system_agent=grid_system_agent)
+env = CustomEnv(system_agent=grid_system_agent)
 │
 ├─> EnvCore.__init__()
-    │
-    ├─> _register_agents()
-    │   ├─> Register all agents recursively
-    │   ├─> Create ProxyAgent()
-    │   └─> Create MessageBroker()
-    │
-    ├─> _initialize_agents()
-    │   └─> For each agent (system -> coord -> field):
-    │       │
-    │       ├─> agent.init_action()
-    │       │   └─> self.action = Action()
-    │       │       self.action.set_specs(...)
-    │       │       DATA: Action object created
-    │       │
-    │       ├─> agent.init_state()
-    │       │   └─> self.state = FieldAgentState(owner_id, owner_level)
-    │       │       self.state.features.append(BatteryChargeFeature(...))
-    │       │       DATA: State object with features created
-    │       │
-    │       └─> proxy.register_agent(agent_id, agent_state=agent.state)
-    │           └─> proxy.set_local_state(agent_id, agent.state)
-    │               │
-    │               STORAGE:
-    │               state_cache["agents"]["battery_1"] = agent.state  # State object!
-    │
-    └─> proxy.init_global_state()
-        └─> Compile agent references into global view
+│   │
+│   ├─> _register_agents(system_agent, coordinator_agents)
+│   │   ├─> system_agent.set_simulation(run_simulation, ...)
+│   │   └─> _register_agent(system_agent) [recursive for all]
+│   │
+│   ├─> Create ProxyAgent(), register it
+│   │
+│   ├─> Setup MessageBroker, attach to agents
+│   │
+│   ├─> proxy_agent.attach(registered_agents)
+│   │   ├─> For each agent:
+│   │   │   └─> _register_agent(agent)
+│   │   │       ├─> Track agent_id, level, upstream_id
+│   │   │       └─> set_local_state(agent_id, agent.state)  # State object!
+│   │   ├─> init_global_state()
+│   │   ├─> For each agent: post_proxy_attach(proxy)
+│   │   │   └─> FieldAgent: Compute action_space, observation_space
+│   │   └─> _setup_channels()
+│   │
+│   └─> Setup EventScheduler, attach to agents
 ```
 
 **Data State After Init:**
 ```python
 proxy.state_cache = {
     "agents": {
-        "battery_1": FieldAgentState(...),      # State object!
-        "battery_2": FieldAgentState(...),      # State object!
-        "coordinator_1": CoordinatorAgentState(...),
-        "system_agent": SystemAgentState(...)
+        "battery_1": FieldAgentState(features={"BatteryChargeFeature": ...}),
+        "battery_2": FieldAgentState(features={"BatteryChargeFeature": ...}),
+        "coordinator_1": CoordinatorAgentState(features={...}),
+        "system_agent": SystemAgentState(features={...})
     }
 }
 ```
@@ -1220,55 +1231,23 @@ proxy.state_cache = {
 ```
 obs, info = env.reset(seed=42)
 │
-├─> scheduler.reset() -> Clear events
-├─> broker.clear() -> Clear messages
-├─> proxy.reset() -> state_cache = {}  [CLEARED!]
+├─> scheduler.reset(start_time=0.0)
+├─> clear_broker_environment()
+├─> proxy_agent.reset() -> state_cache = {}
 │
 ├─> system_agent.reset(seed, proxy)
-│   ├─> self._timestep = 0.0
+│   ├─> Agent.reset():
+│   │   ├─> self._timestep = 0.0
+│   │   ├─> self.action.reset()
+│   │   ├─> self.state.reset()
+│   │   ├─> proxy.set_local_state(self.agent_id, self.state)
+│   │   └─> For each subordinate: subordinate.reset(seed, proxy)
 │   │
-│   ├─> init_action()
-│   │   └─> self.action = Action() [Reset]
-│   │
-│   ├─> init_state()
-│   │   └─> self.state = SystemAgentState(...) [Fresh state]
-│   │
-│   ├─> proxy.set_local_state(self.agent_id, self.state)
-│   │   │
-│   │   STORAGE:
-│   │   state_cache["agents"]["system_agent"] = self.state  # State object!
-│   │
-│   └─> For each subordinate: subordinate.reset(seed, proxy)
-│       └─> [Recursive reset, all update proxy cache]
+│   └─> return self.observe(proxy=proxy), {}
 │
 ├─> proxy.init_global_state()
 │
-└─> return self.observe(proxy)
-    │
-    DATA CONSTRUCTION:
-    For each agent:
-        obs[agent_id] = proxy.get_observation(agent_id, agent_level)
-            ├─> local = state.observed_by(agent_id, agent_level)
-            ├─> global_info = {filtered states from other agents}
-            └─> Observation(local, global_info, timestamp)
-
-    Returns: {"battery_1": Observation(...), "battery_2": Observation(...)}
-```
-
-**Data State After Reset:**
-```python
-# Agent layer:
-agent.state = FieldAgentState(...)  # State objects
-agent.action = Action(...)          # Action objects
-
-# Proxy layer:
-proxy.state_cache["agents"]["battery_1"] = FieldAgentState(...)  # State objects!
-
-# Returned observations:
-obs = {
-    "battery_1": Observation(local={filtered vectors}, global_info={...}),
-    "battery_2": Observation(...)
-}  # Observation objects!
+└─> return (observations, {})
 ```
 
 ---
@@ -1281,69 +1260,34 @@ obs, rewards, terminated, truncated, info = env.step(actions)
 └─> SystemAgent.execute(actions, proxy)
 ```
 
-#### **Step 2.1: Action Application**
+#### **Step 2.1: Pre-Step + State Sync + Action Application**
 
 ```
+PHASE 0: Pre-step hook
+├─> pre_step_func() if configured
+
+PHASE 0.5: State Sync
+├─> local_state = proxy.get_local_state(sender_id=system_agent_id, protocol=protocol)
+├─> sync_state_from_observed(local_state)
+
 PHASE 1: Actions -> State Updates
 
+actions = self.layer_actions(actions)
 self.act(actions, proxy)
 │
-├─> layer_actions(actions)
-│   │
-│   INPUT: actions = {
-│       "battery_1": Action(c=[0.3]),  # Action objects!
-│       "battery_2": Action(c=[-0.2]),
-│   }
-│   │
-│   OUTPUT: {
-│       "self": None,  # System agent has no action
-│       "subordinates": {
-│           "coordinator_1": {
-│               "self": None,
-│               "subordinates": {
-│                   "battery_1": actions["battery_1"],
-│                   "battery_2": actions["battery_2"],
-│               }
-│           }
-│       }
-│   }
+├─> self._timestep += 1
 │
-├─> handle_self_action(layered["self"], proxy)
-│   └─> System agent has no action, skipped
+├─> handle_self_action(actions['self'], proxy)
+│   ├─> set_action(action) or policy.forward()
+│   ├─> apply_action()
+│   └─> proxy.set_local_state(self.agent_id, self.state)
 │
-└─> handle_subordinate_actions(layered["subordinates"], proxy)
-    │
-    └─> For coordinator_1:
-        │
-        ├─> coordinator_1.execute(coord_actions, proxy)
-        │   │
-        │   └─> For battery_1:
-        │       │
-        │       └─> battery_1.execute(actions["battery_1"], proxy)
-        │           ├─> set_action(action)
-        │           │   └─> self.action.set_values(action)
-        │           │       DATA: self.action.c = [0.3]
-        │           │
-        │           ├─> apply_action()
-        │           │   └─> set_state()
-        │           │       ├─> current_soc = self.state.features[0].soc  # 0.5
-        │           │       ├─> delta = self.action.c[0] * 0.01  # 0.003
-        │           │       ├─> new_soc = 0.5 + 0.003 = 0.503
-        │           │       └─> self.state.features[0].set_values(soc=0.503)
-        │           │           DATA: State modified in-place!
-        │           │
-        │           └─> proxy.set_local_state(self.agent_id, self.state)
-        │               STORAGE: state_cache["agents"]["battery_1"] = self.state
-```
-
-**Data State After Action Application:**
-```python
-# Agent layer:
-agent.action.c = [0.3]  # Action applied
-agent.state.features[0].soc = 0.503  # State updated
-
-# Proxy layer:
-proxy.state_cache["agents"]["battery_1"] = agent.state  # Same object reference!
+└─> handle_subordinate_actions(actions['subordinates'], proxy)
+    └─> For each subordinate:
+        └─> subordinate.execute(layered_actions, proxy)
+            ├─> Sync state from proxy
+            └─> subordinate.act(actions, proxy)
+                └─> [Recursive for entire hierarchy]
 ```
 
 ---
@@ -1353,28 +1297,23 @@ proxy.state_cache["agents"]["battery_1"] = agent.state  # Same object reference!
 ```
 PHASE 2: Physics Simulation
 
-global_state = proxy.get_global_states(system_agent_id, system_level)
+global_state = proxy.get_global_states(sender_id=system_agent_id, protocol=protocol)
 │
 DATA RETRIEVAL:
 ├─> For each agent in state_cache["agents"]:
 │   └─> filtered = state.observed_by(system_agent_id, system_level)
-└─> Returns: Dict of all filtered states (system sees everything)
+├─> Include env_context if available
+└─> Returns: Dict of all filtered states
 
 updated_global_state = simulate(global_state)
 │
 ├─> env_state = global_state_to_env_state(global_state)
-│   DATA: Extract physics-relevant values from states
-│
 ├─> updated_env_state = run_simulation(env_state)
-│   PHYSICS: Apply environment dynamics
-│
 └─> return env_state_to_global_state(updated_env_state)
-    DATA: Convert back to state format
 
 proxy.set_global_state(updated_global_state)
 │
-DATA STORAGE:
-└─> Update state_cache["agents"] with simulation results
+└─> state_cache["global"].update(updated_global_state)
 ```
 
 ---
@@ -1384,24 +1323,23 @@ DATA STORAGE:
 ```
 PHASE 3: Collect Observations
 
-obs = self.observe(proxy)
+obs = self.observe(proxy=proxy)
 │
 └─> For each agent in hierarchy:
     │
-    └─> observation = proxy.get_observation(agent_id, agent_level)
+    └─> observation = proxy.get_observation(sender_id=agent_id, protocol=protocol)
         │
-        DATA CONSTRUCTION:
-        ├─> local_state = get_local_state(agent_id, agent_level)
-        │   └─> state.observed_by(agent_id, agent_level)
+        ├─> local_state = get_local_state(sender_id=agent_id, protocol=protocol, include_subordinate_rewards=False)
+        │   └─> state.observed_by(sender_id, requestor_level)
         │   └─> Returns: {"BatteryChargeFeature": np.array([0.503, 100.0])}
         │
         ├─> global_state = get_global_states(agent_id, agent_level)
-        │   └─> {other agents' filtered states}
+        │   └─> {other agents' filtered states + env_context}
         │
         └─> return Observation(
-                local=local_state,        # Filtered vectors!
-                global_info=global_state, # Filtered vectors!
-                timestamp=1.0
+                local=local_state,
+                global_info=global_state,
+                timestamp=timestep
             )
 
 Returns: {
@@ -1421,11 +1359,10 @@ rewards = self.compute_rewards(proxy)
 │
 └─> For each agent:
     │
-    ├─> local_state = proxy.get_local_state(agent_id, agent_level)
-    │   │
-    │   DATA RETRIEVAL:
-    │   state.observed_by(agent_id, agent_level)
-    │   └─> Returns: {"BatteryChargeFeature": np.array([0.503, 100.0])}
+    ├─> local_state = proxy.get_local_state(sender_id=agent_id, protocol=protocol)
+    │   │                                   ↑ include_subordinate_rewards=True (default)
+    │   └─> Returns: {"BatteryChargeFeature": np.array([0.503, 100.0]),
+    │                  "subordinate_rewards": {...} (if parent agent)}
     │
     └─> reward = compute_local_reward(local_state)
         │
@@ -1468,12 +1405,12 @@ obs_vectorized = {
     for agent_id, observation in obs.items()
 }
 │
-├─> observation.vector()
-│   ├─> Flatten local: {"BatteryChargeFeature": np.array([0.503, 100.0])}
-│   │   └─> [0.503, 100.0]
-│   ├─> Flatten global_info
-│   └─> Concatenate: np.array([0.503, 100.0, ...], dtype=float32)
-│
+└─> observation.vector()
+    ├─> Flatten local: {"BatteryChargeFeature": np.array([0.503, 100.0])}
+    │   └─> [0.503, 100.0]
+    ├─> Flatten global_info
+    └─> Concatenate: np.array([0.503, 100.0, ...], dtype=float32)
+
 Returns: (
     obs_vectorized: {"battery_1": np.ndarray([0.503, 100.0, ...]), ...},
     rewards,
@@ -1481,15 +1418,6 @@ Returns: (
     truncateds,
     infos
 )
-```
-
-**Final Data Output for RL:**
-```python
-obs = {
-    "battery_1": np.ndarray([0.503, 100.0, ...]),  # Numpy arrays!
-    "battery_2": np.ndarray([0.498, 100.0, ...])
-}
-rewards = {"battery_1": 0.503, "battery_2": 0.498}
 ```
 
 ---
@@ -1503,33 +1431,22 @@ rewards = {"battery_1": 0.503, "battery_2": 0.498}
 ```
 SystemAgent.tick(scheduler, current_time=0.0)
 │
-├─> self._timestep = 0.0  # Update internal time
+├─> pre_step_func() if configured
+│
+├─> super().tick() -> self._timestep = 0.0, _check_for_upstream_action()
 │
 ├─> Schedule subordinate ticks:
 │   └─> scheduler.schedule_agent_tick("coordinator_1")
-│       └─> Event scheduled at t = 0.0 + tick_interval
-│
-├─> Action passing to subordinates:
-│   ├─> protocol.coordinate() -> compute subordinate actions
-│   └─> For each coordinator:
-│       └─> send_subordinate_action(coord_id, action)
-│           └─> broker.publish(action_channel, Message(action))
 │
 ├─> If has policy: Request observation
 │   └─> schedule_message_delivery(
-│           sender=system_agent,
-│           recipient=proxy,
-│           message={"get_info": "obs"},
+│           sender=system_agent, recipient=proxy,
+│           message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: protocol},
 │           delay=msg_delay
 │       )
-│       │
-│       DATA OUTFLOW:
-│       Message payload = {"get_info": "obs"}
-│       Scheduled at: t = 0.0 + msg_delay
 │
 └─> Schedule simulation:
     └─> scheduler.schedule_simulation(system_agent, wait_interval)
-        └─> Event scheduled at t = 0.0 + wait_interval
 ```
 
 ---
@@ -1539,35 +1456,25 @@ SystemAgent.tick(scheduler, current_time=0.0)
 ```
 ProxyAgent.message_delivery_handler()
 │
-├─> Receive: {"get_info": "obs"}
-├─> info_type = "obs"
+├─> Receive: {MSG_GET_INFO: "obs", MSG_KEY_PROTOCOL: protocol}
 │
-├─> obs = get_observation(system_agent, system_level)
-│   │
-│   DATA CONSTRUCTION:
-│   ├─> global_state = {all agents' observed_by() filtered states}
-│   ├─> local_state = state.observed_by(system_id, 3)
-│   └─> obs = Observation(local, global_info, timestamp)
+├─> obs = get_observation(system_agent, protocol)
+│   ├─> global = get_global_states() -> visibility-filtered
+│   ├─> local = get_local_state(include_subordinate_rewards=False)
+│   └─> return Observation(local, global, timestamp)
 │
-│   DATA TYPE: Observation object
+├─> local_state = get_local_state(system_agent, protocol)  # For state sync
 │
-├─> Serialize observation for message:
-│   obs.to_dict()
-│   └─> Returns: {
-│           "timestamp": 0.0,
-│           "local": {...},
-│           "global_info": {...}
-│       }
+├─> Bundle BOTH obs and local_state:
+│   info_data = {
+│       "obs": obs.to_dict(),
+│       "local_state": local_state
+│   }
 │
 └─> schedule_message_delivery(
-        sender=proxy,
-        recipient=system_agent,
-        message={"get_obs_response": {"body": obs_dict}},
+        message={"get_obs_response": {"body": info_data}},
         delay=msg_delay
     )
-    │
-    DATA OUTFLOW:
-    Message contains serialized dict, not Observation object!
 ```
 
 ---
@@ -1577,56 +1484,20 @@ ProxyAgent.message_delivery_handler()
 ```
 SystemAgent.message_delivery_handler()
 │
-├─> Receive: {"get_obs_response": {"body": obs_dict}}
-│   │
-│   DATA INFLOW:
-│   obs_dict = {"timestamp": 0.0, "local": {...}, "global_info": {...}}
+├─> body = message["get_obs_response"]["body"]
+├─> obs_dict = body["obs"]
+├─> local_state = body["local_state"]
 │
-├─> Deserialize observation:
-│   obs = Observation.from_dict(obs_dict)
-│   │
-│   DATA TRANSFORMATION:
-│   Dict -> Observation object reconstructed
+├─> obs = Observation.from_dict(obs_dict)
+│
+├─> Sync state: self.sync_state_from_observed(local_state)
 │
 └─> compute_action(obs, scheduler)
-    │
     ├─> action = policy.forward(observation=obs)
-    │   │
-    │   DATA AUTO-CONVERSION:
-    │   obs.__array__() -> np.ndarray for neural network
-    │   │
-    │   POLICY OUTPUT:
-    │   action = Action(c=[0.15])
-    │
+    │   └─> obs.__array__() auto-converts
+    ├─> If protocol: coordinate() -> send subordinate actions
     ├─> set_action(action)
-    │   DATA UPDATE: self.action.c = [0.15]
-    │
-    └─> schedule_action_effect(agent_id, delay=act_delay)
-        └─> Event scheduled at t = 2*msg_delay + act_delay
-```
-
----
-
-#### **t=2*msg_delay+act_delay: ACTION_EFFECT(system_agent)**
-
-```
-action_effect_handler()
-│
-├─> apply_action()
-│   └─> set_state()
-│       ├─> Read self.action values
-│       ├─> Update self.state features
-│       └─> State object modified in-place
-│
-├─> Serialize state with metadata:
-│   state_dict = self.state.to_dict(include_metadata=True)
-│   │
-│   DATA TRANSFORMATION:
-│   State object -> Dict with metadata
-│
-└─> schedule_message_delivery(
-        message={"set_state": "local", "body": state_dict}
-    )
+    └─> schedule_action_effect(delay=act_delay)
 ```
 
 ---
@@ -1636,27 +1507,19 @@ action_effect_handler()
 ```
 CoordinatorAgent.tick(scheduler, current_time)
 │
-├─> Receive upstream actions:
-│   upstream_actions = receive_upstream_actions()
-│   └─> broker.consume(action_channel)
-│   └─> Returns: [Action(...)] from system_agent
+├─> super().tick() -> _check_for_upstream_action()
+│   └─> self._upstream_action = broker.consume(action_channel)[-1]
 │
-├─> Determine action source:
-│   ├─> If upstream_actions not empty:
-│   │   └─> action = upstream_actions[0]  # Use parent's decision!
-│   └─> Else:
-│       └─> action = policy.forward(obs)  # Own decision
+├─> Schedule subordinate ticks
 │
-├─> set_action(action)
+├─> If self._upstream_action:
+│   └─> compute_action(upstream_action, scheduler)
+│       ├─> Uses upstream action (priority!)
+│       ├─> coordinate() -> field actions via protocol
+│       └─> send_subordinate_action(field_id, action) for each
 │
-├─> Protocol.coordinate() -> compute field agent actions
-│
-├─> Send actions to subordinates:
-│   └─> For each field_agent:
-│       └─> send_subordinate_action(field_id, field_action)
-│           └─> broker.publish(action_channel, Message)
-│
-└─> Schedule subordinate ticks
+├─> Elif has policy:
+│   └─> schedule obs request to proxy
 ```
 
 ---
@@ -1666,52 +1529,72 @@ CoordinatorAgent.tick(scheduler, current_time)
 ```
 FieldAgent.tick(scheduler, current_time)
 │
-├─> Receive upstream actions:
-│   upstream_actions = receive_upstream_actions()
-│   └─> broker.consume(action_channel)
-│   └─> Returns: [Action(...)] from coordinator_1
+├─> super().tick() -> _check_for_upstream_action()
+│   └─> self._upstream_action = broker.consume(action_channel)[-1]
 │
-├─> Determine action source:
-│   ├─> If upstream_actions not empty:
-│   │   └─> action = upstream_actions[0]  # Use parent's decision!
-│   └─> Else:
-│       └─> action = policy.forward(obs)  # Own decision
+├─> If self._upstream_action:
+│   ├─> set_action(upstream_action)   # DIRECT SET (not compute_action!)
+│   ├─> self._upstream_action = None  # Clear after use
+│   └─> schedule_action_effect(delay=act_delay)
 │
-├─> set_action(action)
-│
-└─> schedule_action_effect(delay=act_delay)
+├─> Elif has policy:
+│   └─> schedule obs request to proxy
 ```
 
 ---
 
-#### **Reward Computation (After State Updates)**
+#### **t=field_tick+act_delay: ACTION_EFFECT(field_1)**
 
 ```
-Agent receives local state -> Compute tick results
+FieldAgent.action_effect_handler()
+│
+├─> apply_action()
+│   └─> Read self.action, update self.state
+│
+└─> schedule_message_delivery(
+        message={"set_state": "local", "body": self.state.to_dict(include_metadata=True)},
+        delay=msg_delay
+    )
+```
 
-message_delivery_handler() - "get_local_state_response"
+---
+
+#### **Reward Computation Cascade**
+
+```
+After state update completion, parent agent initiates reward computation:
+
+Parent.message_delivery_handler() on MSG_SET_STATE_COMPLETION:
 │
-├─> Receive: {"get_local_state_response": {"body": local_state}}
-│   │
-│   DATA INFLOW:
-│   local_state = {"BatteryChargeFeature": np.array([0.503, 100.0])}
+├─> For each subordinate_id:
+│   └─> schedule_message_delivery(
+│           sender=subordinate_id, recipient=proxy,
+│           message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: protocol}
+│       )
 │
-├─> Compute tick result:
-│   tick_result = {
+└─> Also request own local state:
+    └─> schedule_message_delivery(
+            sender=self.agent_id, recipient=proxy,
+            message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: protocol}
+        )
+
+Agent.message_delivery_handler() on "get_local_state_response":
+│
+├─> local_state = response body
+├─> sync_state_from_observed(local_state)  # Sync first!
+│
+├─> tick_result = {
 │       "reward": compute_local_reward(local_state),
 │       "terminated": is_terminated(local_state),
 │       "truncated": is_truncated(local_state),
 │       "info": get_local_info(local_state)
 │   }
-│   │
-│   DATA USAGE:
-│   feature_vec = local_state["BatteryChargeFeature"]
-│   soc = feature_vec[0]  # Extract from numpy array
-│   return soc  # 0.503
 │
 └─> schedule_message_delivery(
-        message={"set_tick_result": "local", "body": tick_result}
+        message={MSG_SET_TICK_RESULT: INFO_TYPE_LOCAL_STATE, MSG_KEY_BODY: tick_result}
     )
+
+# SystemAgent: if not terminated/truncated, schedule next tick
 ```
 
 ---
@@ -1722,12 +1605,12 @@ message_delivery_handler() - "get_local_state_response"
 
 ```python
 proxy.state_cache = {
-    # Per-agent states (State objects!)
+    # Per-agent states (State objects with Dict features!)
     "agents": {
         "battery_1": FieldAgentState(
             owner_id="battery_1",
             owner_level=1,
-            features=[BatteryChargeFeature(soc=0.503, capacity=100.0)]
+            features={"BatteryChargeFeature": BatteryChargeFeature(soc=0.503, capacity=100.0)}
         ),
         "battery_2": FieldAgentState(...),
         "coordinator_1": CoordinatorAgentState(...),
@@ -1736,9 +1619,8 @@ proxy.state_cache = {
 
     # Global state (environment-wide data)
     "global": {
-        "grid_frequency": 60.0,
-        "total_load": 1500.0,
-        ...
+        "agent_states": {agent_id: state_obj, ...},
+        "env_context": {...}  # External data (price, solar, wind profiles)
     }
 }
 
@@ -1748,6 +1630,20 @@ proxy._agent_levels = {
     "battery_2": 1,
     "coordinator_1": 2,
     "system_agent": 3
+}
+
+# Agent upstream tracking:
+proxy._agent_upstreams = {
+    "battery_1": "coordinator_1",
+    "battery_2": "coordinator_1",
+    "coordinator_1": "system_agent",
+    "system_agent": None
+}
+
+# Tick results per agent (event-driven mode):
+proxy._tick_results = {
+    "battery_1": {"reward": 0.503, "terminated": False, "truncated": False, "info": {}},
+    ...
 }
 ```
 
@@ -1764,9 +1660,10 @@ proxy._agent_levels = {
 
 | Method | Retrieval Source | Filtering | Return Type |
 |--------|-----------------|-----------|-------------|
-| `get_local_state(aid, level)` | `state_cache["agents"][aid]` | `state.observed_by()` | `Dict[str, np.ndarray]` |
-| `get_global_states(aid, level)` | `state_cache["agents"]` (all) | `state.observed_by()` | `Dict[str, Dict[str, np.ndarray]]` |
-| `get_observation(aid, level)` | Both local + global | Feature visibility | `Observation` |
+| `get_local_state(aid, protocol, incl_sub_rewards)` | `state_cache["agents"][aid]` | `state.observed_by()` + optional subordinate rewards | `Dict[str, np.ndarray]` |
+| `get_global_states(aid, protocol)` | `state_cache["agents"]` (all except self) | `state.observed_by()` + env_context | `Dict[str, Dict[str, np.ndarray]]` |
+| `get_observation(aid, protocol)` | Both local + global | Feature visibility (no subordinate rewards) | `Observation` |
+| `get_serialized_agent_states()` | `state_cache["agents"]` | `to_dict(include_metadata=True)` | `Dict[aid, Dict]` |
 
 ---
 
@@ -1776,200 +1673,92 @@ proxy._agent_levels = {
 
 ```python
 class Protocol(ABC):
-    """Combines communication and action coordination."""
+    """Two-layer design: communication + action coordination."""
 
-    @abstractmethod
+    def __init__(self, communication_protocol, action_protocol):
+        self.communication_protocol = communication_protocol or NoCommunication()
+        self.action_protocol = action_protocol or NoActionCoordination()
+
     def coordinate(
         self,
-        coordinator_state: State,
-        coordinator_action: Optional[Action],
-        info_for_subordinates: Dict[str, Observation],
-        context: Dict
-    ) -> Tuple[Dict[str, Dict], Dict[str, Action]]:
+        coordinator_state: Any,
+        coordinator_action: Optional[Any] = None,
+        info_for_subordinates: Optional[Dict[AgentID, Any]] = None,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Tuple[Dict[str, Dict], Dict[str, Any]]:
         """
         Returns:
             messages: Dict of coordination messages per subordinate
             actions: Dict of actions per subordinate
         """
-        pass
+        messages = self.communication_protocol.compute_coordination_messages(
+            sender_state=coordinator_state,
+            receiver_infos=info_for_subordinates,
+            context=context
+        )
+        actions = self.action_protocol.compute_action_coordination(
+            coordinator_action=coordinator_action,
+            info_for_subordinates=info_for_subordinates,
+            coordination_messages=messages,
+            context=context
+        )
+        return messages, actions
 ```
 
 ### **Protocol Implementations**
 
 #### **1. NoProtocol (Default)**
-- No coordination messages
-- No action decomposition
+- Communication: NoCommunication
+- Action: NoActionCoordination
 - Each agent acts independently
 
 #### **2. VerticalProtocol (Hierarchical)**
-- Parent coordinates subordinates
-- Uses feature-level visibility rules
-- Action decomposition from parent to children
+- Communication: NoCommunication (default)
+- Action: VectorDecompositionActionProtocol (splits joint action vector)
+- Parent coordinates subordinates via action decomposition
 
 ```python
 class VerticalProtocol(Protocol):
-    def coordinate(self, coordinator_state, coordinator_action, info, context):
-        # Compute subordinate-specific messages
-        messages = {}
-        for sub_id, sub_obs in info.items():
-            messages[sub_id] = self._compute_message(coordinator_state, sub_obs)
+    def __init__(self, communication_protocol=None, action_protocol=None):
+        super().__init__(
+            communication_protocol=communication_protocol or NoCommunication(),
+            action_protocol=action_protocol or VectorDecompositionActionProtocol()
+        )
 
-        # Decompose coordinator action into subordinate actions
-        actions = {}
-        for sub_id in info.keys():
-            actions[sub_id] = self._decompose_action(coordinator_action, sub_id)
-
-        return messages, actions
+    def register_subordinates(self, subordinates):
+        self.action_protocol.register_subordinates(subordinates)
 ```
 
-#### **3. HorizontalProtocol (Peer Coordination)**
-- Peer-to-peer communication
-- Lateral action coordination
-- Consensus-based decisions
+**VectorDecompositionActionProtocol:**
+- If coordinator action is a dict: use directly
+- If coordinator action is a vector: split by subordinate action dimensions
+- If coordinator action is None: return None for all subordinates
 
 ### **Protocol Usage in Execution**
 
 ```
-CoordinatorAgent.act(actions, proxy)
+Agent.compute_action(obs, scheduler) [event-driven mode]
 │
-├─> Get observation and local state
-│   obs = proxy.get_observation(self.agent_id, self.level)
-│   local_state = proxy.get_local_state(self.agent_id, self.level)
+├─> action = policy.forward(obs) or upstream_action
 │
-├─> Get subordinate info
-│   info = {sub_id: proxy.get_observation(sub_id, sub_level) for sub_id in subs}
+├─> If _should_send_subordinate_actions():
+│   └─> self.coordinate(obs, action)
+│       │
+│       ├─> messages, sub_actions = protocol.coordinate(
+│       │       coordinator_state=self.state,
+│       │       coordinator_action=action,
+│       │       info_for_subordinates={sub_id: obs for sub_id in subordinates},
+│       │   )
+│       │
+│       ├─> Send actions to subordinates via broker:
+│       │   for sub_id, sub_action in sub_actions.items():
+│       │       self.send_subordinate_action(sub_id, sub_action)
+│       │
+│       └─> Send coordination messages (not used in default protocols):
+│           for sub_id, message in messages.items():
+│               self.send_info(broker, sub_id, message)
 │
-├─> Execute protocol
-│   messages, sub_actions = self.protocol.coordinate(
-│       coordinator_state=self.state,
-│       coordinator_action=action,
-│       info_for_subordinates=info,
-│       context={"timestamp": self._timestep}
-│   )
-│
-├─> Send coordination messages
-│   for sub_id, message in messages.items():
-│       self.send_info(broker, sub_id, message)
-│
-└─> Send/pass subordinate actions
-    for sub_id, sub_action in sub_actions.items():
-        self.send_subordinate_action(sub_id, sub_action)
-```
-
----
-
-## **Complete Data Flow Diagrams**
-
-### **CTDE Training Step - Data Transformations**
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ RL Algorithm Provides Actions                                   │
-├─────────────────────────────────────────────────────────────────┤
-│ actions = {                                                     │
-│     "battery_1": Action(c=[0.3]),  <- Action objects            │
-│     "battery_2": Action(c=[-0.2])                               │
-│ }                                                               │
-└─────────────────────────────────────────────────────────────────┘
-                            ↓ env.step(actions)
-┌─────────────────────────────────────────────────────────────────┐
-│ PHASE 1: Action Application                                     │
-├─────────────────────────────────────────────────────────────────┤
-│ battery_1.set_action(Action(c=[0.3]))                           │
-│     ↓ set_values()                                              │
-│ self.action.c = [0.3]  <- Action object updated                 │
-│                                                                 │
-│ battery_1.apply_action()                                        │
-│     ↓ set_state()                                               │
-│ self.state.features[0].soc = 0.503  <- State object updated     │
-│                                                                 │
-│ proxy.set_local_state("battery_1", state)                       │
-│     ↓ Direct storage                                            │
-│ state_cache["agents"]["battery_1"] = state  <- State object!    │
-└─────────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ PHASE 2: Simulation                                             │
-├─────────────────────────────────────────────────────────────────┤
-│ global_state = proxy.get_global_states("system_agent", 3)       │
-│     ↓ observed_by() filtering                                   │
-│ {filtered states as feature vectors}                            │
-│                                                                 │
-│ env_state = global_state_to_env_state(global_state)             │
-│ updated_env_state = run_simulation(env_state)                   │
-│ updated_global = env_state_to_global_state(updated_env_state)   │
-│                                                                 │
-│ proxy.set_global_state(updated_global)                          │
-│     ↓ Update state objects                                      │
-│ state_cache updated with simulation results                     │
-└─────────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ PHASE 3: Observation Collection                                 │
-├─────────────────────────────────────────────────────────────────┤
-│ obs = proxy.get_observation("battery_1", level=1)               │
-│     ↓ observed_by() filtering                                   │
-│ local = {"BatteryChargeFeature": np.array([0.503, 100.0])}      │
-│ global = {filtered states from other agents}                    │
-│     ↓ Wrapping                                                  │
-│ Observation(local=..., global_info=...)  <- Object              │
-└─────────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ PHASE 4: Reward Computation                                     │
-├─────────────────────────────────────────────────────────────────┤
-│ local_state = proxy.get_local_state("battery_1", level=1)       │
-│     ↓ observed_by() filtering                                   │
-│ {"BatteryChargeFeature": np.array([0.503, 100.0])}              │
-│                                                                 │
-│ compute_local_reward(local_state)                               │
-│     ↓ Array access                                              │
-│ soc = local_state["BatteryChargeFeature"][0]                    │
-│ return 0.503                                                    │
-└─────────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ PHASE 5: Vectorization for RL                                   │
-├─────────────────────────────────────────────────────────────────┤
-│ obs_dict = {"battery_1": Observation(...)}                      │
-│     ↓ .vector()                                                 │
-│ obs_vec = {"battery_1": np.array([0.503, 100.0, ...])}          │
-│     ↓ Return to RL                                              │
-│ RL algorithm receives numpy arrays!                             │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-### **Event-Driven Mode - Action Passing Timeline**
-
-```
-t=0.0: AGENT_TICK(system_agent)
-├─> Compute system action via policy
-├─> Protocol.coordinate() -> subordinate actions
-├─> send_subordinate_action(coord_1, action_for_coord)
-│   └─> broker.publish(action_channel)
-└─> schedule_agent_tick(coord_1)
-
-t=coord_tick: AGENT_TICK(coordinator_1)
-├─> receive_upstream_actions() from broker
-│   └─> [Action from system_agent]
-├─> Use upstream action (priority over policy!)
-├─> Protocol.coordinate() -> field actions
-├─> send_subordinate_action(field_1, action_for_field)
-│   └─> broker.publish(action_channel)
-└─> schedule_agent_tick(field_1)
-
-t=field_tick: AGENT_TICK(field_1)
-├─> receive_upstream_actions() from broker
-│   └─> [Action from coordinator_1]
-├─> Use upstream action (priority over policy!)
-├─> set_action(upstream_action)
-└─> schedule_action_effect(delay=act_delay)
-
-t=field_tick+act_delay: ACTION_EFFECT(field_1)
-├─> apply_action() -> Update self.state
-└─> schedule_message_delivery to proxy
+└─> set_action(action)
 ```
 
 ---
@@ -1981,7 +1770,7 @@ t=field_tick+act_delay: ACTION_EFFECT(field_1)
 **Agent Layer:**
 - Works with rich objects (State, Action, Observation)
 - Has methods: `.vector()`, `.set_values()`, `.update()`
-- Type-safe with IDE support
+- State.features is Dict[str, FeatureProvider] for O(1) access
 
 **Proxy Layer:**
 - Stores State objects directly
@@ -1991,7 +1780,7 @@ t=field_tick+act_delay: ACTION_EFFECT(field_1)
 **Boundary:**
 - **Agent -> Proxy (CTDE)**: Pass State object directly
 - **Agent -> Proxy (Event-Driven)**: Call `.to_dict()` -> Message -> `from_dict()`
-- **Proxy -> Agent**: Return filtered feature vectors
+- **Proxy -> Agent**: Return filtered feature vectors + optional subordinate rewards
 
 ---
 
@@ -2004,9 +1793,10 @@ t=field_tick+act_delay: ACTION_EFFECT(field_1)
 | Agent -> Message | Observation object | `.to_dict()` |
 | Message -> Agent | Observation dict | `Observation.from_dict()` |
 | Proxy -> Agent | State object | `state.observed_by()` -> filtered vectors |
+| Proxy -> Agent (obs response) | Observation + local_state | Bundled together |
 | Observation -> Policy | Observation object | `.__array__()` auto-converts |
-| Agent -> Message (Action) | Action object | `action.to_dict()` or direct |
-| Message -> Agent (Action) | Action dict | `Action.from_dict()` or direct |
+| Agent -> Broker (Action) | Action object | Direct (in payload dict) |
+| Broker -> Agent (Action) | Action from payload | `msg.payload["action"]` |
 
 ---
 
@@ -2017,44 +1807,29 @@ t=field_tick+act_delay: ACTION_EFFECT(field_1)
 - Pass State objects to proxy in CTDE mode
 - Convert State -> Dict only when sending messages (with `include_metadata=True`)
 - Use `local_state` parameter (numpy array dict) in reward/info methods
-- Access features as vectors: `local_state["FeatureName"][0]` for first element
+- Access features via Dict key: `state.features["FeatureName"]`
+- Access feature vector elements: `local_state["FeatureName"][0]`
 - Use upstream actions when available (priority over policy)
+- Call `sync_state_from_observed()` after receiving state from proxy
 
 **DON'T:**
 - Send State objects in messages (must serialize to dict first)
-- Access dict fields like `local_state["Feature"]["soc"]` (it's now a numpy array!)
+- Access features by list index: `state.features[0]` (it's a Dict!)
+- Access dict fields like `local_state["Feature"]["soc"]` (it's a numpy array!)
 - Access `self.state` in `compute_local_reward()` (use filtered parameter)
 - Ignore upstream actions (they have priority!)
+- Skip state syncing after simulation (data will be stale)
 
 ---
 
-### **4. Action Priority**
-
-```python
-def determine_action(self):
-    # Priority 1: Upstream action from parent
-    upstream_actions = self.receive_upstream_actions()
-    if upstream_actions:
-        return upstream_actions[0]
-
-    # Priority 2: Policy-computed action
-    if self.policy:
-        obs = self.proxy.get_observation(self.agent_id, self.level)
-        return self.policy.forward(observation=obs)
-
-    # Priority 3: No action
-    return None
-```
-
----
-
-### **5. Type Consistency Summary**
+### **4. Type Consistency Summary**
 
 - **State**: Object (agent) -> **Object (proxy)** -> **Filtered vectors (via observed_by())**
+- **State.features**: Dict[str, FeatureProvider] (keyed by feature_name, O(1) lookup)
 - **Action**: Object (throughout, passed via broker in event-driven mode)
 - **Observation**: Object -> Dict (messages) -> Object (reconstruction)
-- **Feature**: Object (in State) -> Stays in State object -> Vector (in observations)
-- **Messages**: Always serialized (dicts)
+- **Feature**: Object (in State Dict) -> Stays in State object -> Vector (in observations)
+- **Messages**: Always serialized (dicts with constants from heron/agents/constants.py)
 
 ---
 
@@ -2064,52 +1839,57 @@ def determine_action(self):
 
 ```
 === INITIALIZATION ===
-agent.init_state():
-    CREATE: FieldAgentState(owner_id="battery_1", owner_level=1)
-    CREATE: BatteryChargeFeature(soc=0.5, capacity=100.0)
-    STORE: self.state.features = [feature]
-    TYPE: State object
+agent.__init__(features=[BatteryChargeFeature(soc=0.5, capacity=100.0)]):
+    CREATE: FieldAgentState(
+        owner_id="battery_1", owner_level=1,
+        features={"BatteryChargeFeature": BatteryChargeFeature(soc=0.5, capacity=100.0)}
+    )
+    TYPE: State object with Dict features
 
-proxy.set_local_state("battery_1", state):
-    STORE: state_cache["agents"]["battery_1"] = state
+proxy._register_agent(agent):
+    STORE: state_cache["agents"]["battery_1"] = agent.state
     TYPE: State object (direct reference!)
 
 === STEP EXECUTION ===
 env.step({"battery_1": Action(c=[0.3])}):
 
-1. Action Application:
+1. State Sync (in execute):
+    local_state = proxy.get_local_state("battery_1", protocol)
+    sync_state_from_observed(local_state)
+    ACTION: Reconcile internal state with proxy
+
+2. Action Application:
     INPUT: Action(c=[0.3])
     TYPE: Action object
 
     set_action(action):
         PROCESS: self.action.set_values(action)
         UPDATE: self.action.c = [0.3]
-        TYPE: Action object (internal)
 
     apply_action():
         READ: self.action.c[0] = 0.3
-        READ: self.state.features[0].soc = 0.5
+        READ: self.state.features["BatteryChargeFeature"].soc = 0.5
         COMPUTE: new_soc = 0.5 + 0.3*0.01 = 0.503
-        UPDATE: self.state.features[0].soc = 0.503
-        TYPE: State object (modified)
+        UPDATE: self.state.features["BatteryChargeFeature"].soc = 0.503
 
     proxy.set_local_state("battery_1", state):
         STORE: state_cache["agents"]["battery_1"] = state
         TYPE: State object (same reference, updated!)
 
-2. Observation Collection:
-    proxy.get_observation("battery_1", level=1):
+3. Observation Collection:
+    proxy.get_observation("battery_1", protocol):
         FILTER: state.observed_by("battery_1", 1)
         CONSTRUCT: Observation(
             local={"BatteryChargeFeature": np.array([0.503, 100.0])},
-            global_info={...filtered states...}
+            global_info={...filtered states... + env_context}
         )
         TYPE: Observation object
 
-3. Reward Computation:
-    proxy.get_local_state("battery_1", level=1):
+4. Reward Computation:
+    proxy.get_local_state("battery_1", protocol):
         FILTER: state.observed_by("battery_1", 1)
-        RETURN: {"BatteryChargeFeature": np.array([0.503, 100.0])}
+        RETURN: {"BatteryChargeFeature": np.array([0.503, 100.0]),
+                 "subordinate_rewards": {...} if parent}
         TYPE: Dict[str, np.ndarray]
 
     compute_local_reward(local_state):
@@ -2117,7 +1897,7 @@ env.step({"battery_1": Action(c=[0.3])}):
         RETURN: 0.503
         TYPE: float
 
-4. Vectorization for RL:
+5. Vectorization for RL:
     proxy.get_step_results():
         INPUT: obs = {"battery_1": Observation(...)}
         TRANSFORM: observation.vector() for each
@@ -2136,41 +1916,39 @@ env.step({"battery_1": Action(c=[0.3])}):
 
 ## **Critical Takeaways**
 
-### **1. Proxy Storage is State Objects**
+### **1. State.features is Dict[str, FeatureProvider]**
+- Keyed by feature_name for O(1) lookup
+- Converted from List at init_state: `{f.feature_name: f for f in features}`
+- Access pattern: `state.features["BatteryChargeFeature"].soc`
+
+### **2. Proxy Storage is State Objects**
 - State objects stored directly in `state_cache["agents"]`
 - Enables feature-level visibility filtering via `state.observed_by()`
 - Maintains full type information (FeatureProvider instances)
 - Serialization needed only for message passing
 
-### **2. Action Passing is Hierarchical**
-- Parent agents can send actions to subordinates via broker
-- Upstream actions have priority over policy-computed actions
-- Enables centralized control strategies
-- Works in both CTDE and event-driven modes
+### **3. Observation Response Bundles Obs + Local State**
+- Proxy sends both obs and local_state when agent requests observation
+- Enables state syncing via `sync_state_from_observed()`
+- Design principle: "agent asks for obs, proxy gives both"
 
-### **3. Visibility Filtering is Active**
-- `state.observed_by()` filters features based on visibility rules
-- Agents only see features they're authorized to see
-- Returns numpy arrays (vectors), not dicts
-- Enforced at both local and global state retrieval
+### **4. Action Passing Has Different Paths**
+- FieldAgent: direct `set_action(upstream_action)` (no compute_action)
+- CoordinatorAgent: via `compute_action(upstream_action, scheduler)` for protocol coordination
+- Upstream actions always have priority over policy
 
-### **4. Message Passing Requires Serialization**
-- Observation: `.to_dict()` -> send -> `from_dict()` -> reconstruct
-- State: `.to_dict(include_metadata=True)` -> send -> `from_dict()` -> reconstruct
-- Action: Can be passed directly in CTDE, serialized in event-driven
+### **5. Reward Computation Is Parent-Initiated (Event-Driven)**
+- State completion triggers cascade from parent agent
+- Parent requests local states for all subordinates
+- Each agent computes own tick_result (reward, terminated, truncated, info)
 
-### **5. Type Consistency**
+### **6. State Syncing via sync_state_from_observed()**
+- Reconciles agent internal state with proxy state
+- Handles both Dict and numpy array formats
+- Called in CTDE (execute) and event-driven (message handler)
+
+### **7. Type Consistency**
 - **State**: Object (agent) -> Object (proxy) -> Filtered vectors (retrieval)
 - **Action**: Object (throughout, no proxy storage)
 - **Observation**: Object -> Dict (messages) -> Object (reconstruction)
-- **Feature**: Object (in State) -> Vector (in observations)
-
----
-
-This documentation reflects the **complete version** of the HERON framework with:
-- Feature visibility enforcement
-- State object storage in proxy
-- Hierarchical action passing
-- Protocol-based coordination
-- Message broker integration
-- Both CTDE and event-driven execution modes
+- **Feature**: Object (in State Dict) -> Vector (in observations)

@@ -32,7 +32,7 @@ class CoordinatorAgent(Agent):
     def __init__(
         self,
         agent_id: Optional[AgentID] = None,
-        features: List[FeatureProvider] = [],
+        features: Optional[List[FeatureProvider]] = None,
         # hierarchy params
         upstream_id: Optional[AgentID] = None,
         subordinates: Optional[Dict[AgentID, "Agent"]] = None,

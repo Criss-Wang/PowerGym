@@ -112,13 +112,6 @@ class VectorDecompositionActionProtocol(ActionProtocol):
                 else:
                     actions[sub_id] = None
 
-        # Debug output when action dimensions are provided
-        if self._subordinate_action_dims:
-            action_str = np.array2string(action_vector, precision=4, suppress_small=True)
-            decomp_str = [(sid, np.array2string(a, precision=4, suppress_small=True) if a is not None else "None")
-                         for sid, a in actions.items()]
-            print(f"[VectorDecomposition] {action_str} -> {decomp_str}")
-
         return actions
 
 

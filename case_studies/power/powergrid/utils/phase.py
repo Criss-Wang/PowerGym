@@ -115,8 +115,8 @@ class PhaseSpec:
 def check_phase_model_consistency(
     model: PhaseModel,
     spec: PhaseSpec,
-) -> PhaseSpec:
-    """Check and return a PhaseSpec consistent with the model."""
+) -> None:
+    """Validate that a PhaseSpec is consistent with the model."""
     if model is None or spec is None:
         raise ValueError("phase_model and phase_spec cannot be None")
 

@@ -1,7 +1,6 @@
 
 
 from abc import ABC, abstractmethod
-from builtins import float
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Callable
 
 import gymnasium as gym
@@ -50,7 +49,7 @@ class Agent(ABC):
         self,
         agent_id: AgentID,
         level: int = 1,
-        features: List[FeatureProvider] = [],
+        features: Optional[List[FeatureProvider]] = None,
         observation_space: Optional[gym.Space] = None,
         action_space: Optional[gym.Space] = None,
         # hierarchy params
@@ -70,6 +69,7 @@ class Agent(ABC):
         self.action_space = action_space
         self.policy = policy
         self.protocol = protocol
+        features = features or []
         self.action = self.init_action(features=features)
         self.state = self.init_state(features=features)
 
@@ -120,7 +120,7 @@ class Agent(ABC):
 
     # ============================================
     # Core Lifecycle Methods (Both Modes)
-    # - reset: reseting fields and states, potentially returning current states
+    # - reset: resetting fields and states, potentially returning current states
     # - execute: Synchronous Execution (for Training phase)
     # - tick: Event-Driven Execution (for Testing phase)
     # ============================================

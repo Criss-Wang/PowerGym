@@ -1,5 +1,5 @@
 from dataclasses import asdict, dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -168,7 +168,7 @@ class InverterBasedSource(FeatureProvider):
         t = (V_pu - v1) / (v2 - v1)
         return (1.0 - t) * q1 + t * q2
 
-    def _clip_q(self, q: float) -> (float, float):
+    def _clip_q(self, q: float) -> Tuple[float, float]:
         lo = -np.inf if self.q_min_MVAr is None else float(self.q_min_MVAr)
         hi = +np.inf if self.q_max_MVAr is None else float(self.q_max_MVAr)
         q0 = q

@@ -773,8 +773,8 @@ def run_event_driven(
             super().__init__(**kwargs)
             self.event_logger = event_logger
 
-        def parser_event(self, event):
-            result = super().parser_event(event)
+        def parse_event(self, event):
+            result = super().parse_event(event)
 
             # Log to our custom logger
             event_type = event.event_type.name.lower() if hasattr(event.event_type, 'name') else str(event.event_type)

@@ -34,7 +34,7 @@ class FieldAgent(Agent):
     def __init__(
         self,
         agent_id: AgentID,
-        features: List[FeatureProvider] = [],
+        features: Optional[List[FeatureProvider]] = None,
         # hierarchy params
         upstream_id: Optional[AgentID] = None,
         env_id: Optional[str] = None,
@@ -198,7 +198,7 @@ class FieldAgent(Agent):
                 delay=self._tick_config.msg_delay,
             )
         else:
-            print(f"{self} doesn't act iself, becase there's no action policy")
+            print(f"{self} doesn't act itself, because there's no action policy")
     
     # ============================================
     # Custom Handlers for Event-Driven Execution
@@ -282,164 +282,4 @@ class FieldAgent(Agent):
     # ============================================
     def __repr__(self) -> str:
         return f"FieldAgent(id={self.agent_id}, policy={self.policy}, protocol={self.protocol})"
-
-
-    # def act(self, observation: Observation, upstream_action: Any = None) -> None:
-    #     """Compute and apply action. [Training Only - Direct Call]
-
-    #     Note: In Testing (Option B), tick() computes actions directly via
-    #     _handle_coordinator_action()/_handle_local_action() instead
-    #     of calling this method.
-
-    #     Routes to coordinator-directed or self-directed action computation based on
-    #     whether upstream_action is provided.
-
-    #     Args:
-    #         observation: Structured observation
-    #         upstream_action: Optional action from coordinator (coordinator-directed)
-    #     """
-    #     if upstream_action is not None:
-    #         # Coordinator-directed: use the action provided by upstream coordinator
-    #         action = self._handle_coordinator_action(upstream_action, observation)
-    #     else:
-    #         # Self-directed: compute action using local policy
-    #         action = self._handle_local_action(observation)
-
-    #     self.action.set_values(action)
-
-    #     # Phase 1: Update action-dependent features immediately after action is set
-    #     self._update_action_features(action, observation)
-
-    # ============================================
-    # Action Handling (Both Modes)
-    # ============================================
-
-    # def _handle_coordinator_action(
-    #     self,
-    #     upstream_action: Any,
-    #     observation: Observation
-    # ) -> Action | None:
-    #     """Handle coordinator-directed action. [Both Modes]
-
-    #     Args:
-    #         upstream_action: Action assigned by coordinator
-    #         observation: Current observation (unused in coordinator-directed mode)
-
-    #     Returns:
-    #         Action to execute (passthrough of upstream_action)
-    #     """
-    #     return upstream_action
-
-    # def _handle_local_action(self, observation: Observation) -> Action | None:
-    #     """Handle self-directed action computation using local policy. [Both Modes]
-
-    #     Args:
-    #         observation: Current observation including messages
-
-    #     Returns:
-    #         Action computed by local policy or None if no action
-
-    #     Raises:
-    #         ValueError: If no policy is defined for self-directed mode
-    #     """
-    #     if self.policy is None:
-    #         raise ValueError(
-    #             "No policy defined for FieldAgent. "
-    #             "Agent requires either upstream_action (coordinator-directed) or policy (self-directed)."
-    #         )
-
-    #     action = self.policy.forward(observation)
-    #     return action
-
-    # ============================================
-    # Event-Driven Execution (Option B - Testing)
-    # ============================================
-
-    # def tick(
-    #     self,
-    #     scheduler: EventScheduler,
-    #     current_time: float,
-    #     global_state: Optional[Dict[str, Any]] = None,
-    #     proxy: Optional[Agent] = None,
-    # ) -> None:
-    #     """Execute one tick in event-driven mode. [Testing Only]
-
-    #     Workflow:
-    #     1. Check message broker for upstream action from coordinator
-    #     2. Get observation (potentially delayed via ProxyAgent)
-    #     3. Send observation to upstream coordinator (if has upstream)
-    #     4. Compute action using upstream action or own policy
-    #     5. Schedule ACTION_EFFECT with act_delay
-
-    #     Args:
-    #         scheduler: EventScheduler for scheduling future events
-    #         current_time: Current simulation time
-    #         global_state: Optional global state for observation
-    #         proxy: Optional ProxyAgent for delayed observations
-    #     """
-    #     self._timestep = current_time
-
-    #     # Check message broker for upstream action from coordinator
-    #     upstream_action = None
-    #     actions = self.receive_action_messages()
-    #     if actions:
-    #         upstream_action = actions[-1]  # Use most recent action
-
-    #     # Get observation (with delay if proxy provided and obs_delay > 0)
-    #     if proxy is not None and self._tick_config.obs_delay > 0:
-    #         # Use proxy for delayed observations
-    #         delayed_time = current_time - self._tick_config.obs_delay
-    #         proxy_state = self.request_state_from_proxy(proxy, at_time=delayed_time)
-    #         observation = self._build_observation_from_proxy(proxy_state)
-    #     else:
-    #         # Direct observation (proxy used for neighbor states if available)
-    #         observation = self.observe(global_state, proxy=proxy)
-    #     self._last_observation = observation
-
-    #     # Send observation to upstream coordinator
-    #     if self.upstream_id is not None:
-    #         self.send_observation_to_upstream(observation, scheduler=scheduler)
-
-    #     # Compute action (coordinator-directed if upstream provided, else self-directed)
-    #     if upstream_action is not None:
-    #         action = self._handle_coordinator_action(upstream_action, observation)
-    #     elif self.policy is not None:
-    #         action = self._handle_local_action(observation)
-    #     else:
-    #         # No action to take - agent is passive
-    #         return
-
-    #     self.action.set_values(action)
-
-    #     # Phase 1: Update action-dependent features immediately after action is set
-    #     self._update_action_features(action, observation)
-
-    #     # Schedule delayed action effect
-    #     if self._tick_config.act_delay > 0:
-    #         scheduler.schedule_action_effect(
-    #             agent_id=self.agent_id,
-    #             action=self.action.vector(),
-    #             delay=self._tick_config.act_delay,
-    #         )
-
-    # def _build_observation_from_proxy(
-    #     self, proxy_state: Dict[str, Any]
-    # ) -> Observation:
-    #     """Build observation from proxy state. [Testing Only]
-
-    #     Override in subclasses for custom observation building from proxy state.
-
-    #     Args:
-    #         proxy_state: Filtered state dict from ProxyAgent
-
-    #     Returns:
-    #         Observation built from proxy state
-    #     """
-    #     return Observation(
-    #         timestamp=self._timestep,
-    #         local={
-    #             OBS_KEY_STATE: self.state.vector(),
-    #             OBS_KEY_PROXY_STATE: proxy_state,
-    #         }
-    #     )
 

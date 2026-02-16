@@ -36,7 +36,7 @@ class SystemAgent(Agent):
     def __init__(
         self,
         agent_id: Optional[AgentID] = None,
-        features: List[FeatureProvider] = [],
+        features: Optional[List[FeatureProvider]] = None,
         # hierarchy params
         subordinates: Optional[Dict[AgentID, "Agent"]] = None,
         env_id: Optional[str] = None,
@@ -167,7 +167,7 @@ class SystemAgent(Agent):
                 delay=self._tick_config.msg_delay,
             )
         else:
-            print(f"{self} doesn't act iself, becase there's no action policy")
+            print(f"{self} doesn't act itself, because there's no action policy")
         
         # schedule simulation
         scheduler.schedule_simulation(self.agent_id, self._simulation_wait_interval)

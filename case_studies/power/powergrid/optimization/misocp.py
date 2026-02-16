@@ -92,7 +92,7 @@ vmax = 1.05
 vmin = 0.95
 
 time_steps = 24
-cost, schedues = [], {}
+cost, schedules = [], {}
 es_0 = 0.5
 for d in range(366):
     model = Model("IEEE34")
@@ -261,17 +261,7 @@ for d in range(366):
             PG[t,bus2id['Bus 826']] * wind_scale[d,t] + \
             PG[t,bus2id['Bus 838']] * wind_scale[d,t]
         p_renew.append(p)
-    # for t in range(time_steps):
-    #     print(p_grid[t]+p_dg1[t]+p_dg2[t]+p_renew[t]+p_s[t], np.sum(pd * load_scale[d,t]))
-    #     print(q_grid[t]+q_dg1[t]+q_dg2[t]-cap1[t]*0.12-cap2[t]*0.12, np.sum(qd * load_scale[d,t]))
-    # dg1_cost, dg2_cost, grid_cost = 0, 0, 0
-    # for t in range(time_steps):
-    #     dg1_cost += a1 * (p_dg1[t]**2) + b1 * p_dg1[t] + c1
-    #     dg2_cost += a2 * (p_dg2[t]**2) + b2 * p_dg2[t] + c2
-    #     grid_cost += price[d,t] * p_grid[t]
-    # print(dg1_cost+dg2_cost+grid_cost)
-
-    schedues[d] = {
+    schedules[d] = {
         'grid_P': p_grid, 
         'grid_Q': q_grid, 
         'DG1_P': p_dg1, 
@@ -287,19 +277,5 @@ for d in range(366):
         'voltage': v_pu, 
         'current': i_pu, 
     }
-
-
-import pickle, os
-save_path = '/home/lihepeng/Documents/Github/learning2opDN/results/test/misocp.pkl'
-with open(save_path, 'wb') as f:
-    pickle.dump({'cost': cost, 'schedues': schedues}, f, protocol=pickle.HIGHEST_PROTOCOL)
-print('done')
-
-
-
-import pickle, os
-save_path = '/home/lihepeng/Documents/Github/learning2opDN/results/test/misocp.pkl'
-with open(save_path, 'rb') as f:
-    data = pickle.load(f)
 
 print('done')
