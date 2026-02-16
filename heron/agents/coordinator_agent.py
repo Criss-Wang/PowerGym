@@ -32,7 +32,7 @@ class CoordinatorAgent(Agent):
     def __init__(
         self,
         agent_id: Optional[AgentID] = None,
-        features: List[FeatureProvider] = [],
+        features: Optional[List[FeatureProvider]] = None,
         # hierarchy params
         upstream_id: Optional[AgentID] = None,
         subordinates: Optional[Dict[AgentID, "Agent"]] = None,
@@ -45,9 +45,6 @@ class CoordinatorAgent(Agent):
         protocol: Optional[Protocol] = None
     ):
 
-        self.protocol = protocol
-        self.policy = policy
-       
         super().__init__(
             agent_id=agent_id,
             level=COORDINATOR_LEVEL,
@@ -56,6 +53,8 @@ class CoordinatorAgent(Agent):
             subordinates=subordinates,
             env_id=env_id,
             tick_config=tick_config or TickConfig.deterministic(tick_interval=DEFAULT_COORDINATOR_TICK_INTERVAL),
+            policy=policy,
+            protocol=protocol,
         )
 
     def init_state(self, features: List[FeatureProvider] = []) -> State:
@@ -207,11 +206,6 @@ class CoordinatorAgent(Agent):
     def field_agents(self) -> Dict[AgentID, FieldAgent]:
         """Alias for subordinates - more descriptive for CoordinatorAgent context."""
         return self.subordinates
-
-    @field_agents.setter
-    def field_agents(self, value: Dict[AgentID, FieldAgent]) -> None:
-        """Set field_agents (subordinates)."""
-        self.subordinates = value
 
     def __repr__(self) -> str:
         num_fields = len(self.subordinates)

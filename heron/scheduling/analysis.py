@@ -78,7 +78,7 @@ class EventAnalyzer:
         # Track reward history per agent: {agent_id: [(timestamp, reward), ...]}
         self.reward_history: Dict[str, List[tuple]] = {}
 
-    def parser_event(self, event: Event) -> EventAnalysis:
+    def parse_event(self, event: Event) -> EventAnalysis:
         """Parse and analyze a single event.
 
         Extracts information about observations, states, and action results
@@ -323,7 +323,7 @@ class EpisodeResult:
         """Number of state update events."""
         return sum(
             1 for a in self.event_analyses
-            if a.message_type == "set_state_response"
+            if a.message_type == "set_state_completion"
         )
 
     @property

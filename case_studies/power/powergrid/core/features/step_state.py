@@ -6,10 +6,9 @@ from typing import List, Optional
 import numpy as np
 
 from heron.core.feature import FeatureProvider
-from heron.utils.registry import provider
 from powergrid.utils.phase import PhaseModel, PhaseSpec
 
-@provider()
+
 @dataclass(slots=True)
 class StepState(FeatureProvider):
     """Provider for discrete step state (e.g., shunt capacitor banks)."""

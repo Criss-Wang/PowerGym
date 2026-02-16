@@ -37,7 +37,7 @@ class SolarFeature(FeatureProvider):
 
 ```python
 from powergrid.agents.device_agent import DeviceAgent
-from powergrid.core.state import DeviceState
+from heron.core.state import FieldAgentState
 from heron.core.action import Action
 import numpy as np
 
@@ -50,7 +50,7 @@ class SolarPanel(DeviceAgent):
         super().__init__(agent_id, config)
 
         # Create state with custom features
-        self.state = DeviceState()
+        self.state = FieldAgentState()
         self.solar_feature = SolarFeature(
             panel_area=config.get("panel_area", 100.0),
             efficiency=config.get("efficiency", 0.2),

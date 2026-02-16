@@ -6,10 +6,8 @@ import numpy as np
 from heron.core.feature import FeatureProvider
 from powergrid.utils.phase import PhaseModel, PhaseSpec
 from heron.utils.array_utils import cat_f32
-from heron.utils.registry import provider
 
 
-@provider()
 @dataclass(slots=True)
 class PowerLimits(FeatureProvider):
     """

@@ -1,470 +1,329 @@
-# HERON: NeurIPS 2025 D&B Submission Plan
+# HERON: NeurIPS 2026 D&B Submission Plan
 
-## Strategic Positioning
-
-**Track:** NeurIPS 2025 Datasets & Benchmarks
-**Category:** Framework/Infrastructure Paper (Path A)
-**Positioning:** Principled framework with demonstrated utility
-**Target Score:** 7+/10 (Clear Accept)
+**Track:** NeurIPS 2026 Datasets & Benchmarks (9 pages + unlimited appendix, single-blind)
+**Category:** Framework/Infrastructure Paper
+**Deadline:** TBD (typically late May)
 
 ---
 
-## Core Framing
+## 1. One-Sentence Pitch
 
-> "HERON is a principled framework that shifts from environment-centric synchronous stepping to agent-paced event-driven execution, enabling simulation of realistic CPS timing constraints while providing infrastructure for studying partial observability and information asymmetry in multi-agent systems."
-
----
-
-## Differentiation from PettingZoo
-
-**The core reviewer objection:** "Is this PettingZoo + engineering effort, or a genuinely new abstraction?"
-
-**Our answer:** PettingZoo standardizes the **environment API** (reset, step, observe, act). HERON standardizes **what happens inside the environment**:
-
-| Aspect | PettingZoo | HERON |
-|--------|------------|-------|
-| Abstraction level | Env ↔ Algorithm interface | Internal env structure |
-| Execution model | Fixed (synchronous step) | Configurable (sync or event-driven) |
-| Information structure | Black box (env decides) | First-class variable (visibility levels) |
-| Coordination | Not addressed | Composable protocols |
-| Agent model | Stateless policy function | Stateful entity with timing |
-
-**Key argument:** Event-driven execution CANNOT be achieved by wrapping—it requires changing the fundamental step loop. This is architectural, not engineering.
-
-**Required evidence:** Head-to-head implementation comparison in Appendix:
-
-| Task | PettingZoo + Wrappers | HERON | Reduction |
-|------|----------------------|-------|-----------|
-| Visibility ablation (4 levels) | 4 × 80 = 320 lines | 4 config strings | 80x |
-| Protocol swap (3 protocols) | 3 × 120 = 360 lines | 3 config strings | 120x |
-| Event-driven evaluation | 200 lines (rewrite step loop) | 1 flag | ∞ (impossible to wrap) |
+> HERON shifts MARL simulation from environment-centric synchronous stepping to agent-paced event-driven execution, making execution model, information structure, and coordination protocols first-class experimental variables for CPS research.
 
 ---
 
-## Ecosystem Positioning (Beyond PettingZoo)
+## 2. Current Status (Honest Inventory)
 
-**Reviewer concern:** "The paper only compares to PettingZoo. What about other MARL frameworks?"
+### What's Built
 
-**Required comparison table:**
+| Component | Status | Details |
+|-----------|--------|---------|
+| Agent hierarchy (3 levels) | ✅ Done | FieldAgent, CoordinatorAgent, SystemAgent |
+| ProxyAgent (state mediation) | ✅ Done | Centralized state management, visibility filtering |
+| EventScheduler | ✅ Done | Heap-based priority queue, 7 event types, configurable delays/jitter |
+| Dual execution modes | ✅ Done | `step()` (sync) + `run_event_driven()` (event-driven) |
+| MessageBroker | ✅ Done | InMemoryBroker, channel-based, 6 message types |
+| FeatureProvider system | ✅ Done | FeatureMeta metaclass, 4 visibility scopes |
+| Protocol base classes | ✅ Done | VerticalProtocol (VectorDecomposition), HorizontalProtocol (StateShare) |
+| Power domain: 20 FeatureProviders | ✅ Done | But only 6/20 have visibility labels implemented |
+| Power domain: 6 agent types | ✅ Done | DeviceAgent, Generator, ESS, Transformer, PowerGridAgent, GridSystemAgent |
+| Power domain: 6 test networks | ✅ Done | IEEE 13/34/123, CIGRE LV, Case34 3ph, Case LVMG |
+| Power domain: 7 tutorials | ✅ Done | Jupyter notebooks |
 
-| Framework | Abstraction Level | Event-Driven | Visibility Control | Protocol Composition | CPS Focus |
-|-----------|-------------------|--------------|--------------------|--------------------|-----------|
-| **HERON** | Internal env structure | ✅ Native | ✅ First-class | ✅ Swappable | ✅ Yes |
-| PettingZoo | Env ↔ Algo interface | ❌ No | ❌ Manual | ❌ No | ❌ No |
-| EPyMARL | Algorithm benchmarking | ❌ No | ❌ No | ❌ No | ❌ No |
-| MARLlib | Algorithm library | ❌ No | ❌ No | ❌ No | ❌ No |
-| SMAC/SMACv2 | Domain-specific (StarCraft) | ❌ No | Partial | ❌ No | ❌ No |
-| MALib | Population training | ❌ No | ❌ No | ❌ No | ❌ No |
+### What's NOT Built
 
-**Key argument:** These frameworks focus on algorithm benchmarking or specific domains. HERON addresses *environment construction* for CPS with timing constraints—orthogonal and complementary.
+| Component | Status | Risk |
+|-----------|--------|------|
+| Visibility labels on 14/20 power FeatureProviders | ❌ TODO | Low (straightforward) |
+| Domain-specific protocols (power) | ❌ TODO | Medium (setpoint, price signal, P2P, consensus) |
+| Traffic domain (entire) | ❌ TODO | **HIGH** (0% complete, 0 lines of code) |
+| MAPPO/IPPO via RLlib | ❌ TODO | Medium (no RL integration yet) |
+| QMIX / TarMAC | ❌ TODO | Medium |
+| All 12 experiments | ❌ TODO | High (0/12 can run today) |
+| Scalability benchmarks | ❌ TODO | Low |
+| Framework comparison (PettingZoo/EPyMARL) | ❌ TODO | Low-Medium |
+| Documentation / video | ❌ TODO | Low |
+| Croissant metadata | ❌ TODO | Low |
 
-**Implementation evidence (Appendix):**
-- [ ] Implement power microgrid in EPyMARL: measure LOC, time, feature gaps
-- [ ] Attempt event-driven in MARLlib: document impossibility
-- [ ] Show HERON environments can export to PettingZoo API for algorithm compatibility
+### Honest Summary
 
----
-
-## Four Contributions
-
-### 1. Agent-Centric Architecture
-
-**Claim:** Agents as first-class citizens with internal state, timing, and observability.
-
-**Language:**
-> "Unlike environment-centric frameworks where agents are passive policy containers, HERON treats agents as first-class entities with configurable internal state, timing, and observability."
-
-### 2. Dual Execution Modes (HEADLINE CONTRIBUTION)
-
-**Claim:** Synchronous training + agent-paced event-driven deployment validation.
-
-**Language:**
-> "HERON provides dual execution modes: synchronous training for efficient policy learning, and agent-paced event-driven execution for validating policies under realistic CPS timing constraints."
-
-**Required validation:** Experiments with CPS-calibrated timing distributions:
-
-| Domain | Timing Source | Distribution | Parameters |
-|--------|---------------|--------------|------------|
-| Power (SCADA) | IEEE Std 2030-2011 | LogNormal | μ=2s, σ=0.8s |
-| Power (PMU) | NASPI 2018 Report | Deterministic | 16.67ms (60Hz) |
-| Traffic | NTCIP 1202 | Uniform | [100ms, 500ms] |
-
-### 3. Systematic Information Partitioning (CALIBRATED)
-
-**Valid claim:** FeatureProviders with visibility levels enable controlled observability ablation.
-
-**Invalid claim:** ~~Privacy-preserving RL~~
-
-**Language:**
-> "ProxyAgents mediate state access, applying visibility-based filtering to enable systematic study of partial observability and information asymmetry."
-
-### 4. Composable Coordination Protocols
-
-**Claim:** Vertical and horizontal protocols are swappable at configuration time.
-
-**Language:**
-> "HERON's protocol system separates coordination mechanism from agent logic, enabling researchers to compare different protocols as experimental variables."
+The **framework core is solid** (agents, proxy, scheduler, broker, protocols, features). The **power domain has good coverage** (20 FeatureProviders, 6 networks, 6 agent types). The major gaps are: (1) traffic domain is 0% complete, (2) no RL algorithm integration, (3) no experiments can run.
 
 ---
 
-## Paper Abstract
+## 3. Paper Structure (9 Pages + Appendix)
 
-> We present HERON, a framework that shifts from environment-centric synchronous stepping to agent-paced event-driven execution, enabling simulation of realistic CPS timing constraints while providing infrastructure for studying partial observability and information asymmetry in multi-agent systems. Our key contributions are:
->
-> 1. **Agent-centric architecture**: Unlike environment-centric frameworks where agents are passive policy containers, HERON treats agents as first-class entities with configurable internal state, timing, and observability.
->
-> 2. **Dual execution modes**: Synchronous training for efficient policy learning, and agent-paced event-driven execution for validating policies under realistic CPS timing constraints—bridging the sim-to-real gap for distributed systems.
->
-> 3. **Systematic information partitioning**: FeatureProviders with visibility levels enable controlled study of partial observability and information asymmetry, making observability a first-class experimental variable.
->
-> 4. **Composable coordination protocols**: Vertical and horizontal protocols are swappable at configuration time, enabling systematic comparison of coordination mechanisms.
->
-> We demonstrate HERON's utility through power systems and traffic network case studies, showing consistent abstractions across domains.
+### Main Body
+
+| Section | Pages | Content |
+|---------|-------|---------|
+| 1. Introduction | 1.3 | Simulation mismatch problem, 3 dimensions (execution, info, protocols), key idea (ProxyAgent-mediated hierarchy), 6 contributions |
+| 2. Related Work | 0.5 | Multi-agent benchmarks (PettingZoo, EPyMARL, MARLlib), hierarchical RL, CPS-domain benchmarks. Comparison table (7 frameworks) |
+| 3. Framework | 3.0 | 3.1 Overview, 3.2 Agent hierarchy + dual modes + Algorithm 1, 3.3 ProxyAgent, 3.4 FeatureProviders, 3.5 MessageBroker, 3.6 Protocols |
+| 4. Power Case Study | 0.8 | 20 FeatureProviders (categorized table), 3-level agent hierarchy, 6 test networks, benchmark questions |
+| 5. Traffic Case Study | 0.5 | Agent mapping, cross-domain reuse evidence, 14 FeatureProviders |
+| 6. Experiments | 1.8 | 5 categories: observability ablation, sim-to-real gap, protocol comparison, timing sensitivity, algorithm comparison |
+| 7. Conclusion | 0.1 | Brief summary |
+
+### Appendix (~12 pages)
+
+| Section | Content |
+|---------|---------|
+| A. API Reference | Full method signatures (BaseEnv, BaseAgent, ProxyAgent, Protocol, EventScheduler) |
+| B. Event-Driven Flow | Detailed sequence diagram of a full tick cycle |
+| C. FeatureProvider Specs | All 20 power + 14 traffic providers with dimensions and visibility |
+| D. Full Experiments | Complete results across all networks and domains |
+| E. Framework Comparison | LOC comparison, PettingZoo/EPyMARL implementation attempts |
+| F. Network Specs | All test network parameters |
+| G. Hyperparameters | Training configs |
+| H. Safety Metrics | Voltage/loading/SOC violation definitions |
+| I. Reproducibility | Croissant metadata, dataset cards |
+| J. Game Domain (stretch) | Cooperative RTS with imposed hierarchy, sync vs. event-driven comparison |
+
+---
+
+## 4. Five Contributions
+
+| # | Contribution | What Makes It Novel | Key Evidence |
+|---|-------------|--------------------|--------------|
+| 1 | **Event-driven hierarchical execution** | Dual modes (sync training + event-driven validation) via heap-based EventScheduler. Cannot be achieved by wrapping PettingZoo. | Algorithm 1, timing sensitivity experiments |
+| 2 | **ProxyAgent for state mediation** | All state access goes through a single gatekeeper that enforces visibility. Prevents the common "global state leak" in MARL benchmarks. | ProxyAgent API, sim-to-real gap experiments |
+| 3 | **FeatureProviders with visibility labels** | 4-level visibility (public/owner/upper_level/system) as first-class experimental variable, not a binary on/off. | Observability ablation experiments |
+| 4 | **MessageBroker + channel isolation** | Explicit message-based communication with typed channels, environment isolation for parallel training. | Channel naming, message types |
+| 5 | **Composable protocol system** | CommunicationProtocol + ActionProtocol composition. Swap coordination mechanisms without changing agents. | Protocol comparison experiments |
+
+### Key Differentiator vs. PettingZoo
+
+PettingZoo standardizes the **env-algorithm interface** (reset, step, observe, act). HERON standardizes **what happens inside the environment** (how agents access state, how they communicate, how coordination works). Event-driven execution cannot be achieved by wrapping---it requires changing the fundamental step loop.
 
 ### Explicit Non-Claims
 
-> "HERON provides infrastructure for studying information constraints in MARL. It is not a privacy-preserving framework in the differential privacy or cryptographic sense—agents may still infer information beyond their direct observations through learning."
+- HERON is **not** "privacy-preserving" in the DP/cryptographic sense
+- We don't claim to "discover" findings---we provide infrastructure for systematic study
+- We complement PettingZoo (HERON envs can export to PettingZoo API), not replace it
 
 ---
 
-## Case Studies
+## 5. Experiments Plan (12 Total)
 
-### Power Systems (Primary)
+### Paired Cross-Domain Experiments (1-8)
 
-| Component | Count | Status |
-|-----------|-------|--------|
-| FeatureProviders | 14 | ✅ Done |
-| Protocols | 4 (Setpoint, PriceSignal, P2P, Consensus) | ✅ Done |
-| Network size | 5 microgrids | ✅ Done |
+These must show **consistent relative ordering** across both domains to validate domain-agnostic design.
 
-### Traffic Networks (MUST Match Power Maturity — Hard Requirement)
+| # | Experiment | Power | Traffic | Key Question |
+|---|-----------|-------|---------|-------------|
+| 1-2 | Visibility ablation | IEEE 34-bus, 3 microgrids | 5x5 grid, 25 intersections | Does system > upper > owner hold in both domains? |
+| 3-4 | Protocol comparison | Vertical vs. horizontal | Vertical vs. horizontal | Does protocol ranking hold across domains? |
+| 5-6 | Timing sensitivity | SCADA-calibrated (IEEE 2030) | NTCIP-calibrated | How much does sync-to-event gap vary by domain? |
+| 7-8 | Algorithm comparison | MAPPO/IPPO/QMIX/TarMAC | MAPPO/IPPO/QMIX/TarMAC | Is visibility ordering algorithm-agnostic? |
 
-| Component | Target | Power Equivalent | Status |
-|-----------|--------|------------------|--------|
-| FeatureProviders | 14 | 14 FeatureProviders | [ ] TODO |
-| Protocols | 4 | 4 (Setpoint, PriceSignal, P2P, Consensus) | [ ] TODO |
-| Network size | 25 intersections (5×5 grid) | 5 microgrids | [ ] TODO |
-| Agents | 25 | 25 (5 microgrids × 5 devices) | [ ] TODO |
+### Single Experiments (9-12)
 
-**Traffic FeatureProviders (14 total, matching power domain count):**
+| # | Experiment | Details |
+|---|-----------|---------|
+| 9 | Scalability | 10 to 2000 agents, log-log plots, component breakdown |
+| 10 | Broker overhead | Abstraction cost < 5% vs. direct calls |
+| 11 | ~~User study~~ | Not needed for D&B (no precedent: PettingZoo, RLlib, SMAC omit this) |
+| 12 | Framework comparison | Implement microgrid in PettingZoo + EPyMARL, measure LOC and feature gaps |
 
-| Visibility | Provider | Power Equivalent |
-|------------|----------|------------------|
-| owner | QueueLengthProvider | BatterySOCProvider |
-| owner | PhaseDurationProvider | GeneratorOutputProvider |
-| owner | ThroughputProvider | LoadDemandProvider |
-| owner | WaitTimeProvider | VoltageProvider |
-| owner | CyclePositionProvider | FrequencyProvider |
-| upper_level | NeighborQueueProvider | NeighborSOCProvider |
-| upper_level | CorridorFlowProvider | MicrogridPowerProvider |
-| upper_level | CoordinationStateProvider | CoordinationStateProvider |
-| system | NetworkDemandProvider | GridDemandProvider |
-| system | IncidentProvider | OutageProvider |
-| system | GlobalCongestionProvider | SystemFrequencyProvider |
-| system | PeakHourIndicatorProvider | PeakDemandProvider |
-| public | WeatherProvider | WeatherProvider |
-| public | TimeOfDayProvider | TimeOfDayProvider |
+### Algorithm Integration
 
-**Traffic Protocols (4 total, matching power domain count):**
+| Algorithm | Category | Integration Path | Status |
+|-----------|----------|-----------------|--------|
+| MAPPO | Policy gradient | RLlib MultiAgentEnv | ❌ TODO |
+| IPPO | Independent | RLlib (independent policies) | ❌ TODO |
+| QMIX | Value decomposition | RLlib or custom | ❌ TODO |
+| TarMAC | Communication | Custom (learned comm) | ❌ TODO |
 
-| Protocol | Type | Power Equivalent |
-|----------|------|------------------|
-| FixedTimingProtocol | Vertical (top-down) | SetpointProtocol |
-| AdaptiveOffsetProtocol | Vertical (feedback) | PriceSignalProtocol |
-| GreenWaveProtocol | Horizontal (corridor) | P2PEnergyProtocol |
-| ConsensusTimingProtocol | Horizontal (distributed) | ConsensusProtocol |
+### Timing Configurations (CPS-Calibrated)
 
-**Parity Checklist (ALL must be ✅ before submission):**
-- [ ] Same number of FeatureProviders (14)
-- [ ] Same number of protocols (4)
-- [ ] Same visibility level distribution (5 owner, 3 upper_level, 4 system, 2 public)
-- [ ] Comparable network complexity (25 intersections ≈ 25 power devices)
-- [ ] All experiments run on BOTH domains with comparable results
+| Config | Distribution | Source | Parameters |
+|--------|-------------|--------|------------|
+| Synchronous | -- | Training baseline | All agents tick simultaneously |
+| Uniform | U(0, tau_max) | Sensitivity sweep | tau_max in {0.5s, 1s, 2s, 4s} |
+| SCADA | LogNormal(mu, sigma) | IEEE Std 2030-2011 | mu=2s, sigma=0.8s |
+| Jitter | N(0, sigma) + base | Communication noise | sigma in {0.1s, 0.5s, 1s} |
+| Heterogeneous | Per-agent different tau | Realistic deployment | Fast/slow agent mix |
 
 ---
 
-## Experiments
+## 6. Implementation Roadmap
 
-### Required Experiments (12 total)
+### Phase 1: Complete Power Domain (Week 1-2)
 
-| # | Experiment | Domain | Purpose | Parity Required |
-|---|------------|--------|---------|-----------------|
-| 1 | Visibility ablation | Power | Information structure matters | ✅ Paired with #2 |
-| 2 | Visibility ablation | Traffic | Cross-domain consistency | ✅ Paired with #1 |
-| 3 | Protocol comparison | Power | Protocols are swappable | ✅ Paired with #4 |
-| 4 | Protocol comparison | Traffic | Cross-domain consistency | ✅ Paired with #3 |
-| 5 | Event-driven gap (5 timing configs) | Power | CPS-calibrated validation | ✅ Paired with #6 |
-| 6 | Event-driven gap (5 timing configs) | Traffic | Cross-domain consistency | ✅ Paired with #5 |
-| 7 | Algorithm comparison (4 algos) | Power | Algorithm-agnostic | ✅ Paired with #8 |
-| 8 | Algorithm comparison (4 algos) | Traffic | Cross-domain consistency | ✅ Paired with #7 |
-| 9 | Scalability (10-2000 agents) | Both | Scaling characteristics | — |
-| 10 | MessageBroker overhead | Synthetic | Abstraction cost <5% | — |
-| 11 | ~~User study~~ | ~~Both~~ | ~~Not required for D&B~~ | — |
-| 12 | Framework comparison (PettingZoo, EPyMARL) | Power | Architectural differentiation | — |
+- [ ] Add visibility labels to remaining 14/20 FeatureProviders
+- [ ] Implement 4 domain-specific protocols:
+  - [ ] SetpointProtocol (vertical, centralized dispatch)
+  - [ ] PriceSignalProtocol (vertical, decentralized response)
+  - [ ] P2PTradingProtocol (horizontal, market clearing)
+  - [ ] ConsensusProtocol (horizontal, gossip-based averaging)
+- [ ] Integrate MAPPO + IPPO via RLlib MultiAgentEnv
+- [ ] Run first experiments: visibility ablation + protocol comparison on power
 
-**Cross-Domain Consistency Check:**
-For experiments 1-8, the *relative ordering* of results must hold across both domains. E.g., if `system > upper_level > owner` for visibility in power, the same ordering must appear in traffic. This is the key evidence for domain-agnostic abstractions.
+### Phase 2: Traffic Domain (Week 2-4) --- CRITICAL PATH
 
-### Algorithm Diversity
+This is the **highest risk item**. Entire domain is 0% complete.
 
-| Algorithm | Category | Status |
-|-----------|----------|--------|
-| MAPPO | Policy gradient | ✅ Done |
-| IPPO | Independent | ✅ Done |
-| QMIX | Value decomposition | [ ] TODO |
-| TarMAC | Communication | [ ] TODO |
+- [ ] Choose physics backend (SUMO via TraCI, or simplified model)
+- [ ] Implement 14 FeatureProviders (5 owner, 3 upper_level, 4 system, 2 public)
+- [ ] Implement 4 traffic protocols (FixedTiming, AdaptiveOffset, GreenWave, ConsensusTiming)
+- [ ] Create 5x5 grid network (25 intersections)
+- [ ] Implement 3 agent types: SignalAgent, CorridorAgent, NetworkAgent
+- [ ] Verify identical base classes work (no traffic-specific hacks)
+- [ ] **Parity checkpoint**: side-by-side table showing same structure as power
 
-**Key result:** Relative ordering (system > upper_level > owner) should hold across all algorithms.
+### Phase 3: Experiments (Week 4-6)
 
-### Event-Driven Timing Configurations
+- [ ] Run all 8 paired experiments (power + traffic)
+- [ ] Integrate QMIX + TarMAC
+- [ ] Run all 4 algorithms on both domains
+- [ ] Scalability benchmarks (10 to 2000 agents)
+- [ ] Framework comparison (PettingZoo/EPyMARL implementation attempts)
+- [ ] Event-driven timing sensitivity (5 configs x 2 domains)
 
-| Config | Distribution | Parameters | Purpose |
-|--------|--------------|------------|---------|
-| Baseline | Synchronous | All agents tick simultaneously | Training condition |
-| Uniform | Uniform(0, τ_max) | τ_max ∈ {0.5s, 1s, 2s, 4s} | Sensitivity |
-| SCADA | LogNormal(μ, σ) | μ=2s, σ=0.8s | Real-world calibration |
-| Jitter | Gaussian(0, σ) + base | σ ∈ {0.1s, 0.5s, 1s} | Communication noise |
-| Heterogeneous | Per-agent different τ | Fast/slow mix | Realistic deployment |
+### Phase 4: Paper + Polish (Week 6-8)
 
-**Metrics:** Performance degradation curve, critical delay threshold, recovery with fine-tuning.
+- [ ] Write paper with real results (replace all placeholder values)
+- [ ] Create appendix content (API ref, sequence diagrams, full tables)
+- [ ] Documentation: API reference, 2 quick-start tutorials, 5-min video
+- [ ] Clean GitHub repo
+- [ ] Croissant metadata for D&B compliance
 
-### Scalability (Target: 1000+ agents)
-
-**Reviewer concern:** "500 agents is modest by 2026 standards."
-
-| Agent Count | Step Time (sync) | Step Time (event) | Memory | Target |
-|-------------|------------------|-------------------|--------|--------|
-| 10 | TBD | TBD | TBD | <1ms |
-| 50 | TBD | TBD | TBD | <5ms |
-| 100 | TBD | TBD | TBD | <10ms |
-| 500 | TBD | TBD | TBD | <50ms |
-| 1000 | TBD | TBD | TBD | <100ms |
-| 2000 | TBD | TBD | TBD | <250ms |
-
-**Bottleneck Analysis & Mitigations:**
-
-| Component | Naive Complexity | Mitigation | Target Complexity |
-|-----------|------------------|------------|-------------------|
-| MessageBroker | O(n²) broadcast | Topic-based routing, lazy eval | O(n × subscribers) |
-| EventScheduler | O(n log n) | Heap-based priority queue | O(log n) per event |
-| FeatureProvider | O(n) per query | Caching, batch computation | O(1) amortized |
-| Visibility filtering | O(n × features) | Precomputed visibility masks | O(features) |
-
-**Comparison with Large-Scale MARL:**
-- Mean-field games handle 10K+ but assume homogeneous agents
-- HERON targets heterogeneous CPS agents with distinct timing—1000-2000 is realistic for power/traffic
-- Report both absolute performance AND scaling coefficient (e.g., "1.8x slowdown for 2x agents")
-
-**Required plots:**
-- [ ] Log-log scaling plot (agents vs. step time)
-- [ ] Memory scaling plot
-- [ ] Breakdown by component (MessageBroker, EventScheduler, FeatureProvider)
-
-### User Study (OPTIONAL — Not Required for D&B)
-
-**Precedent:** PettingZoo, RLlib, Gymnasium, MARLlib, EPyMARL, SMAC — none include user studies. User studies are typical for CHI/CSCW, not NeurIPS D&B.
-
-**If included (nice-to-have, not required):**
-- N=3-5 informal pilot with qualitative feedback
-- Focus on "pain points" and "aha moments", not statistical claims
-- Can be mentioned in 1-2 sentences, not a full section
-
-**Alternative evidence (stronger for D&B):**
-- Clear API documentation with tutorials
-- Working examples in repository
-- LOC comparison tables (already planned)
-- Video walkthrough (5 min)
+**Total estimated timeline: 8 weeks**
 
 ---
 
-## Implementation Plan
+## 7. Go/No-Go Checklist
 
-### Phase 1: Framework Polish + Rigorous Framework Comparison (Week 1-2)
+### Must Have (ALL required)
 
-**Objective:** Provide evidence beyond LOC counts—measure researcher effort and architectural limitations.
+- [ ] Traffic domain parity: 14 FeatureProviders, 4 protocols, 25 agents
+- [ ] 4 algorithms tested (MAPPO, IPPO, QMIX, TarMAC)
+- [ ] Consistent visibility ordering (system > upper > owner) across both domains
+- [ ] Event-driven timing calibrated to IEEE 2030 / NTCIP 1202
+- [ ] Scalability benchmarked to 1000+ agents
+- [ ] Framework comparison includes EPyMARL or MARLlib (not just PettingZoo)
+- [ ] No "privacy-preserving" claims anywhere
+- [ ] Documentation + tutorials + working examples in repo
 
-- [ ] Complete API documentation
-- [ ] **PettingZoo comparison (rigorous):**
-  - [ ] Implement PettingZoo visibility wrapper (measure: LOC, time, bugs encountered)
-  - [ ] Implement PettingZoo protocol wrapper (measure: LOC, time, bugs encountered)
-  - [ ] Attempt PettingZoo event-driven loop → document *why* it fails (not just that it's hard)
-  - [ ] Record video of implementation attempts for supplementary material
-- [ ] **EPyMARL/MARLlib comparison:**
-  - [ ] Attempt to implement microgrid env in EPyMARL
-  - [ ] Document missing abstractions (visibility, protocols, event-driven)
-- [ ] **Interoperability demonstration:**
-  - [ ] Show HERON env exporting to PettingZoo API
-  - [ ] Run PettingZoo-compatible algorithm on HERON env
-- [ ] Create comparison table with *qualitative* dimensions (not just LOC)
-- [ ] Ensure all tests pass
+### Do NOT Submit If
 
-### Phase 2: Traffic Domain Expansion (Week 2-4) — CRITICAL PATH
-
-**Objective:** Achieve exact parity with power domain. This is the highest-risk item.
-
-- [ ] Implement **14 FeatureProviders** (matching power domain count):
-  - [ ] 5 owner-level: QueueLength, PhaseDuration, Throughput, WaitTime, CyclePosition
-  - [ ] 3 upper_level: NeighborQueue, CorridorFlow, CoordinationState
-  - [ ] 4 system-level: NetworkDemand, Incident, GlobalCongestion, PeakHourIndicator
-  - [ ] 2 public: Weather, TimeOfDay
-- [ ] Implement **4 protocols** (matching power domain count):
-  - [ ] FixedTimingProtocol (vertical, top-down)
-  - [ ] AdaptiveOffsetProtocol (vertical, feedback)
-  - [ ] GreenWaveProtocol (horizontal, corridor)
-  - [ ] ConsensusTimingProtocol (horizontal, distributed)
-- [ ] Create **5×5 grid network** (25 intersections, matching 25 power devices)
-- [ ] Verify same base classes work (no traffic-specific hacks)
-- [ ] Run smoke tests: visibility ablation, protocol swap on traffic domain
-- [ ] **Parity checkpoint:** Side-by-side comparison table showing identical structure
-
-### Phase 3: Event-Driven Validation (Week 3-4)
-
-- [ ] Gather IEEE 2030, NTCIP, NASPI references
-- [ ] Implement configurable delay distributions
-- [ ] Run 5 timing configurations on both domains
-- [ ] Plot degradation curves
-- [ ] Identify critical thresholds
-
-### Phase 4: Algorithm Diversity (Week 4-5)
-
-- [ ] Integrate QMIX
-- [ ] Integrate TarMAC
-- [ ] Run visibility ablation for all 4 algorithms
-- [ ] Verify consistent patterns
-
-### Phase 5: Scalability + Documentation (Week 5-6)
-
-**Scalability:
-- [ ] Benchmark 10, 50, 100, 500, 1000, 2000 agents
-- [ ] Profile bottlenecks: MessageBroker, EventScheduler, FeatureProvider
-- [ ] Implement mitigations if needed (topic-based routing, caching)
-- [ ] Create log-log scaling plots
-- [ ] Compare scaling coefficient to mean-field baselines
-
-**Documentation (matches PettingZoo/RLlib standard):**
-- [ ] API reference documentation
-- [ ] Quick-start tutorial (power domain)
-- [ ] Quick-start tutorial (traffic domain)
-- [ ] 5-min video walkthrough
-
-### Phase 6: Paper + Submission (Week 5-7)
-
-- [ ] Write paper with all results
-- [ ] Add appendices (PettingZoo comparison, user study)
-- [ ] Clean GitHub repo + ReadTheDocs
-- [ ] Video tutorial (5 min)
+- Traffic domain has fewer FeatureProviders or protocols than power
+- Only 2 algorithms tested
+- Event-driven not calibrated to real CPS timing standards
+- Scalability only tested up to 500 agents
+- No documentation or working examples
 
 ---
 
-## Language Guidelines
+## 8. Acceptance Probability Estimate
+
+| Milestone | P(Accept) | Remaining Risk |
+|-----------|-----------|----------------|
+| Current state (framework only, no experiments) | 20-30% | Everything |
+| + Power experiments complete | 40-50% | No cross-domain evidence |
+| + Traffic parity achieved | 60-70% | Scalability, algorithm diversity |
+| + All 4 algorithms, scalability to 1000+ | 75-80% | Novelty perception |
+| **+ Framework comparison, documentation, video** | **80-85%** | Residual: reviewer taste |
+
+---
+
+## 9. Ecosystem Comparison Table (for paper)
+
+| Framework | Abstraction Level | Event-Driven | Visibility | Protocols | State Mediation | CPS Focus |
+|-----------|-------------------|-------------|-----------|-----------|-----------------|-----------|
+| **HERON** | Internal env structure | Native | 4-level | Composable | ProxyAgent | Yes |
+| PettingZoo | Env-algorithm interface | No | Manual | No | No | No |
+| EPyMARL | Algorithm benchmarking | No | No | No | No | No |
+| MARLlib | Algorithm library | No | No | No | No | No |
+| SMAC/SMACv2 | Domain-specific | No | Partial | No | No | No |
+| PowerGridworld | Power-specific | No | Binary | No | No | Yes |
+| CityLearn | Building-specific | No | Binary | No | No | Yes |
+| Grid2Op | Power-specific | No | N/A | No | No | Yes |
+
+---
+
+## 10. Language Guidelines
 
 ### Use
 
-| Context | Phrasing |
-|---------|----------|
-| Observability | "partial observability", "information asymmetry" |
-| Execution | "agent-paced event-driven", "CPS timing constraints" |
-| Architecture | "shifts from environment-centric to agent-centric" |
-| PettingZoo | "different abstraction level", "complements" |
+- "partial observability", "information asymmetry"
+- "agent-paced event-driven", "CPS timing constraints"
+- "shifts from environment-centric to agent-centric"
+- "complements PettingZoo" (different abstraction level)
 
 ### Avoid
 
-| Context | Phrasing |
-|---------|----------|
-| Privacy | ~~"privacy-preserving"~~, ~~"privacy guarantees"~~ |
-| Claims | ~~"we discover"~~, ~~"our finding"~~ |
-| Competition | ~~"better than PettingZoo"~~ |
+- ~~"privacy-preserving"~~, ~~"privacy guarantees"~~
+- ~~"we discover"~~, ~~"our finding"~~ (we provide infrastructure, not findings)
+- ~~"better than PettingZoo"~~ (different level, complementary)
 
 ---
 
-## Required References (Do Not Miss)
+## 11. Required References
 
-**MARL Frameworks & Benchmarks:**
-- Terry et al., "PettingZoo: Gym for Multi-Agent Reinforcement Learning" (JMLR 2021)
-- Papoudakis et al., "Benchmarking Multi-Agent Deep Reinforcement Learning Algorithms in Cooperative Tasks" (NeurIPS 2021)
-- Yu et al., "The Surprising Effectiveness of PPO in Cooperative Multi-Agent Games" (NeurIPS 2022)
-- Hu et al., "MARLlib: A Scalable Multi-agent Reinforcement Learning Library" (JMLR 2023)
+**MARL Frameworks:** PettingZoo (Terry et al., JMLR 2021), EPyMARL (Papoudakis et al., NeurIPS 2021), MARLlib (Hu et al., JMLR 2023), MAPPO (Yu et al., NeurIPS 2022)
 
-**Communication & Coordination:**
-- Foerster et al., "Learning to Communicate with Deep Multi-Agent Reinforcement Learning" (NeurIPS 2016)
-- Sukhbaatar et al., "Learning Multiagent Communication with Backpropagation" (NeurIPS 2016)
-- Das et al., "TarMAC: Targeted Multi-Agent Communication" (ICML 2019)
+**Communication:** DIAL/CommNet (Foerster et al., NeurIPS 2016; Sukhbaatar et al., NeurIPS 2016), TarMAC (Das et al., ICML 2019)
 
-**CPS & Timing Standards:**
-- IEEE Std 2030-2011: Guide for Smart Grid Interoperability
-- NASPI 2018: Synchrophasor Technology and PMU Performance
-- NTCIP 1202: Object Definitions for Actuated Signal Controllers
+**CPS Standards:** IEEE Std 2030-2011, NASPI 2018, NTCIP 1202
 
-**Power Systems RL:**
-- Zhang et al., "Multi-Agent Reinforcement Learning: A Selective Overview of Theories and Algorithms" (2021)
-- Wang et al., "Review of Deep Reinforcement Learning for Power System Applications" (2020)
+**Power RL:** Grid2Op (Donnot et al., 2020), gym-anm (Henry et al., 2021), CityLearn (Vazquez-Canteli et al., 2019), PowerGridworld (Biagioni et al., 2022)
 
-**Traffic Signal Control:**
-- Wei et al., "A Survey on Traffic Signal Control Methods" (2019)
-- Zheng et al., "Learning Phase Competition for Traffic Signal Control" (CIKM 2019)
+**Traffic:** Wei et al. (2019), Zheng et al. (CIKM 2019)
 
 ---
 
-## Go/No-Go Criteria
+## 12. Stretch Goals (If Time Permits)
 
-**Submit if ALL true:**
+### Game Domain Appendix (Extensibility Demonstration)
 
-- [ ] **Framework comparison** shows architectural difference with documented evidence:
-  - [ ] Event-driven impossible to wrap (with explanation of *why*, not just LOC)
-  - [ ] Comparison includes EPyMARL/MARLlib, not just PettingZoo
-  - [ ] Interoperability demonstrated (HERON → PettingZoo API export)
-- [ ] Event-driven uses CPS-calibrated timing with IEEE/NTCIP citations
-- [ ] 4 algorithms tested with consistent visibility pattern across BOTH domains
-- [ ] **Traffic domain parity achieved:**
-  - [ ] 14 FeatureProviders (same as power)
-  - [ ] 4 protocols (same as power)
-  - [ ] 25 intersections / 25 agents (comparable to power)
-  - [ ] Same visibility level distribution
-- [ ] Clear documentation + tutorials + video walkthrough
-- [ ] Scalability benchmarked up to **1000+ agents** with bottleneck analysis
-- [ ] No "privacy-preserving" claims
+**Purpose:** Show HERON generalizes beyond CPS. A ~2-3 page appendix section demonstrating that event-driven hierarchical execution produces meaningful behavioral differences in a game setting.
 
-**Do NOT submit if ANY true:**
+**Candidate:** Simplified cooperative RTS (or modified SMAC/MPE scenario).
 
-- [ ] Traffic domain has fewer FeatureProviders or protocols than power
-- [ ] No documentation or working examples in repository
-- [ ] Only compared to PettingZoo (must include EPyMARL or MARLlib)
-- [ ] Only 2 algorithms tested
-- [ ] Event-driven not calibrated to real CPS timing standards
-- [ ] Scalability only tested up to 500 agents
+**Agent hierarchy (imposed):**
+
+| Level | Agent | Tick Rate | Observability | Role |
+|-------|-------|-----------|---------------|------|
+| 3 (System) | Strategist | Every ~30s | Full map (delayed) | Resource allocation, tech decisions |
+| 2 (Coordinator) | Squad Leader | Every ~5s | Squad area + neighbor summary | Group positioning, engagement calls |
+| 1 (Field) | Unit | Every ~0.5s | Local radius only | Movement, ability usage, combat micro |
+
+**Information flow via ProxyAgent:**
+- Units see only local radius (owner visibility)
+- Squad leaders see their squad's states + neighbor summaries (upper_level visibility)
+- Strategist sees full map but with observation delay (system visibility)
+- All communication goes through MessageBroker (squad leaders relay strategist orders to units)
+
+**Protocols:**
+- Vertical: OrderProtocol (strategist → squad leader: attack/defend/retreat directives), TacticProtocol (squad leader → units: formation/target assignments)
+- Horizontal: ScoutShareProtocol (squad leaders share enemy sightings with neighbors)
+
+**Key experiment (1 table):**
+
+| Execution Mode | Win Rate | Avg. Reward | Coordination Score |
+|---------------|----------|-------------|-------------------|
+| Synchronous (all tick at 0.5s, full obs) | Baseline | -- | -- |
+| Event-driven (heterogeneous rates, hierarchy-filtered obs) | ? | ? | ? |
+| Event-driven + command latency (2s strategist delay) | ? | ? | ? |
+
+**Hypothesis:** Event-driven execution with command latency forces emergent local autonomy --- units learn to act independently when orders are delayed, while synchronous mode produces brittle policies that depend on instant global coordination.
+
+**Implementation scope:**
+- [ ] Wrap an existing SMAC/MPE environment with HERON agents (reuse FieldAgent, CoordinatorAgent, SystemAgent)
+- [ ] Implement 3-4 game FeatureProviders (LocalVision, SquadState, MapOverview, ResourceStatus)
+- [ ] Implement 2 protocols (OrderProtocol, ScoutShareProtocol)
+- [ ] Run sync vs. event-driven comparison (1 experiment)
+- [ ] Write 2-3 page appendix section
+
+**Priority:** Do this AFTER traffic domain and all main experiments are complete. Estimated effort: ~1 week.
 
 ---
 
-## Acceptance Probability
+### Other Stretch Goals
 
-| State | Probability | Key Risks |
-|-------|-------------|-----------|
-| Before mitigations | 30-40% | PettingZoo differentiation, incomplete traffic |
-| With ecosystem comparison (not just PettingZoo) | 50-60% | Incomplete traffic domain |
-| With traffic parity achieved | 65-75% | Scalability modest |
-| With scalability 1000+ agents | 75-85% | No real-world validation |
-| **With all addressed** | **80-85%** | Residual: novelty perception |
-
----
-
-## Optional: Real-World Validation (Stretch Goal)
-
-**Reviewer note:** "Any pilot deployment data, even on a microgrid testbed, would strengthen claims substantially."
-
-**Options (in order of feasibility):**
-
-| Option | Effort | Impact | Feasibility |
-|--------|--------|--------|-------------|
-| Hardware-in-the-loop simulation | Medium | High | Check if lab has OPAL-RT or similar |
-| Collaboration with utility/DOE lab | High | Very High | Requires existing relationship |
-| Published testbed data integration | Low | Medium | Use IEEE test feeders with real timing data |
-| Qualitative interviews with practitioners | Low | Medium | 3-5 interviews with grid operators |
-
-**Minimum viable evidence:**
-- [ ] Cite existing CPS testbed papers that use similar timing distributions
-- [ ] Show that HERON's timing configs match published measurement studies
-- [ ] Include "Future Work" section on hardware-in-the-loop integration
-
-**If time permits:**
-- [ ] Run HERON with timing traces from real SCADA logs (anonymized, if available)
-- [ ] Partner with traffic lab for SUMO-HERON integration validation
+- Hardware-in-the-loop validation (OPAL-RT or similar)
+- Real SCADA timing traces (anonymized)
+- SUMO-HERON integration for traffic
+- 3-5 informal practitioner interviews

@@ -90,7 +90,7 @@ vmax = 1.05
 vmin = 0.95
 
 time_steps = 24
-cost, schedues = [], {}
+cost, schedules = [], {}
 es1_0 = es2_0 = es3_0 = 0.5
 for d in range(366):
     model = Model("IEEE34")
@@ -294,17 +294,12 @@ for d in range(366):
     # VR 4
     vr_tap4 = np.empty([time_steps])
     for t in range(time_steps):
-        vr_tap4[t] = sol[VR_TAP[t,2]]
+        vr_tap4[t] = sol[VR_TAP[t,3]]
     # DG 1
     p_dg1, q_dg1 = np.empty([time_steps]), np.empty([time_steps])
     for t in range(time_steps):
         p_dg1[t] = sol[PG[t,bus2id['Bus 24']]]
         q_dg1[t] = sol[QG[t,bus2id['Bus 24']]]
-    # # DG 2
-    # p_dg2, q_dg2 = np.empty([time_steps]), np.empty([time_steps])
-    # for t in range(time_steps):
-    #     p_dg2[t] = sol[PG[t,bus2id['Bus 41']]]
-    #     q_dg2[t] = sol[QG[t,bus2id['Bus 41']]]
     # DG 3
     p_dg3, q_dg3 = np.empty([time_steps]), np.empty([time_steps])
     for t in range(time_steps):
@@ -315,11 +310,6 @@ for d in range(366):
     for t in range(time_steps):
         p_dg4[t] = sol[PG[t,bus2id['Bus 71']]]
         q_dg4[t] = sol[QG[t,bus2id['Bus 71']]]
-    # # DG 5
-    # p_dg5, q_dg5 = np.empty([time_steps]), np.empty([time_steps])
-    # for t in range(time_steps):
-    #     p_dg5[t] = sol[PG[t,bus2id['Bus 114']]]
-    #     q_dg5[t] = sol[QG[t,bus2id['Bus 114']]]
     # Grid
     p_grid, q_grid = np.empty([time_steps]), np.empty([time_steps])
     for t in range(time_steps):
@@ -337,12 +327,6 @@ for d in range(366):
         p2_s[t] = sol[PS_DCH[t,bus2id['Bus 56']]] - sol[PS_CH[t,bus2id['Bus 56']]]
         e2_s[t] = sol[ES[t,bus2id['Bus 56']]]
     es2_0 = e2_s[-1]
-    # # ESS 3
-    # p3_s, e3_s = np.empty([time_steps]), np.empty([time_steps])
-    # for t in range(time_steps):
-    #     p3_s[t] = sol[PS_DCH[t,bus2id['Bus 113']]] - sol[PS_CH[t,bus2id['Bus 113']]]
-    #     e3_s[t] = sol[ES[t,bus2id['Bus 113']]]
-    # es3_0 = e3_s[-1]
     # renew
     p_renew = []
     for t in range(time_steps):
@@ -360,13 +344,7 @@ for d in range(366):
     for t in range(time_steps):
         print(p_grid[t]+p_dg1[t]+p_dg3[t]+p_dg4[t]+p_renew[t]+p1_s[t]+p2_s[t], np.sum(pd * load_scale[d,t]))
         print(q_grid[t]+q_dg1[t]+q_dg3[t]+q_dg4[t]-cap1[t]*(-0.3)-cap2[t]*(-0.3), np.sum(qd * load_scale[d,t]))
-    # dg1_cost, dg2_cost, grid_cost = 0, 0, 0
-    # for t in range(time_steps):
-    #     dg1_cost += a1 * (p_dg1[t]**2) + b1 * p_dg1[t] + c1
-    #     dg2_cost += a2 * (p_dg2[t]**2) + b2 * p_dg2[t] + c2
-    #     grid_cost += price[d,t] * p_grid[t]
-    # print(dg1_cost+dg2_cost+grid_cost)
-    schedues[d] = {
+    schedules[d] = {
         'grid_P': p_grid, 
         'grid_Q': q_grid, 
         'DG1_P': p_dg1, 
@@ -390,16 +368,3 @@ for d in range(366):
     }
 
     print(cost)
-
-# import pickle, os
-# save_path = '/home/lihepeng/Documents/Github/learning2opDN/results/test/misocp_ieee123.pkl'
-# with open(save_path, 'wb') as f:
-#     pickle.dump({'cost': cost, 'schedues': schedues}, f, protocol=pickle.HIGHEST_PROTOCOL)
-# print('done')
-
-# import pickle, os
-# save_path = '/home/lihepeng/Documents/Github/learning2opDN/results/test/misocp_ieee123.pkl'
-# with open(save_path, 'rb') as f:
-#     data = pickle.load(f)
-
-# print('done')

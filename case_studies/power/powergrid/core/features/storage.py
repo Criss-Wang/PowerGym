@@ -4,11 +4,9 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from heron.core.feature import FeatureProvider
-from heron.utils.registry import provider
 from heron.utils.array_utils import cat_f32
 
 
-@provider()
 @dataclass(slots=True)
 class StorageBlock(FeatureProvider):
     """
@@ -70,8 +68,8 @@ class StorageBlock(FeatureProvider):
         - return the incremental cost so you can add it into env.cost
     """
 
-    # Visibility tags, e.g. ["public", "owner"]
-    visibility: List[str] = field(default_factory=list)
+    # Visibility: owner can see their own SOC for reward computation
+    visibility: List[str] = field(default_factory=lambda: ["owner"])
 
     # SOC state and bounds (fractions)
     soc: Optional[float] = None

@@ -1,4 +1,4 @@
-from dataclasses import dataclass, fields, asdict, MISSING
+from dataclasses import fields, asdict, MISSING
 from typing import Any, ClassVar, Dict, List, Sequence, Type, TypeVar
 import numpy as np
 
@@ -23,7 +23,19 @@ class FeatureMeta(type):
 
 
 class FeatureProvider(metaclass=FeatureMeta):
-    """Base class for feature providers. Subclasses are auto-converted to dataclasses."""
+    """Base class for feature providers.
+
+    Subclasses should:
+    1. Use @dataclass(slots=True) decorator for clarity and memory optimization
+    2. Define visibility as ClassVar[Sequence[str]]
+    3. Override set_values() for validation if needed
+
+    Example:
+        @dataclass(slots=True)
+        class MyFeature(FeatureProvider):
+            visibility: ClassVar[Sequence[str]] = ["public"]
+            value: float = 0.0
+    """
 
     visibility: ClassVar[Sequence[str]]
     _class_feature_name: ClassVar[str]  # Class-level default name
@@ -32,7 +44,7 @@ class FeatureProvider(metaclass=FeatureMeta):
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         cls._class_feature_name = cls.__name__
-        dataclass(cls)
+        # Subclasses should use @dataclass(slots=True) explicitly
 
     @property
     def feature_name(self) -> str:

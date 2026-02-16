@@ -11,10 +11,8 @@ import numpy as np
 
 from heron.core.feature import FeatureProvider
 from heron.utils.array_utils import as_f32, cat_f32
-from heron.utils.registry import provider
 
 
-@provider()
 @dataclass(slots=True)
 class BusVoltages(FeatureProvider):
     """Bus voltage magnitudes and angles across the network.
@@ -113,7 +111,6 @@ class BusVoltages(FeatureProvider):
         self.clamp_()
 
 
-@provider()
 @dataclass(slots=True)
 class LineFlows(FeatureProvider):
     """Power flows and loading on transmission lines.
@@ -228,7 +225,6 @@ class LineFlows(FeatureProvider):
         self.clamp_()
 
 
-@provider()
 @dataclass(slots=True)
 class NetworkMetrics(FeatureProvider):
     """Aggregate network-level metrics.

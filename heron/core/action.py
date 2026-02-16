@@ -398,6 +398,16 @@ class Action:
             return cat_f32(parts)
         return self.c.astype(np.float32, copy=True)
 
+    def scalar(self, index: int = 0) -> float:
+        """Get scalar value from continuous action at given index."""
+        if index < len(self.c):
+            return float(self.c[index])
+        return 0.0
+
+    def as_array(self) -> np.ndarray:
+        """Get continuous action as numpy array."""
+        return self.c
+
     def copy(self) -> "Action":
         """Create a deep copy of this action."""
         return Action(

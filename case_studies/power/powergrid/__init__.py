@@ -1,37 +1,51 @@
 """PowerGrid: Multi-agent power system simulation using HERON.
 
-This module provides power system components:
+This module provides power system components following Heron's agent hierarchy:
 - Agents: Generator, ESS (Energy Storage), Transformer, DeviceAgent
-- Grid Coordination: PowerGridAgent
-- Environments: NetworkedGridEnv, MultiAgentMicrogrids
+- Grid Coordination: PowerGridAgent, GridSystemAgent
+- Environments: HierarchicalMicrogridEnv, EnvState
 - Features: Electrical, Storage, Network state providers
 
 Example:
-    Basic usage with a generator agent::
+    Create agents manually and pass to environment::
 
-        from powergrid.agents import Generator
-        from powergrid.envs import MultiAgentMicrogrids
+        from powergrid import Generator, ESS, PowerGridAgent, HierarchicalMicrogridEnv
+        from heron.agents.system_agent import SystemAgent
 
-        env = MultiAgentMicrogrids(env_config)
-        obs, info = env.reset()
+        # Create device agents
+        devices = {
+            "gen_1": Generator(agent_id="gen_1", ...),
+            "ess_1": ESS(agent_id="ess_1", ...),
+        }
+
+        # Create coordinator
+        grid = PowerGridAgent(agent_id="grid_1", subordinates=devices)
+
+        # Create system agent
+        system = SystemAgent(agent_id="system", subordinates={"grid_1": grid})
+
+        # Create environment
+        env = HierarchicalMicrogridEnv(system_agent=system, dataset_path="...")
 """
 
 __version__ = "0.1.0"
 
 # Device Agents
 from powergrid.agents.device_agent import DeviceAgent
-from powergrid.agents.generator import Generator, GeneratorConfig
-from powergrid.agents.storage import ESS, StorageConfig
-from powergrid.agents.transformer import Transformer, TransformerConfig
+from powergrid.agents.generator import Generator
+from powergrid.agents.storage import ESS
+from powergrid.agents.transformer import Transformer
+from powergrid.core.features.metrics import CostSafetyMetrics
 
 # Grid Agents
 from powergrid.agents.power_grid_agent import PowerGridAgent
+from powergrid.agents.grid_system_agent import GridSystemAgent
 from heron.agents.proxy_agent import ProxyAgent, PROXY_LEVEL
 from powergrid.agents import POWER_FLOW_CHANNEL_TYPE
 
 # Environments
-from powergrid.envs.networked_grid_env import NetworkedGridEnv
-from powergrid.envs.multi_agent_microgrids import MultiAgentMicrogrids
+from powergrid.envs.common import EnvState
+from powergrid.envs.hierarchical_microgrid_env import HierarchicalMicrogridEnv
 
 # Features
 from powergrid.core.features.electrical import ElectricalBasePh
@@ -50,20 +64,19 @@ __all__ = [
     "__version__",
     # Device Agents
     "DeviceAgent",
+    "CostSafetyMetrics",
     "Generator",
-    "GeneratorConfig",
     "ESS",
-    "StorageConfig",
     "Transformer",
-    "TransformerConfig",
     # Grid Agents
     "PowerGridAgent",
+    "GridSystemAgent",
     "ProxyAgent",
     "PROXY_LEVEL",
     "POWER_FLOW_CHANNEL_TYPE",
     # Environments
-    "NetworkedGridEnv",
-    "MultiAgentMicrogrids",
+    "EnvState",
+    "HierarchicalMicrogridEnv",
     # Features
     "ElectricalBasePh",
     "StorageBlock",
