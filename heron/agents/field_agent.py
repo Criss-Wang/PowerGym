@@ -86,6 +86,7 @@ class FieldAgent(Agent):
     # ============================================
 
     def init_state(self, features: List[FeatureProvider] = []) -> State:
+        """Initialize a FieldAgentState from the provided features."""
         return FieldAgentState(
             owner_id=self.agent_id,
             owner_level=FIELD_LEVEL,
@@ -93,6 +94,7 @@ class FieldAgent(Agent):
         )
 
     def init_action(self, features: List[FeatureProvider] = []) -> Action:
+        """Initialize an empty Action (override to define custom action structure)."""
         return Action()
 
     def set_state(self, *args, **kwargs) -> None:

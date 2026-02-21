@@ -1,4 +1,4 @@
-"""Transformer agent following grid_age style.
+"""Transformer agent following grid_agent style.
 
 This module implements an on-load tap changer (OLTC) transformer agent with:
 - Direct constructor parameters (no config dataclass)
@@ -24,7 +24,7 @@ from powergrid.utils.phase import PhaseModel, PhaseSpec, check_phase_model_consi
 
 
 class Transformer(DeviceAgent):
-    """On-load tap changer (OLTC) transformer following grid_age style.
+    """On-load tap changer (OLTC) transformer following grid_agent style.
 
     Controls transformer tap position for voltage regulation.
     Discrete action selects tap index in [tap_min, tap_max].

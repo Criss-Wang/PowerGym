@@ -26,12 +26,12 @@ class MessageBroker(ABC):
 
     @staticmethod
     def init(config: Optional[Dict[str, Any]] = None) -> "MessageBroker":
-        from heron.messaging.in_memory_broker import InMemoryBroker
         """Initialize the message broker with optional configuration.
 
         Args:
             config: Optional dictionary of configuration parameters
         """
+        from heron.messaging.in_memory_broker import InMemoryBroker
         if not config or "type" not in config:
             return InMemoryBroker()  # Default to in-memory broker for simplicity
 
@@ -46,7 +46,7 @@ class MessageBroker(ABC):
         This allows the broker to manage subscriptions and message routing for these agents.
 
         Args:
-            agents: List of Agent instances to attach to the broker
+            agents: Dict of Agent instances to attach to the broker
         """
         for agent in agents.values():
             agent.set_message_broker(self)

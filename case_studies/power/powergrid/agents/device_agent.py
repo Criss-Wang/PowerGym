@@ -1,6 +1,6 @@
 """Device agent base class for power grid devices.
 
-This module follows the grid_age agent style with:
+This module follows the grid_agent style with:
 - Simple constructors accepting parameters directly
 - Normalized action ranges [-1, 1]
 - Explicit set_state() parameters
@@ -23,7 +23,7 @@ from powergrid.core.features.metrics import CostSafetyMetrics
 class DeviceAgent(FieldAgent):
     """Base class for power grid device agents.
 
-    Follows the grid_age agent pattern:
+    Follows the grid_agent pattern:
     - init_action(): Define normalized [-1, 1] action space
     - set_action(): Store action values
     - set_state(): Denormalize action and update features

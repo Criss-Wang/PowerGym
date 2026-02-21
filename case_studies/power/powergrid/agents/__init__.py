@@ -1,7 +1,7 @@
 """Power grid agent module.
 
 This module provides power-grid specific agent implementations
-built on the HERON agent framework, following the grid_age style:
+built on the HERON agent framework, following the grid_agent style:
 - Direct constructor parameters (no config dataclasses)
 - Normalized [-1, 1] action spaces
 - Explicit set_state() parameters

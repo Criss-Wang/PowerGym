@@ -42,6 +42,14 @@ class EventScheduler:
         return self._agent_tick_configs
     
     def attach(self, agents: Dict[AgentID, "Agent"]) -> None:
+        """Register agents with the scheduler and schedule the initial system tick.
+
+        Stores each agent's TickConfig, marks them as active, registers their
+        event handlers, and schedules the first AGENT_TICK for the system agent.
+
+        Args:
+            agents: Dict mapping agent IDs to Agent instances
+        """
         for agent_id, agent in agents.items():
             self._agent_tick_configs[agent_id] = agent.tick_config
             self._active_agents.add(agent_id)
@@ -304,11 +312,11 @@ class EventScheduler:
             return None
         return heapq.heappop(self.event_queue)
 
-    def process_next(self) -> Iterable[Event]:
+    def process_next(self) -> Optional[Event]:
         """Process the next event in the queue.
 
         Returns:
-            True if an event was processed, False if queue is empty
+            The processed Event, or None if queue is empty
         """
         event = self.pop()
         if event is None:
@@ -341,8 +349,8 @@ class EventScheduler:
             t_end: Stop when current_time exceeds this
             max_events: Optional maximum number of events to process
 
-        Returns:
-            Number of events processed
+        Yields:
+            Event objects as they are processed
         """
         count = 0
         while self.event_queue:

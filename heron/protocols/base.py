@@ -113,8 +113,8 @@ class Protocol(ABC):
 
         Args:
             coordinator_state: State of coordinating agent
-            info_for_subordinates: Information for subordinate agents
             coordinator_action: Action from coordinator policy (if any)
+            info_for_subordinates: Information for subordinate agents
             context: Additional context (subordinates dict, timestamp, etc.)
 
         Returns:
