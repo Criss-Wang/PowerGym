@@ -115,6 +115,30 @@ class VectorDecompositionActionProtocol(ActionProtocol):
         return actions
 
 
+class BroadcastActionProtocol(ActionProtocol):
+    """Broadcasts coordinator's action to all subordinates unchanged.
+
+    Used when the coordinator's action (e.g., pricing signal) should be
+    received by every subordinate identically, rather than being
+    split/decomposed across them.
+
+    Example:
+        Coordinator sets price = 0.25
+        All subordinates receive 0.25
+    """
+
+    def compute_action_coordination(
+        self,
+        coordinator_action: Optional[Any],
+        info_for_subordinates: Optional[Dict[AgentID, Any]] = None,
+        coordination_messages: Optional[Dict[AgentID, Dict[str, Any]]] = None,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[AgentID, Any]:
+        if coordinator_action is None or info_for_subordinates is None:
+            return {sub_id: None for sub_id in (info_for_subordinates or {})}
+        return {sub_id: coordinator_action for sub_id in info_for_subordinates}
+
+
 class VerticalProtocol(Protocol):
     """Default vertical coordination protocol for hierarchical control.
 

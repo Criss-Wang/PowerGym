@@ -332,6 +332,7 @@ class Agent(ABC):
 
         # run self action & store local state updates in proxy
         self.handle_self_action(actions['self'], proxy)
+
         # run subordinate actions & store local state updates in proxy
         self.handle_subordinate_actions(actions['subordinates'], proxy)
 
@@ -377,8 +378,19 @@ class Agent(ABC):
         proxy.set_local_state(self.agent_id, self.state)  # Pass State object directly
 
     def handle_subordinate_actions(self, actions: Dict[AgentID, Any], proxy: Optional["ProxyAgent"] = None):
-        # Note: Parent Agent doesn't build action for subordinates, i.e. self.policy.forward only produces local action
-        # TODO: Support parent-controlled actions
+        # Use protocol to produce subordinate actions (mirrors event-driven coordinate()).
+        # This allows parent-controlled action decomposition (e.g., broadcast, vector split)
+        # in training mode, not just event-driven mode.
+        if self._should_send_subordinate_actions() and self.action is not None:
+            _, sub_actions = self.protocol.coordinate(
+                coordinator_state=self.state,
+                coordinator_action=self.action,
+                info_for_subordinates={sub_id: None for sub_id in self.subordinates},
+            )
+            for sub_id, sub_action in sub_actions.items():
+                if sub_id in actions and sub_action is not None:
+                    actions[sub_id]['self'] = sub_action
+
         for subordinate_id, subordinate in self.subordinates.items():
             if subordinate_id in actions:
                 subordinate.execute(actions[subordinate_id], proxy)
