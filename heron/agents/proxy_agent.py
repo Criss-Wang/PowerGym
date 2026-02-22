@@ -269,7 +269,7 @@ class ProxyAgent(Agent):
         if request_type == INFO_TYPE_OBS:
             return self.get_observation(sender_id, protocol)
         elif request_type == INFO_TYPE_GLOBAL_STATE:
-            return self.get_global_states(sender_id, protocol)
+            return self.get_global_states(sender_id, protocol, for_simulation=True)
         elif request_type == INFO_TYPE_LOCAL_STATE:
             return self.get_local_state(sender_id, protocol)
         else:
@@ -304,31 +304,39 @@ class ProxyAgent(Agent):
             timestamp=self._timestep
         )
 
-    def get_global_states(self, sender_id: AgentID, protocol: Optional[Protocol] = None) -> Dict:
-        """Get global state information visible to the requesting agent with feature-level visibility filtering.
-
-        NEW: Applies feature-level visibility using state.observed_by()
+    def get_global_states(
+        self,
+        sender_id: AgentID,
+        protocol: Optional[Protocol] = None,
+        for_simulation: bool = False,
+    ) -> Dict:
+        """Get global state information from all agents.
 
         Args:
             sender_id: ID of agent requesting global state
             protocol: Optional protocol for formatting
+            for_simulation: If True, returns all agents' full state dicts
+                (via ``to_dict(include_metadata=True)``) for the simulation
+                pipeline.  If False (default), returns visibility-filtered
+                numpy arrays for the observation pipeline.
 
         Returns:
-            Dict containing global state information (filtered by visibility rules)
-            Also includes "env_context" if available
+            Dict containing global state information.
+            Also includes "env_context" if available.
         """
-        # Apply feature-level visibility filtering to all agents' states
         global_filtered = {}
-        requestor_level = self._agent_levels.get(sender_id, 1)
 
-        for agent_id, state_obj in self.state_cache.get("agents", {}).items():
-            if agent_id == sender_id:
-                continue  # Don't include own state in global (it's in local)
-
-            # Apply visibility filtering
-            observable = state_obj.observed_by(sender_id, requestor_level)
-            if observable:  # Only include if agent can see something
-                global_filtered[agent_id] = observable
+        if for_simulation:
+            for agent_id, state_obj in self.state_cache.get("agents", {}).items():
+                global_filtered[agent_id] = state_obj.to_dict(include_metadata=True)
+        else:
+            requestor_level = self._agent_levels.get(sender_id, 1)
+            for agent_id, state_obj in self.state_cache.get("agents", {}).items():
+                if agent_id == sender_id:
+                    continue  # Don't include own state in global (it's in local)
+                observable = state_obj.observed_by(sender_id, requestor_level)
+                if observable:
+                    global_filtered[agent_id] = observable
 
         # Include env_context if available (external data like price, solar, wind profiles)
         global_cache = self.state_cache.get("global", {})
@@ -396,12 +404,24 @@ class ProxyAgent(Agent):
     def set_global_state(self, global_state: Dict) -> None:
         """Update the global state in cache.
 
+        Also propagates agent_states back to state_cache["agents"] so that
+        subsequent observe() / compute_rewards() calls see simulation results.
+
         Args:
             global_state: Global state dictionary to cache
         """
+        from heron.core.state import State
+
         if "global" not in self.state_cache:
             self.state_cache["global"] = {}
         self.state_cache["global"].update(global_state)
+
+        # Propagate simulation results back to per-agent state cache
+        agent_states = global_state.get("agent_states", {})
+        for agent_id, state_dict in agent_states.items():
+            if isinstance(state_dict, dict):
+                state_obj = State.from_dict(state_dict)
+                self.set_local_state(agent_id, state_obj)
 
     def set_local_state(self, agent_id: str, state: "State") -> None:
         """Update local state for agents in cache.
