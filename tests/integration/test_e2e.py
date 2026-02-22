@@ -153,8 +153,9 @@ class EnergyManagementEnv(MultiAgentEnv):
 
         # Extract SOC from any battery agent's state dict
         for agent_id, state_dict in agent_states.items():
-            if 'battery' in agent_id and "BatteryChargeFeature" in state_dict:
-                battery_feature = state_dict["BatteryChargeFeature"]
+            features = state_dict.get("features", {})
+            if 'battery' in agent_id and "BatteryChargeFeature" in features:
+                battery_feature = features["BatteryChargeFeature"]
                 return EnvState(battery_soc=battery_feature.get("soc", 0.5))
 
         # Fallback to default SOC if no battery state found

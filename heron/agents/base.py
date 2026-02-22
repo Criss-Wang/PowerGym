@@ -360,7 +360,7 @@ class Agent(ABC):
         }
 
     def handle_self_action(self, action: Any, proxy: Optional["ProxyAgent"] = None):
-        if action:
+        if action is not None:
             self.set_action(action)
         elif self.policy:
             local_obs = proxy.get_observation(self.agent_id)

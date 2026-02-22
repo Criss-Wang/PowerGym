@@ -109,8 +109,8 @@ class SystemAgent(Agent):
         actions = self.layer_actions(actions)
         self.act(actions, proxy)
         
-        # get latest global state (after the above local state updates are accounted for)
-        global_state = proxy.get_global_states(self.agent_id, self.protocol) 
+        # get latest global state in dict format for simulation pipeline
+        global_state = proxy.get_global_states(self.agent_id, self.protocol, for_simulation=True)
         # run external environment simulation step (upon action -> agent state update)
         updated_global_state = self.simulate(global_state)
         
@@ -322,7 +322,12 @@ class SystemAgent(Agent):
         self._pre_step_func = pre_step_func
 
     def simulate(self, global_state: Dict[AgentID, Any]) -> Any:
-        env_state =  self._global_state_to_env_state(global_state)
+        # proxy.get_global_states() returns a flat {agent_id: state_dict} dict,
+        # but global_state_to_env_state() expects {"agent_states": {agent_id: ...}}.
+        # Wrap if needed so both execute() and event-driven paths work correctly.
+        if "agent_states" not in global_state:
+            global_state = {"agent_states": global_state}
+        env_state = self._global_state_to_env_state(global_state)
         updated_env_state = self._simulation_func(env_state)
         updated_global_state = self._env_state_to_global_state(updated_env_state)
         return updated_global_state
