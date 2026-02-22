@@ -59,15 +59,18 @@ class FeatureProvider(metaclass=FeatureMeta):
         return self
 
     def vector(self) -> np.ndarray:
+        """Return all field values as a flat float32 numpy array."""
         return np.array(
             [getattr(self, f.name) for f in fields(self)],
             dtype=np.float32
         )
 
     def names(self) -> List[str]:
+        """Return the names of all dataclass fields."""
         return [f.name for f in fields(self)]
 
     def to_dict(self) -> Dict[str, Any]:
+        """Serialize all fields to a dictionary via dataclasses.asdict."""
         return asdict(self)
 
     @classmethod
@@ -89,6 +92,7 @@ class FeatureProvider(metaclass=FeatureMeta):
                 setattr(self, key, value)
 
     def reset(self: T, **overrides: Any) -> T:
+        """Reset all fields to their defaults, then apply any overrides via set_values."""
         for f in fields(self):
             if f.default is not MISSING:
                 setattr(self, f.name, f.default)
@@ -104,6 +108,23 @@ class FeatureProvider(metaclass=FeatureMeta):
         owner_id: str,
         owner_level: int
     ) -> bool:
+        """Check whether this feature is visible to the given requestor.
+
+        Visibility rules (checked in order):
+        - "public": visible to everyone
+        - "owner": visible only to the owning agent
+        - "system": visible to system-level agents (level >= 3)
+        - "upper_level": visible to the agent one level above the owner
+
+        Args:
+            requestor_id: ID of the agent requesting observation
+            requestor_level: Hierarchy level of the requestor
+            owner_id: ID of the agent that owns this feature
+            owner_level: Hierarchy level of the owner
+
+        Returns:
+            True if the requestor is allowed to observe this feature
+        """
         if "public" in self.visibility:
             return True
         if "owner" in self.visibility and requestor_id == owner_id:

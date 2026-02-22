@@ -100,10 +100,20 @@ class Agent(ABC):
 
     @abstractmethod
     def init_state(self, features: List[FeatureProvider] = []) -> State:
+        """Initialize the agent's State object from the given features.
+
+        Args:
+            features: Feature providers to include in the state
+        """
         pass
-    
+
     @abstractmethod
     def init_action(self, features: List[FeatureProvider] = []) -> Action:
+        """Initialize the agent's Action object.
+
+        Args:
+            features: Feature providers (unused by default, available for custom logic)
+        """
         pass
 
     @abstractmethod
@@ -171,16 +181,20 @@ class Agent(ABC):
     # Observation related functions
     # ============================================
     def observe(self, global_state: Optional[Dict[str, Any]] = None, proxy: Optional["ProxyAgent"] = None, *args, **kwargs) -> Dict[AgentID, Any]:
-        """
-        Sample format:
-        {
-            "aid1": np.ndarray1,
-            "aid2": np.ndarray2,
-            ...
-        }
+        """Collect observations for this agent and all subordinates.
+
+        Returns a flat dict mapping each agent ID to its Observation vector,
+        recursively including all subordinates.
+
+        Args:
+            global_state: Optional global state dict (unused in default impl)
+            proxy: ProxyAgent used to retrieve observations
+
+        Returns:
+            Dict mapping agent IDs to observation arrays
         """
         if not proxy:
-            raise ValueError("System Agent requires a proxy agent to observe states")
+            raise ValueError("Agent requires a proxy agent to observe states")
         obs = {
             self.agent_id: proxy.get_observation(self.agent_id, self.protocol), # local observation
         }
@@ -192,8 +206,18 @@ class Agent(ABC):
     # Reward related functions
     # ============================================
     def compute_rewards(self, proxy: "ProxyAgent") -> Dict[AgentID, float]:
+        """Compute rewards for this agent and all subordinates.
+
+        Retrieves local state from proxy and delegates to compute_local_reward().
+
+        Args:
+            proxy: ProxyAgent for state retrieval
+
+        Returns:
+            Dict mapping agent IDs to scalar rewards
+        """
         if not proxy:
-            raise ValueError("System Agent requires a proxy agent to compute rewards")
+            raise ValueError("Agent requires a proxy agent to compute rewards")
 
         # Local Reward computation steps:
         # 1. get local states from proxy
@@ -216,8 +240,18 @@ class Agent(ABC):
     # Info related functions
     # ============================================
     def get_info(self, proxy: "ProxyAgent") -> Dict[AgentID, Dict]:
+        """Collect info dicts for this agent and all subordinates.
+
+        Retrieves local state from proxy and delegates to get_local_info().
+
+        Args:
+            proxy: ProxyAgent for state retrieval
+
+        Returns:
+            Dict mapping agent IDs to info dicts
+        """
         if not proxy:
-            raise ValueError("System Agent requires a proxy agent to get infos")
+            raise ValueError("Agent requires a proxy agent to get infos")
         # Local info derivation
         # May use proxy to retrieve local states via proxy.get_local_state(self.agent_id)
         local_state = proxy.get_local_state(self.agent_id, self.protocol)
@@ -236,8 +270,16 @@ class Agent(ABC):
     # terminateds related functions
     # ============================================
     def get_terminateds(self, proxy: "ProxyAgent") -> Dict[AgentID, bool]:
+        """Collect termination flags for this agent and all subordinates.
+
+        Args:
+            proxy: ProxyAgent for state retrieval
+
+        Returns:
+            Dict mapping agent IDs to termination booleans
+        """
         if not proxy:
-            raise ValueError("System Agent requires a proxy agent to derive termination state")
+            raise ValueError("Agent requires a proxy agent to derive termination state")
         # May need to use env fields to decide
         # TODO: pass in the env field elegantly
         # e.g. done = (self._t % self.max_episode_steps) == 0
@@ -256,9 +298,17 @@ class Agent(ABC):
     # ============================================
     # truncateds related functions
     # ============================================
-    def get_truncateds(self, proxy: "ProxyAgent") -> Dict[AgentID, float]:
+    def get_truncateds(self, proxy: "ProxyAgent") -> Dict[AgentID, bool]:
+        """Collect truncation flags for this agent and all subordinates.
+
+        Args:
+            proxy: ProxyAgent for state retrieval
+
+        Returns:
+            Dict mapping agent IDs to truncation booleans
+        """
         if not proxy:
-            raise ValueError("System Agent requires a proxy agent to derive truncated states")
+            raise ValueError("Agent requires a proxy agent to derive truncated states")
         # May need to use env fields to decide
         # TODO: pass in the env field elegantly
         # e.g. done = (self._t % self.max_episode_steps) == 0
@@ -319,7 +369,7 @@ class Agent(ABC):
         else:
             # Only warn for field agents (level 1) - higher-level agents don't need policies in CTDE
             if self.level == 1:
-                print(f"No action built for ({self}) becase there's no upstream action and no action policy")
+                print(f"No action built for ({self}) because there's no upstream action and no action policy")
 
         self.apply_action()
         if not self.state:

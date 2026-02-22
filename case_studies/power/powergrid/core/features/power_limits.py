@@ -370,13 +370,19 @@ class PowerLimits(FeatureProvider):
             self,
             P_MW: Optional[float] = None,
             Q_MVAr: Optional[float] = None,
-        ) -> Tuple[float, float]:
-        """
-        Project (P, Q) into the feasible set using a simple, deterministic strategy:
+        ) -> Tuple[Optional[float], Optional[float]]:
+        """Project (P, Q) into the feasible set using a simple, deterministic strategy.
 
         1) Clip P to [p_min_MW, p_max_MW] if given.
         2) Compute effective Q bounds at this P (S circle + PF wedge + static Q bounds).
         3) Clip Q to [qmin_eff, qmax_eff] if those bounds are present.
+
+        Args:
+            P_MW: Active power in MW (None to skip P clipping, returns None)
+            Q_MVAr: Reactive power in MVAr (None to skip Q clipping, returns None)
+
+        Returns:
+            Tuple of (clipped_P_MW, clipped_Q_MVAr). Returns None for any input that was None.
         """
         P = P_MW if P_MW is not None else 0.0
         Q = Q_MVAr if Q_MVAr is not None else 0.0

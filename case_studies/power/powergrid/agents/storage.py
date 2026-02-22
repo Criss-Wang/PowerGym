@@ -1,4 +1,4 @@
-"""Energy Storage System agent following grid_age style.
+"""Energy Storage System agent following grid_agent style.
 
 This module implements an ESS agent with:
 - Direct constructor parameters (no config dataclass)
@@ -26,7 +26,7 @@ from powergrid.utils.phase import PhaseModel, PhaseSpec, check_phase_model_consi
 
 
 class ESS(DeviceAgent):
-    """Energy Storage System following grid_age agent style.
+    """Energy Storage System following grid_agent style.
 
     Controls a battery storage unit with:
     - Active power control (charge/discharge)

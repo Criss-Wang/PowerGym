@@ -11,6 +11,7 @@ class Observation:
     timestamp: float = 0.0
 
     def vector(self) -> np.ndarray:
+        """Flatten both local and global info into a single float32 array."""
         parts: list = []
 
         # Flatten local state
@@ -24,6 +25,7 @@ class Observation:
         return np.concatenate(parts).astype(np.float32)
 
     def local_vector(self) -> np.ndarray:
+        """Flatten only the local observation dict into a float32 array."""
         parts: list = []
         self._flatten_dict_to_list(self.local, parts)
 
@@ -32,6 +34,7 @@ class Observation:
         return np.concatenate(parts).astype(np.float32)
 
     def global_vector(self) -> np.ndarray:
+        """Flatten only the global info dict into a float32 array."""
         parts: list = []
         self._flatten_dict_to_list(self.global_info, parts)
 

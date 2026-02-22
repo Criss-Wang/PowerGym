@@ -58,6 +58,7 @@ class CoordinatorAgent(Agent):
         )
 
     def init_state(self, features: List[FeatureProvider] = []) -> State:
+        """Initialize a CoordinatorAgentState from the provided features."""
         return CoordinatorAgentState(
             owner_id=self.agent_id,
             owner_level=COORDINATOR_LEVEL,
@@ -65,6 +66,7 @@ class CoordinatorAgent(Agent):
         )
 
     def init_action(self, features: List[FeatureProvider] = []) -> Action:
+        """Initialize an empty Action (coordinators delegate actions to subordinates)."""
         return Action()
 
     def set_state(self, *args, **kwargs) -> None:
@@ -92,7 +94,7 @@ class CoordinatorAgent(Agent):
         """
         super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
 
-        # Schedule subordinate ticks -> intiate action process
+        # Schedule subordinate ticks -> initiate action process
         for subordinate_id in self.subordinates:
             scheduler.schedule_agent_tick(subordinate_id)
         

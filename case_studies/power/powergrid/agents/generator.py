@@ -1,4 +1,4 @@
-"""Dispatchable Generator agent following grid_age style.
+"""Dispatchable Generator agent following grid_agent style.
 
 This module implements a generator agent with:
 - Direct constructor parameters (no config dataclass)
@@ -27,7 +27,7 @@ from powergrid.utils.phase import PhaseModel, PhaseSpec, check_phase_model_consi
 
 
 class Generator(DeviceAgent):
-    """Dispatchable Generator following grid_age agent style.
+    """Dispatchable Generator following grid_agent style.
 
     Controls a generator with:
     - Active power control (P)

@@ -60,6 +60,7 @@ class SystemAgent(Agent):
         )
 
     def init_state(self, features: List[FeatureProvider] = []) -> State:
+        """Initialize a SystemAgentState from the provided features."""
         return SystemAgentState(
             owner_id=self.agent_id,
             owner_level=SYSTEM_LEVEL,
@@ -67,6 +68,7 @@ class SystemAgent(Agent):
         )
 
     def init_action(self, features: List[FeatureProvider] = []) -> Action:
+        """Initialize an empty Action (system agent manages simulation, not direct actions)."""
         return Action()
 
     
@@ -133,7 +135,7 @@ class SystemAgent(Agent):
     ) -> None:
         """
         Action phase - equivalent to `self.act`
-        - Initiate tick for suborindates
+        - Initiate tick for subordinates
         - Initiate self
         - Schedule for simulation
 

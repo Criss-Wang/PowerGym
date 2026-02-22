@@ -1,6 +1,6 @@
 """Hierarchical multi-agent power grid environment.
 
-This module implements a hierarchical microgrid environment following the grid_age style:
+This module implements a hierarchical microgrid environment following the grid_agent style:
 - SystemAgent -> PowerGridAgents -> DeviceAgents (Generator, ESS, Transformer)
 
 Each device is its own field agent, and microgrids are coordinator agents.
