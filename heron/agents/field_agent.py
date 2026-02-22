@@ -21,6 +21,8 @@ from heron.agents.constants import (
     PROXY_AGENT_ID,
     DEFAULT_FIELD_TICK_INTERVAL,
     MSG_GET_INFO,
+    MSG_SET_STATE,
+    STATE_TYPE_LOCAL,
     MSG_SET_STATE_COMPLETION,
     MSG_SET_TICK_RESULT,
     INFO_TYPE_OBS,
@@ -175,32 +177,24 @@ class FieldAgent(Agent):
         """
         Action phase - equivalent to `self.act`
 
-        Note: 
+        Note:
         - FieldAgent ticks only upon CoordinatorAgent.tick (see heron/agents/coordinator_agent.py)
         - Upstream actions checked in base.Agent.tick() via _check_for_upstream_action()
+
+        Always requests obs from proxy first for state sync. If an upstream
+        action was received (stored in self._upstream_action by super().tick()),
+        it is applied after state sync in the get_obs_response handler.
         """
         super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
 
-        # If we received an upstream action (from coordinator), apply it
-        if self._upstream_action is not None:
-            self.set_action(self._upstream_action)
-            self._upstream_action = None  # Clear after use
-            # Schedule action effect
-            scheduler.schedule_action_effect(
-                agent_id=self.agent_id,
-                delay=self._tick_config.act_delay,
-            )
-        elif self.policy:
-            # Compute & execute self action
-            # Ask proxy_agent for global state to compute local action
-            scheduler.schedule_message_delivery(
-                sender_id=self.agent_id,
-                recipient_id=PROXY_AGENT_ID,
-                message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
-                delay=self._tick_config.msg_delay,
-            )
-        else:
-            print(f"{self} doesn't act itself, because there's no action policy")
+        # Always request obs from proxy first for state sync.
+        # Upstream action (if any) will be applied after sync in get_obs_response handler.
+        scheduler.schedule_message_delivery(
+            sender_id=self.agent_id,
+            recipient_id=PROXY_AGENT_ID,
+            message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
+            delay=self._tick_config.msg_delay,
+        )
     
     # ============================================
     # Custom Handlers for Event-Driven Execution
@@ -215,7 +209,7 @@ class FieldAgent(Agent):
         scheduler.schedule_message_delivery(
             sender_id=self.agent_id,
             recipient_id=PROXY_AGENT_ID,
-            message={"set_state": "local", "body": self.state.to_dict(include_metadata=True)},
+            message={MSG_SET_STATE: STATE_TYPE_LOCAL, "body": self.state.to_dict(include_metadata=True)},
             delay=self._tick_config.msg_delay,
         )
 
@@ -242,7 +236,6 @@ class FieldAgent(Agent):
             # Sync state first (proxy gives both obs & state)
             self.sync_state_from_observed(local_state)
 
-            # Compute action - policy decides which parts of observation to use
             self.compute_action(obs, scheduler)
         elif "get_local_state_response" in message_content:
             response_data = message_content["get_local_state_response"]
@@ -262,18 +255,16 @@ class FieldAgent(Agent):
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
                 message={MSG_SET_TICK_RESULT: INFO_TYPE_LOCAL_STATE, MSG_KEY_BODY: tick_result},
-                delay=self._tick_config.msg_delay,
             )
-
         elif MSG_SET_STATE_COMPLETION in message_content:
             if message_content[MSG_SET_STATE_COMPLETION] != "success":
-                raise ValueError(f"State update failed in proxy, cannot proceed with reward computation")
+                raise ValueError(f"State update failed in proxy, cannot proceed")
 
+            # We don't need reward delays for field agents
             scheduler.schedule_message_delivery(
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
                 message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
-                delay=self._tick_config.msg_delay,
             )
         else:
             raise NotImplementedError

@@ -19,7 +19,7 @@ from heron.core.policies import Policy
 from heron.core.state import State
 from heron.core.action import Action
 from heron.protocols.base import Protocol
-from heron.agents.constants import PROXY_AGENT_ID, FIELD_LEVEL
+from heron.agents.constants import PROXY_AGENT_ID, FIELD_LEVEL, EMPTY_REWARD
 
 
 class Agent(ABC):
@@ -233,8 +233,8 @@ class Agent(ABC):
         return rewards
     
     def compute_local_reward(self, local_state: dict) -> float:
-        # Default implementation returns 0 reward. Override in subclasses for custom reward logic.
-        return 0.0
+        # Default implementation returns empty reward. Override in subclasses for custom reward logic.
+        return EMPTY_REWARD
 
     # ============================================
     # Info related functions

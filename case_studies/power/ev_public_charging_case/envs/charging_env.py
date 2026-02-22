@@ -179,9 +179,11 @@ class ChargingEnv(MultiAgentEnv):
                 ss.price_sensitivity = float(np.random.uniform(0.2, 0.8))
                 ss.arrival_time = env_state.time_s
 
-        # 3. Charging physics — update SOC for occupied slots
-        # p_kw was already set by each slot's apply_action() (price-responsive).
-        # The simulation trusts the slot's power setpoint and computes energy/SOC.
+        # 3. Charging physics — compute p_kw from price + occupancy, update SOC
+        # The simulation is the single source of truth for slot state. It reads
+        # the station price and each slot's price_sensitivity to decide p_kw.
+        # This avoids relying on agent-side apply_action() which may have stale
+        # internal state in event-driven mode.
         for slot_id, ss in env_state.slot_states.items():
             ss.revenue = 0.0
             if ss.occupied == 0:
@@ -191,9 +193,13 @@ class ChargingEnv(MultiAgentEnv):
             station_id = env_state.slot_to_station.get(slot_id)
             price = env_state.station_prices.get(station_id, 0.25)
 
-            p_charge = min(ss.p_kw, ss.p_max_kw)
-            ss.p_kw = p_charge
-            energy_kwh = p_charge * self.dt / 3600.0
+            # Price-responsive charging: charge at max if price is viable for EV
+            if price < ss.price_sensitivity * 1.2:
+                ss.p_kw = ss.p_max_kw
+            else:
+                ss.p_kw = 0.0
+
+            energy_kwh = ss.p_kw * self.dt / 3600.0
 
             if energy_kwh > 0 and ss.soc < ss.soc_target:
                 battery_kwh = 75.0

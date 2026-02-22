@@ -9,11 +9,13 @@ from typing import Any, List, Optional
 
 import numpy as np
 
+from heron.agents.base import Agent
 from heron.agents.field_agent import FieldAgent
 from heron.core.action import Action
 from heron.core.feature import FeatureProvider
 from heron.core.policies import Policy
 from heron.protocols.base import Protocol
+from heron.scheduling.scheduler import Event, EventScheduler
 from heron.scheduling.tick_config import TickConfig
 from heron.utils.typing import AgentID
 
@@ -95,26 +97,27 @@ class ChargingSlot(FieldAgent):
             self.state.update_feature("EVSlotFeature", price_sensitivity=kwargs['price_sensitivity'])
 
     def apply_action(self) -> None:
-        """Determine charging power from broadcast price + local EV state.
+        """No-op in event-driven mode. All state handled by run_simulation().
 
-        The coordinator broadcasts its price to all slots. Each slot autonomously
-        decides its power setpoint based on whether it's occupied and whether the
-        price is acceptable to its EV's price sensitivity.
+        In event-driven mode, the agent's internal EVSlotFeature is stale (not
+        synced with simulation results). Sending stale state to the proxy would
+        overwrite simulation-updated data. Instead, the simulation reads the
+        station price directly and computes p_kw from price + occupancy.
+
+        In synchronous mode (training), run_simulation() is called after
+        apply_action() and fully recomputes slot states anyway.
         """
-        price = float(self.action.c[0]) if self.action.c.size > 0 else 0.25
+        pass
 
-        ev_feature = self.state.features.get("EVSlotFeature")
-        if ev_feature is None or ev_feature.occupied == 0:
-            self.state.update_feature("ChargerFeature", p_kw=0.0)
-            return
+    @Agent.handler("action_effect")
+    def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
+        """No-op: simulation handles all state updates for charging slots.
 
-        # Price-responsive: charge at max power if price is viable for this EV
-        if price < ev_feature.price_sensitivity * 1.2:
-            p_kw = self._p_max_kw
-        else:
-            p_kw = 0.0
-
-        self.state.update_feature("ChargerFeature", p_kw=p_kw)
+        Skips the default FieldAgent handler (which calls apply_action + sends
+        state to proxy) since apply_action is a no-op and the state would be
+        redundant — simulation fully recomputes slot states.
+        """
+        pass
 
     def compute_local_reward(self, local_state: dict) -> float:
         """Per-slot reward: 0 for empty slots, positive for charging revenue.

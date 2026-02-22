@@ -171,31 +171,21 @@ class CoordinatorAgent(Agent):
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
                 message={MSG_SET_TICK_RESULT: INFO_TYPE_LOCAL_STATE, MSG_KEY_BODY: tick_result},
-                delay=self._tick_config.msg_delay,
             )
         elif MSG_SET_STATE_COMPLETION in message_content:
             if message_content[MSG_SET_STATE_COMPLETION] != "success":
-                raise ValueError(f"State update failed in proxy, cannot proceed with reward computation")
-            # Initiate reward computation after state update by retrieving local states from proxy agent
-
-            # Note: Parent agent will help initiate reward computation for subordinates.
-            # The alternative options is to let proxy agent directly send reward computation message to subordinates,
-            # but we want to keep the logic of "when to compute rewards" in the agent itself for better modularity and
-            # flexibility (e.g. parent agent may choose to delay subordinate reward computation until certain
-            # conditions are met, instead of immediately after state update)
+                raise ValueError(f"State update failed in proxy, cannot proceed")
             for subordinate_id in self.subordinates:
                 scheduler.schedule_message_delivery(
-                    sender_id=subordinate_id,
-                    recipient_id=PROXY_AGENT_ID,
-                    message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
-                    delay=self._tick_config.msg_delay,
+                    sender_id=self.agent_id,
+                    recipient_id=subordinate_id,
+                    message={MSG_SET_STATE_COMPLETION: message_content[MSG_SET_STATE_COMPLETION]},
                 )
-
             scheduler.schedule_message_delivery(
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
                 message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
-                delay=self._tick_config.msg_delay,
+                delay=self._tick_config.reward_delay,
             )
         else:
             raise NotImplementedError

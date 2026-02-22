@@ -96,6 +96,38 @@ class StationCoordinator(CoordinatorAgent):
         return rewards
 
     def compute_local_reward(self, local_state: dict) -> float:
-        """Fallback for event-driven mode where _tick_results is populated."""
+        """Compute station reward by aggregating subordinate slot rewards.
+
+        In event-driven mode, local_state includes 'subordinate_rewards' from
+        proxy (populated by field agents' set_tick_result messages post-simulation).
+        Falls back to feature-based computation if subordinate rewards unavailable
+        (e.g. during synchronous training where _tick_results is not populated).
+
+        Reward = sum of subordinate (ChargingSlot) rewards.
+        """
+        # Use subordinate rewards if available (event-driven mode post-simulation)
         subordinate_rewards = local_state.get("subordinate_rewards", {})
-        return sum(subordinate_rewards.values())
+        if subordinate_rewards:
+            return sum(subordinate_rewards.values())
+
+        # Fallback: compute from own features (synchronous mode or no subordinate rewards yet)
+        csf = local_state.get("ChargingStationFeature")
+        if csf is None:
+            return 0.0
+        # ChargingStationFeature.vector(): [open_norm, price_norm]
+        open_norm = float(csf[0])
+        price_norm = float(csf[1])
+        occupied_fraction = 1.0 - open_norm
+
+        # Denormalize price: price_norm is in [0, 1], actual price in [0, 0.8]
+        price = price_norm * 0.8
+
+        mf = local_state.get("MarketFeature")
+        if mf is not None:
+            # MarketFeature.vector(): [lmp, sin(theta), cos(theta)]
+            lmp = float(mf[0])
+        else:
+            lmp = 0.2
+
+        margin = max(0.0, price - lmp)
+        return occupied_fraction * margin
