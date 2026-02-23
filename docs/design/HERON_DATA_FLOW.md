@@ -614,14 +614,19 @@ t=coord_tick: AGENT_TICK(coordinator_1)
 │   └─> Request obs from proxy
 
 t=field_tick: AGENT_TICK(field_1)
-├─> _check_for_upstream_action() -> consume from broker
-├─> If upstream_action:
-│   ├─> set_action(upstream_action)  # Direct assignment
-│   └─> schedule_action_effect(delay=act_delay)
-├─> Elif has policy:
-│   └─> Request obs from proxy
+├─> _check_for_upstream_action() -> consume from broker (caches in self._upstream_action)
+├─> Always request obs from proxy (for state sync)
+│   └─> schedule_message_delivery(proxy, {get_info: "obs"})
 
-t=field_tick+act_delay: ACTION_EFFECT(field_1)
+t=field_tick+2×msg_delay: MESSAGE_DELIVERY(field_1) - obs response
+├─> sync_state_from_observed(local_state)  # State sync first!
+└─> compute_action(obs, scheduler)
+    ├─> If self._upstream_action: use it (priority!)
+    ├─> Elif has policy: policy.forward(obs)
+    ├─> set_action(action)
+    └─> schedule_action_effect(delay=act_delay)
+
+t=field_tick+2×msg_delay+act_delay: ACTION_EFFECT(field_1)
 ├─> apply_action() -> Update self.state
 └─> schedule message to proxy with serialized state
 ```
@@ -1530,20 +1535,36 @@ CoordinatorAgent.tick(scheduler, current_time)
 FieldAgent.tick(scheduler, current_time)
 │
 ├─> super().tick() -> _check_for_upstream_action()
-│   └─> self._upstream_action = broker.consume(action_channel)[-1]
+│   └─> self._upstream_action = broker.consume(action_channel)[-1]  # Cached!
 │
-├─> If self._upstream_action:
-│   ├─> set_action(upstream_action)   # DIRECT SET (not compute_action!)
-│   ├─> self._upstream_action = None  # Clear after use
-│   └─> schedule_action_effect(delay=act_delay)
+└─> Always request obs from proxy (for state sync):
+    └─> schedule_message_delivery(
+            sender=self.agent_id, recipient=proxy,
+            message={get_info: "obs", protocol: protocol},
+            delay=msg_delay
+        )
+```
+
+#### **t=field_tick+2×msg_delay: MESSAGE_DELIVERY(field_1) - obs response**
+
+```
+FieldAgent.message_delivery_handler() on "get_obs_response"
 │
-├─> Elif has policy:
-│   └─> schedule obs request to proxy
+├─> Parse obs + local_state from response body
+├─> obs = Observation.from_dict(obs_dict)
+├─> sync_state_from_observed(local_state)  # State sync first!
+│
+└─> compute_action(obs, scheduler)
+    ├─> If self._upstream_action: use it (priority!)
+    │   └─> self._upstream_action = None  # Clear after use
+    ├─> Elif has policy: action = policy.forward(obs)
+    ├─> set_action(action)
+    └─> schedule_action_effect(delay=act_delay)
 ```
 
 ---
 
-#### **t=field_tick+act_delay: ACTION_EFFECT(field_1)**
+#### **t=field_tick+2×msg_delay+act_delay: ACTION_EFFECT(field_1)**
 
 ```
 FieldAgent.action_effect_handler()
@@ -1562,39 +1583,68 @@ FieldAgent.action_effect_handler()
 #### **Reward Computation Cascade**
 
 ```
-After state update completion, parent agent initiates reward computation:
+Proxy sends MSG_SET_STATE_COMPLETION back to the SENDER (not parent).
+SystemAgent receives it first and propagates down the hierarchy.
 
-Parent.message_delivery_handler() on MSG_SET_STATE_COMPLETION:
-│
-├─> For each subordinate_id:
-│   └─> schedule_message_delivery(
-│           sender=subordinate_id, recipient=proxy,
-│           message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: protocol}
-│       )
-│
-└─> Also request own local state:
-    └─> schedule_message_delivery(
-            sender=self.agent_id, recipient=proxy,
-            message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: protocol}
-        )
+1. SystemAgent.message_delivery_handler() on MSG_SET_STATE_COMPLETION:
+   │
+   ├─> Propagate completion to each coordinator (subordinate):
+   │   └─> For each subordinate_id:
+   │       └─> schedule_message_delivery(
+   │               sender=self.agent_id, recipient=subordinate_id,
+   │               message={MSG_SET_STATE_COMPLETION: "success"}
+   │           )
+   │
+   └─> Request own local state (with reward_delay to wait for subordinates):
+       └─> schedule_message_delivery(
+               sender=self.agent_id, recipient=proxy,
+               message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: protocol},
+               delay=self._tick_config.reward_delay
+           )
 
-Agent.message_delivery_handler() on "get_local_state_response":
-│
-├─> local_state = response body
-├─> sync_state_from_observed(local_state)  # Sync first!
-│
-├─> tick_result = {
-│       "reward": compute_local_reward(local_state),
-│       "terminated": is_terminated(local_state),
-│       "truncated": is_truncated(local_state),
-│       "info": get_local_info(local_state)
-│   }
-│
-└─> schedule_message_delivery(
-        message={MSG_SET_TICK_RESULT: INFO_TYPE_LOCAL_STATE, MSG_KEY_BODY: tick_result}
-    )
+2. CoordinatorAgent.message_delivery_handler() on MSG_SET_STATE_COMPLETION:
+   │
+   ├─> Propagate completion to each field agent (subordinate):
+   │   └─> For each subordinate_id:
+   │       └─> schedule_message_delivery(
+   │               sender=self.agent_id, recipient=subordinate_id,
+   │               message={MSG_SET_STATE_COMPLETION: "success"}
+   │           )
+   │
+   └─> Request own local state (with reward_delay to wait for field agents):
+       └─> schedule_message_delivery(
+               sender=self.agent_id, recipient=proxy,
+               message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: protocol},
+               delay=self._tick_config.reward_delay
+           )
 
-# SystemAgent: if not terminated/truncated, schedule next tick
+3. FieldAgent.message_delivery_handler() on MSG_SET_STATE_COMPLETION:
+   │
+   └─> Request own local state immediately (no reward_delay):
+       └─> schedule_message_delivery(
+               sender=self.agent_id, recipient=proxy,
+               message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: protocol}
+           )
+
+4. All agents on "get_local_state_response":
+   │
+   ├─> local_state = response body
+   ├─> sync_state_from_observed(local_state)  # Sync first!
+   │
+   ├─> tick_result = {
+   │       "reward": compute_local_reward(local_state),
+   │       "terminated": is_terminated(local_state),
+   │       "truncated": is_truncated(local_state),
+   │       "info": get_local_info(local_state)
+   │   }
+   │
+   └─> schedule_message_delivery(
+           sender=self.agent_id, recipient=proxy,
+           message={MSG_SET_TICK_RESULT: INFO_TYPE_LOCAL_STATE, MSG_KEY_BODY: tick_result}
+       )
+
+# Proxy stores tick_results per agent for retrieval by parent agents
+# SystemAgent: if not terminated/truncated, schedule next system tick
 ```
 
 ---

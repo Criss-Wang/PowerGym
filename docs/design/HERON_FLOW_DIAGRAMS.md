@@ -122,7 +122,7 @@ sequenceDiagram
     Note over SYS,PX: Phase 4: Reward Computation
     loop For each agent
         SYS->>PX: get_local_state(agent_id)
-        PX-->>SYS: filtered vectors + subordinate_rewards
+        PX-->>SYS: filtered feature vectors
         SYS->>SYS: compute_local_reward()
     end
 
@@ -145,9 +145,8 @@ sequenceDiagram
     Note over ES: t=0.0
     ES->>SYS: AGENT_TICK
     SYS->>ES: schedule_agent_tick(coordinator)
-    SYS->>BK: send_subordinate_action(coord, action)
-    SYS->>ES: schedule_simulation(wait_interval)
     SYS->>PX: request obs (msg_delay)
+    SYS->>ES: schedule_simulation(wait_interval)
 
     Note over ES: t=msg_delay
     ES->>PX: MESSAGE_DELIVERY (obs request)
@@ -157,21 +156,32 @@ sequenceDiagram
     Note over ES: t=2×msg_delay
     ES->>SYS: MESSAGE_DELIVERY (obs response)
     SYS->>SYS: sync_state + compute_action
+    SYS->>BK: send_subordinate_action(coord, action)
     SYS->>ES: schedule_action_effect(act_delay)
 
     Note over ES: t=coord_tick
     ES->>COORD: AGENT_TICK
-    COORD->>BK: consume(action_channel) → upstream_action
-    COORD->>COORD: compute_action(upstream_action)
-    COORD->>BK: send_subordinate_action(field, action)
+    COORD->>COORD: _check_for_upstream_action() via broker
+    COORD->>ES: schedule_agent_tick(field agents)
+    alt Has upstream action
+        COORD->>COORD: compute_action(upstream_action)
+        COORD->>BK: send_subordinate_action(field, action)
+    else Has policy (no upstream)
+        COORD->>PX: request obs (msg_delay)
+    end
 
     Note over ES: t=field_tick
     ES->>FA: AGENT_TICK
-    FA->>BK: consume(action_channel) → upstream_action
-    FA->>FA: set_action(upstream) [direct!]
+    FA->>FA: _check_for_upstream_action() via broker
+    FA->>PX: request obs (msg_delay, always for state sync)
+
+    Note over ES: t=field_tick + 2×msg_delay
+    ES->>FA: MESSAGE_DELIVERY (obs response)
+    FA->>FA: sync_state_from_observed(local_state)
+    FA->>FA: compute_action(obs) — uses cached upstream if present
     FA->>ES: schedule_action_effect(act_delay)
 
-    Note over ES: t=field_tick + act_delay
+    Note over ES: t=field_tick + 2×msg_delay + act_delay
     ES->>FA: ACTION_EFFECT
     FA->>FA: apply_action() → update state
     FA->>PX: send state update (msg_delay)
@@ -184,10 +194,13 @@ sequenceDiagram
     SYS->>PX: set_global_state(updated)
 
     Note over ES: State completion triggers reward cascade
-    PX->>COORD: set_state_completion
-    COORD->>PX: request local_states for subordinates
-    PX-->>COORD: filtered local_states
-    COORD->>COORD: compute_local_reward()
+    PX->>SYS: set_state_completion (back to sender)
+    SYS->>COORD: propagate set_state_completion
+    COORD->>FA: propagate set_state_completion
+    FA->>PX: request local_state for reward
+    COORD->>PX: request local_state (after reward_delay)
+    SYS->>PX: request local_state (after reward_delay)
+    Note over FA,SYS: Each agent: sync + compute_local_reward()
 ```
 
 **Novelty:** HERON is the first MARL framework to offer **native dual-mode execution** — synchronous CTDE for training and event-driven for deployment testing — using the same agent hierarchy and protocol system. Existing frameworks (PettingZoo, EPyMARL, MARLlib) only support synchronous `step()`. Event-driven execution cannot be achieved by wrapping; it requires changing the fundamental execution loop.
@@ -318,16 +331,19 @@ flowchart TD
     end
 
     subgraph FieldAgent["FieldAgent (L1)"]
-        F_CHECK["_check_for_upstream_action()"]
-        F_DECIDE{Has upstream<br/>action?}
-        F_DIRECT["set_action(upstream)<br/>DIRECT assignment"]
+        F_CHECK["_check_for_upstream_action()<br/>(caches upstream action)"]
+        F_SYNC["Request obs from proxy<br/>(always, for state sync)"]
+        F_RECV["Receive obs + local_state<br/>sync_state_from_observed()"]
+        F_DECIDE{Has cached<br/>upstream action?}
+        F_USE["Use upstream action<br/>(priority!)"]
         F_OWN["Own policy.forward()"]
+        F_SET["set_action(action)"]
         F_EFFECT["schedule_action_effect(delay)"]
         F_APPLY["apply_action() → update state"]
 
-        F_CHECK --> F_DECIDE
-        F_DECIDE -->|Yes| F_DIRECT --> F_EFFECT --> F_APPLY
-        F_DECIDE -->|No| F_OWN --> F_EFFECT
+        F_CHECK --> F_SYNC --> F_RECV --> F_DECIDE
+        F_DECIDE -->|Yes| F_USE --> F_SET --> F_EFFECT --> F_APPLY
+        F_DECIDE -->|No| F_OWN --> F_SET
     end
 
     S_SEND --> ACH1
@@ -343,7 +359,8 @@ flowchart TD
 ```
 
 **Key design decisions:**
-- **FieldAgent uses direct `set_action()`** — no compute pipeline, just applies the upstream action immediately. This reflects real-world actuators that execute commands without local deliberation.
+- **All agents go through `compute_action()`** in event-driven mode — which always starts by requesting obs from proxy for state sync, then checks for upstream action with priority over local policy.
+- **FieldAgent always syncs state first** — even with an upstream action, it requests obs from proxy for state reconciliation before applying the action via `compute_action()`.
 - **CoordinatorAgent routes through `compute_action()`** — enabling protocol-based decomposition before passing to subordinates.
 - **Upstream actions always have priority** over locally computed policies.
 
@@ -425,10 +442,12 @@ graph TB
         AP["ActionProtocol"]
         NA["NoActionCoordination"]
         VD["VectorDecomposition<br/>Split joint action by<br/>subordinate dimensions"]
+        BA["BroadcastAction<br/>Same action to all<br/>subordinates"]
         CUSTOM_A["Custom: PriceSignal, ..."]
 
         AP --> NA
         AP --> VD
+        AP --> BA
         AP --> CUSTOM_A
     end
 
@@ -475,11 +494,12 @@ graph TB
         ET1["ACTION_EFFECT → priority 0<br/>State changes first"]
         ET2["SIMULATION → priority 1<br/>Physics after actions"]
         ET3["MESSAGE_DELIVERY → priority 2<br/>Communication last"]
-        ET4["AGENT_TICK → default<br/>Periodic triggers"]
+        ET4["AGENT_TICK → default (0)<br/>Periodic triggers"]
+        ET5["OBSERVATION_READY, ENV_UPDATE,<br/>CUSTOM → default (0)"]
     end
 
     subgraph "TickConfig (Per-Agent)"
-        TC["tick_interval: 1.0s<br/>obs_delay: 0.1s<br/>act_delay: 0.2s<br/>msg_delay: 0.05s<br/>jitter: GAUSSIAN, 10%"]
+        TC["tick_interval: 1.0s<br/>obs_delay: 0.1s<br/>act_delay: 0.2s<br/>msg_delay: 0.05s<br/>reward_delay: 0.1s<br/>jitter: GAUSSIAN, 10%"]
     end
 
     subgraph "Ordering: (timestamp, priority, sequence)"
@@ -545,6 +565,7 @@ sequenceDiagram
     participant FA as FieldAgent
     participant PX as ProxyAgent
     participant COORD as CoordinatorAgent
+    participant SYS as SystemAgent
 
     Note over FA: ACTION_EFFECT fires
     FA->>FA: apply_action() → update self.state
@@ -552,24 +573,34 @@ sequenceDiagram
 
     Note over PX: Receives state update
     PX->>PX: State.from_dict() → set_local_state()
-    PX->>COORD: {set_state_completion: "success"}
+    PX->>FA: {set_state_completion: "success"} (back to sender)
 
-    Note over COORD: Parent initiates reward cascade
-    COORD->>PX: get_local_state(field_1, protocol)
-    COORD->>PX: get_local_state(field_2, protocol)
+    Note over SYS: SystemAgent also receives<br/>set_state_completion for global state
+    SYS->>COORD: propagate {set_state_completion: "success"}
+    COORD->>FA: propagate {set_state_completion: "success"}
+
+    Note over FA: FieldAgent requests own local state
+    FA->>PX: get_local_state(field_1, protocol)
+    PX-->>FA: field_1 local_state (filtered)
+    FA->>FA: sync_state + compute_local_reward()
+    FA->>PX: {set_tick_result: {reward: 0.3, ...}}
+
+    Note over COORD: Coordinator waits (reward_delay)<br/>then requests own local state
     COORD->>PX: get_local_state(coord_1, protocol)
-
-    PX-->>COORD: field_1 local_state (filtered)
-    PX-->>COORD: field_2 local_state (filtered)
     PX-->>COORD: coord_1 local_state (filtered + sub_rewards)
+    COORD->>COORD: sync_state + compute_local_reward()
+    COORD->>PX: {set_tick_result: {reward: 0.5, ...}}
 
-    COORD->>COORD: For each subordinate:<br/>sync_state + compute_local_reward()
-    COORD->>PX: {set_tick_result: {reward: 0.5, terminated: false, ...}}
+    Note over SYS: SystemAgent waits (reward_delay)<br/>then computes own reward
+    SYS->>PX: get_local_state(system, protocol)
+    PX-->>SYS: system local_state (filtered + sub_rewards)
+    SYS->>SYS: sync_state + compute_local_reward()
+    SYS->>PX: {set_tick_result: {reward: 0.8, ...}}
 
-    Note over COORD: If not terminated → schedule next tick
+    Note over SYS: If not terminated → schedule next tick
 ```
 
-**Novelty:** The parent-initiated reward cascade reflects real CPS patterns where supervisory systems (SCADA, traffic management centers) aggregate status from subordinate devices before making decisions. This naturally produces hierarchical credit assignment.
+**Novelty:** The hierarchical reward cascade propagates `set_state_completion` top-down through the hierarchy. Each agent independently requests its local state and computes rewards. Parent agents use `reward_delay` to wait for subordinate rewards before computing their own, enabling hierarchical credit assignment. This reflects real CPS patterns where supervisory systems (SCADA, traffic management centers) aggregate status from subordinate devices before making decisions.
 
 ---
 
@@ -642,6 +673,8 @@ graph TB
         MT2["INFO: Observation requests/responses"]
         MT3["BROADCAST: Multi-recipient"]
         MT4["STATE_UPDATE: State sync"]
+        MT5["RESULT: Generic result message"]
+        MT6["CUSTOM: Domain-specific types"]
     end
 
     style SYS fill:#e74c3c,color:#fff
