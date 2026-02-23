@@ -15,10 +15,10 @@ from typing import Dict, List, Optional, Tuple, Any
 import gymnasium as gym
 import numpy as np
 
-from heron.envs.base import HeronEnvCore, AgentID
-from heron.messaging.base import MessageBroker
+from heron.envs.base import EnvCore
+from heron.agents.base import Agent
+from heron.utils.typing import AgentID
 
-# PettingZoo is an optional dependency
 try:
     from pettingzoo import ParallelEnv  # type: ignore
 
@@ -39,29 +39,25 @@ except Exception:  # pragma: no cover
     RAY_MAJOR_VERSION = 0
 
 
-class PettingZooParallelEnv(ParallelEnv):  # type: ignore[misc]
+class PettingZooParallelEnv(ParallelEnv, EnvCore):  # type: ignore[misc]
     """
-    HERON -> PettingZoo ParallelEnv adapter (composition-based).
+    HERON -> PettingZoo ParallelEnv adapter.
 
     **Compatibility:** Ray 2.40+ / 3.0 with PettingZoo 1.24+
 
     Key design choices:
-    - Composition (self.core) instead of multi-inheritance to avoid MRO problems
-    - HERON core lifecycle kept separate from PettingZoo lifecycle
+    - Multi-inheritance from ParallelEnv and EnvCore
     - Agent space management via dict-based `observation_spaces` and `action_spaces`
     - Method-based space accessors (`observation_space(agent)`, `action_space(agent)`)
       for Ray 2.40+ / 3.0 RLlib wrapper compatibility
 
     Ray 2.40+ / 3.0 Changes Addressed:
-    - Removed duplicate space method definitions
-    - Added dynamic space initialization with proper error handling
     - Ensured reset() returns (Dict[obs], Dict[info]) per Parallel API
     - Ensured step() returns (obs, rewards, terminations, truncations, infos)
     - Agent list management compatible with Ray's `ParallelPettingZooEnv` wrapper
 
     This adapter is intentionally minimal and test-driven:
     - Provides `_set_agent_ids()` and `_init_spaces()` aliases (backward compat)
-    - Delegates HERON core methods via __getattr__
     - Implements PettingZoo Parallel API: reset() and step()
     """
 
@@ -73,7 +69,7 @@ class PettingZooParallelEnv(ParallelEnv):  # type: ignore[misc]
     def __init__(
         self,
         env_id: Optional[str] = None,
-        message_broker: Optional[MessageBroker] = None,
+        message_broker_config: Optional[Dict[str, Any]] = None,
     ):
         if ParallelEnv is None:  # pragma: no cover
             raise ImportError(
@@ -84,9 +80,14 @@ class PettingZooParallelEnv(ParallelEnv):  # type: ignore[misc]
         # Init PettingZoo base
         ParallelEnv.__init__(self)
 
-        # Create & init HERON core (mixin-style core; must call _init_heron_core)
-        self.core = HeronEnvCore()
-        self.core._init_heron_core(env_id=env_id, message_broker=message_broker)
+        # Init HERON core with no coordinator agents initially (agents registered via register_agent)
+        # Pass empty list to avoid creating issues with None iteration
+        EnvCore.__init__(
+            self,
+            env_id=env_id,
+            message_broker_config=message_broker_config,
+            coordinator_agents=[]
+        )
 
         # PettingZoo required fields
         self.possible_agents: List[AgentID] = []
@@ -96,14 +97,19 @@ class PettingZooParallelEnv(ParallelEnv):  # type: ignore[misc]
         self.observation_spaces: Dict[AgentID, gym.Space] = {}
         self.action_spaces: Dict[AgentID, gym.Space] = {}
 
+
     # ----------------------------
-    # Delegation to HERON core
+    # Agent Management (public API)
     # ----------------------------
-    def __getattr__(self, name: str):
-        """Delegate missing attributes/methods to HERON core."""
-        if name == "core":
-            raise AttributeError
-        return getattr(self.core, name)
+    def register_agent(self, agent: 'Agent') -> None:
+        """Register an agent with the environment.
+
+        This is a public wrapper around the internal _register_agent method.
+
+        Args:
+            agent: Agent instance to register
+        """
+        self._register_agent(agent)
 
     # ----------------------------
     # Compatibility aliases (tests expect these)
@@ -168,9 +174,16 @@ class PettingZooParallelEnv(ParallelEnv):  # type: ignore[misc]
         If None, tries to infer from registered HERON agents.
         """
         if observation_spaces is None:
-            observation_spaces = self.core.get_agent_observation_spaces()
+            observation_spaces = {}
+            for agent_id, agent in self.registered_agents.items():
+                if hasattr(agent, 'observation_space'):
+                    observation_spaces[agent_id] = agent.observation_space
+
         if action_spaces is None:
-            action_spaces = self.core.get_agent_action_spaces()
+            action_spaces = {}
+            for agent_id, agent in self.registered_agents.items():
+                if hasattr(agent, 'action_space'):
+                    action_spaces[agent_id] = agent.action_space
 
         self.observation_spaces = dict(observation_spaces)
         self.action_spaces = dict(action_spaces)
@@ -228,12 +241,17 @@ class PettingZooParallelEnv(ParallelEnv):  # type: ignore[misc]
         # PettingZoo convention: reset re-activates current agents
         self.agents = list(self.possible_agents)
 
-        # HERON: reset agent timesteps and wire message broker info
-        self.core.reset_agents()
-        self.core.configure_agents_for_distributed()
+        # HERON: reset via EnvCore.reset()
+        obs, _ = super().reset(seed=seed, options=options or {})
 
-        observations = self.core.get_observations()
-        obs_dict = {aid: self._to_np_obs(observations[aid].local) for aid in observations}
+        obs_dict = {}
+        for aid in self.agents:
+            if aid in obs:
+                obs_dict[aid] = self._to_np_obs(obs[aid].local)
+            else:
+                # Default: empty observation if not found
+                obs_dict[aid] = np.array([], dtype=np.float32)
+
         infos = {aid: {} for aid in self.agents}
         return obs_dict, infos
 
@@ -262,23 +280,22 @@ class PettingZooParallelEnv(ParallelEnv):  # type: ignore[misc]
           truncations: dict[agent_id] -> bool (time limit reached)
           infos: dict[agent_id] -> dict (metadata)
         """
-        # HERON: apply actions to agents
-        self.core.apply_actions(actions)
+        # HERON: execute step
+        observations, rewards, terminated, truncated, infos = super().step(actions)
 
-        # HERON: collect new observations
-        observations = self.core.get_observations()
-        obs_dict = {aid: self._to_np_obs(observations[aid].local) for aid in observations}
+        # Convert HERON observations to numpy arrays
+        obs_dict = {}
+        for aid in self.agents:
+            if aid in observations:
+                obs_dict[aid] = self._to_np_obs(observations[aid].local)
+            else:
+                obs_dict[aid] = np.array([], dtype=np.float32)
 
-        # Minimal default RL signals (tests only check contract; env author can override)
-        rewards = {aid: 0.0 for aid in self.agents}
-        terminations = {aid: False for aid in self.agents}
-        truncations = {aid: False for aid in self.agents}
-        infos = {aid: {} for aid in self.agents}
+        return obs_dict, rewards, terminated, truncated, infos
 
-        return obs_dict, rewards, terminations, truncations, infos
 
     def render(self):
         return None
 
     def close(self):
-        self.core.close_heron()
+        self.close_core()

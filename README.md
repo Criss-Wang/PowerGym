@@ -19,7 +19,7 @@ A **domain-agnostic Multi-Agent Reinforcement Learning (MARL) framework** for hi
 
 ```
                     ┌─────────────────┐
-         L3        │   SystemAgent    │        System-wide coordination
+         L3         │   SystemAgent   │        System-wide coordination
                     └────────┬────────┘
                              │
             ┌────────────────┼────────────────┐
