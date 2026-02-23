@@ -282,3 +282,55 @@ class MultiAgentEnv(EnvCore):
     def close(self) -> None:
         """Clean up environment resources."""
         self.close_core()
+
+    def as_epymarl(
+        self,
+        n_discrete: int = 11,
+        max_steps: int = 50,
+        common_reward: bool = True,
+        reward_scalarisation: str = "sum",
+        seed: int = 0,
+    ) -> "HeronEPyMARLAdapter":
+        """Wrap this env for EPyMARL training.
+
+        Returns a ``HeronEPyMARLAdapter`` that captures *self* in a closure
+        factory so no pickling is needed for the episode runner.
+        """
+        from heron.adaptors.epymarl import HeronEPyMARLAdapter
+
+        # Capture self in a factory closure
+        env_ref = self
+
+        def _creator(_cfg: dict) -> "MultiAgentEnv":
+            return env_ref
+
+        return HeronEPyMARLAdapter(
+            env_creator=_creator,
+            n_discrete=n_discrete,
+            max_steps=max_steps,
+            common_reward=common_reward,
+            reward_scalarisation=reward_scalarisation,
+            seed=seed,
+        )
+
+    def as_rllib(
+        self,
+        max_steps: int = 50,
+        discrete_actions: Optional[int] = None,
+    ) -> "RLlibAdapter":
+        """Wrap this env for RLlib training.
+
+        Returns an ``RLlibAdapter`` configured from this env instance.
+        """
+        from heron.adaptors.rllib import RLlibAdapter
+
+        env_ref = self
+
+        def _creator(_cfg: dict) -> "MultiAgentEnv":
+            return env_ref
+
+        return RLlibAdapter(config={
+            "env_creator": _creator,
+            "max_steps": max_steps,
+            "discrete_actions": discrete_actions,
+        })
