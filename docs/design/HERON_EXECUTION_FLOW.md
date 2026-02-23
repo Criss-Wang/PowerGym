@@ -181,16 +181,22 @@ def compute_action(self, obs, scheduler):
 ┌─────────────────────────────────────────────────────────────────┐
 │ FieldAgent.tick()                                               │
 │ ┌─────────────────────────────────────────────────────────────┐ │
-│ │ # Upstream check happens in base.tick() via                 │ │
-│ │ # _check_for_upstream_action()                              │ │
+│ │ # base.tick() calls _check_for_upstream_action()            │ │
+│ │ # which caches upstream action in self._upstream_action     │ │
 │ └─────────────────────────────────────────────────────────────┘ │
 │                                                                 │
-│ If self._upstream_action:                                       │
-│     set_action(upstream_action)       # Direct assignment!      │
-│     self._upstream_action = None      # Clear after use         │
-│     schedule_action_effect(delay)     # Delayed execution       │
-│ Elif has policy:                                                │
-│     schedule obs request to proxy     # Async via messages      │
+│ # ALWAYS request obs from proxy first (for state sync)          │
+│ schedule_message_delivery(                                      │
+│     sender=self, recipient=proxy,                               │
+│     message={MSG_GET_INFO: INFO_TYPE_OBS, protocol}             │
+│ )                                                               │
+│                                                                 │
+│ # In message_delivery_handler on get_obs_response:              │
+│ #   parse obs + local_state from proxy response                 │
+│ #   sync_state_from_observed(local_state)                       │
+│ #   compute_action(obs, scheduler)                              │
+│ #     -> uses self._upstream_action if present (priority)       │
+│ #     -> else uses policy to select action                      │
 └─────────────────────────────────────────────────────────────────┘
 ```
 

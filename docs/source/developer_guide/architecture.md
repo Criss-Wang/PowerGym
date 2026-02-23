@@ -9,33 +9,45 @@ heron/                          # Domain-agnostic MARL framework
 ├── agents/                     # Hierarchical agent abstractions
 │   ├── base.py                 # Agent base class with level property
 │   ├── field_agent.py          # Leaf-level agents (local sensing/actuation)
-│   ├── coordinator_agent.py    # Mid-level agents (manages child agents)
-│   ├── system_agent.py         # Top-level agents (global coordination)
-│   └── proxy_agent.py          # Proxy agent for distributed execution
+│   ├── coordinator_agent.py    # Mid-level agents (manages subordinate agents)
+│   ├── system_agent.py         # Top-level agent (global coordination)
+│   ├── proxy_agent.py          # Singleton state mediation hub
+│   └── constants.py            # SYSTEM_AGENT_ID, PROXY_AGENT_ID constants
 │
 ├── core/                       # Core abstractions
 │   ├── action.py               # Action with continuous/discrete support
 │   ├── observation.py          # Observation with local/global/messages
 │   ├── state.py                # State with FeatureProvider composition
-│   ├── feature.py              # FeatureProvider with visibility tags
+│   ├── feature.py              # FeatureProvider with visibility tags + registry
 │   └── policies.py             # Policy abstractions (random, rule-based)
 │
 ├── protocols/                  # Coordination protocols
-│   ├── base.py                 # Protocol, CommunicationProtocol interfaces
-│   ├── vertical.py             # SetpointProtocol, PriceSignalProtocol
-│   └── horizontal.py           # P2PTradingProtocol, ConsensusProtocol
+│   ├── base.py                 # Protocol, CommunicationProtocol, ActionProtocol
+│   ├── vertical.py             # VectorDecompositionActionProtocol, BroadcastActionProtocol
+│   └── horizontal.py           # StateShareCommunicationProtocol
 │
 ├── messaging/                  # Message broker system
-│   ├── base.py                 # MessageBroker interface, ChannelManager
-│   └── memory.py               # InMemoryBroker implementation
+│   ├── broker_base.py          # MessageBroker abstract interface
+│   ├── in_memory_broker.py     # InMemoryBroker implementation
+│   ├── channels.py             # ChannelManager for routing
+│   └── messages.py             # Message dataclass, MessageType enum
+│
+├── scheduling/                 # Event-driven scheduling
+│   ├── scheduler.py            # EventScheduler (heap-based priority queue)
+│   ├── event.py                # Event dataclass, EventType enum
+│   ├── tick_config.py          # TickConfig (intervals, delays, jitter)
+│   └── analysis.py             # EventAnalyzer, EpisodeResult
 │
 ├── envs/                       # Base environment interfaces
-│   └── base.py                 # Abstract environment classes
+│   └── base.py                 # EnvCore, MultiAgentEnv (extends EnvCore)
+│
+├── adaptors/                   # RL framework adaptors
+│   ├── epymarl.py              # EPyMARL integration
+│   └── rllib.py                # RLlib integration
 │
 └── utils/                      # Common utilities
-    ├── typing.py               # Type definitions
-    ├── array_utils.py          # Array manipulation utilities
-    └── registry.py             # Feature registry
+    ├── typing.py               # Type definitions (AgentID, MultiAgentDict)
+    └── array_utils.py          # Array manipulation utilities
 ```
 
 ## Design Principles
@@ -52,117 +64,140 @@ Level 3: SystemAgent (global coordination)
 
 Each level has distinct responsibilities:
 - **FieldAgent**: Local sensing, actuation, state management
-- **CoordinatorAgent**: Manages subordinate agents, aggregates observations
-- **SystemAgent**: Global objectives, price signals, system constraints
+- **CoordinatorAgent**: Manages subordinate field agents, aggregates observations
+- **SystemAgent**: Global objectives, system constraints, simulation orchestration
 
 ### 2. Feature-Based State
 
-Composable `FeatureProvider` with visibility tags:
+Composable `FeatureProvider` using metaclass auto-registration:
 
 ```python
-class FeatureProvider(ABC):
-    def __init__(self, visibility: list[str]):
-        self.visibility = visibility
+class FeatureProvider(metaclass=FeatureMeta):
+    """Base class for feature providers.
 
-    @abstractmethod
+    Subclasses should:
+    1. Use @dataclass(slots=True) decorator
+    2. Define visibility as ClassVar[Sequence[str]]
+    """
+    visibility: ClassVar[Sequence[str]]
+
     def vector(self) -> np.ndarray:
-        """Return feature as numpy array."""
-        pass
+        """Return all field values as a flat float32 numpy array."""
+        ...
 
-    @abstractmethod
-    def dim(self) -> int:
-        """Return feature dimension."""
-        pass
+    def names(self) -> list[str]:
+        """Return the names of all dataclass fields."""
+        ...
 ```
+
+Visibility levels: `"public"`, `"owner"`, `"upper_level"`, `"system"`
 
 ### 3. Protocol-Driven Coordination
 
-Protocols define coordination patterns:
-
-- **Vertical**: Top-down control (setpoints, prices)
-- **Horizontal**: Peer coordination (trading, consensus)
+Protocols are composed of two components:
+- **CommunicationProtocol**: Defines WHAT to communicate
+- **ActionProtocol**: Defines HOW to coordinate actions
 
 ```python
 class Protocol(ABC):
-    @abstractmethod
-    def execute(self, agents: list[Agent]) -> dict:
-        """Execute coordination logic."""
-        pass
+    def __init__(
+        self,
+        communication_protocol: Optional[CommunicationProtocol] = None,
+        action_protocol: Optional[ActionProtocol] = None
+    ):
+        ...
+
+    def coordinate(
+        self,
+        coordinator_state: Any,
+        coordinator_action: Optional[Any] = None,
+        info_for_subordinates: Optional[Dict[AgentID, Any]] = None,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Tuple[Dict[AgentID, Dict[str, Any]], Dict[AgentID, Any]]:
+        """Execute full coordination cycle (communication + action)."""
+        ...
 ```
+
+Built-in protocols:
+- **Vertical**: `VectorDecompositionActionProtocol`, `BroadcastActionProtocol`
+- **Horizontal**: `StateShareCommunicationProtocol`
 
 ### 4. Message Broker Abstraction
 
-Decoupled communication via `MessageBroker`:
+Synchronous pub/sub communication via `MessageBroker`:
 
 ```python
 class MessageBroker(ABC):
-    @abstractmethod
-    async def publish(self, channel: str, message: dict) -> None:
-        pass
+    def publish(self, channel: str, message: Message) -> None:
+        ...
 
-    @abstractmethod
-    async def consume(self, channel: str) -> dict:
-        pass
+    def consume(
+        self,
+        channel: str,
+        recipient_id: str,
+        env_id: str,
+        clear: bool = True
+    ) -> List[Message]:
+        ...
 
-    @abstractmethod
-    def create_channel(self, channel: str) -> None:
-        pass
+    def create_channel(self, channel_name: str) -> None:
+        ...
 ```
 
 ## Data Flow
 
-### Centralized Mode
+### Centralized Mode (CTDE Training)
 
 ```
-┌──────────────────────────────────────────┐
-│              Environment                  │
-│  ┌────────────────────────────────────┐  │
-│  │         Global State               │  │
-│  └────────────────────────────────────┘  │
-│         │              │              │   │
-│         ▼              ▼              ▼   │
-│    ┌─────────┐    ┌─────────┐    ┌─────────┐
-│    │ Agent 1 │    │ Agent 2 │    │ Agent 3 │
-│    │ observe │    │ observe │    │ observe │
-│    │   act   │    │   act   │    │   act   │
-│    └─────────┘    └─────────┘    └─────────┘
-│         │              │              │   │
-│         └──────────────┼──────────────┘   │
-│                        ▼                  │
-│              ┌─────────────────┐         │
-│              │ Apply Actions   │         │
-│              └─────────────────┘         │
-└──────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                      ProxyAgent                               │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │  State Cache (per-agent features + visibility filter)  │  │
+│  └────────────────────────────────────────────────────────┘  │
+│         ▲              ▲              ▲              ▲        │
+│    set_state      get_obs       set_state      get_obs       │
+│         │              │              │              │        │
+│    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐ │
+│    │ System  │    │  Coord  │    │ Field 1 │    │ Field 2 │ │
+│    │ Agent   │    │  Agent  │    │         │    │         │ │
+│    └─────────┘    └─────────┘    └─────────┘    └─────────┘ │
+│         │              │              ▲              ▲        │
+│         └──────────────┘              │              │        │
+│         action decomposition    upstream actions     │        │
+│         via Protocol.coordinate()                    │        │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-### Distributed Mode
+### Event-Driven Mode (Testing)
 
 ```
-┌──────────────────────────────────────────┐
-│            Message Broker                 │
-│  ┌────────────────────────────────────┐  │
-│  │    Channel: control_signals        │  │
-│  │    Channel: agent_actions          │  │
-│  │    Channel: peer_messages          │  │
-│  └────────────────────────────────────┘  │
-│         ▲              ▲              ▲   │
-│         │              │              │   │
-│    ┌─────────┐    ┌─────────┐    ┌─────────┐
-│    │ Proxy 1 │    │ Proxy 2 │    │ Proxy 3 │
-│    └────┬────┘    └────┬────┘    └────┬────┘
-│         │              │              │   │
-│    ┌────┴────┐    ┌────┴────┐    ┌────┴────┐
-│    │ Agent 1 │    │ Agent 2 │    │ Agent 3 │
-│    └─────────┘    └─────────┘    └─────────┘
-└──────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                    EventScheduler                             │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │  Priority Queue: (timestamp, priority, sequence)       │  │
+│  │  Events: AGENT_TICK, ACTION_EFFECT, MESSAGE_DELIVERY,  │  │
+│  │          SIMULATION, OBSERVATION_READY, ENV_UPDATE      │  │
+│  └────────────────────────────────────────────────────────┘  │
+│         │                                                    │
+│    ┌────┴────────────────────────────────────────────┐       │
+│    │         ProxyAgent (singleton)                   │       │
+│    │    State cache + visibility-filtered responses   │       │
+│    └────┬──────────┬──────────┬──────────┬──────────┘       │
+│         │          │          │          │                    │
+│    ┌────┴───┐ ┌────┴───┐ ┌───┴────┐ ┌───┴────┐             │
+│    │ System │ │ Coord  │ │Field 1 │ │Field 2 │             │
+│    │ Agent  │ │ Agent  │ │        │ │        │             │
+│    └────────┘ └────────┘ └────────┘ └────────┘             │
+│    Messages routed via scheduler.schedule_message_delivery() │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ## Extension Points
 
 | Component | How to Extend |
 |-----------|---------------|
-| Agents | Subclass `Agent`, `FieldAgent`, `CoordinatorAgent` |
-| Features | Implement `FeatureProvider` |
-| Protocols | Implement `Protocol` or `CommunicationProtocol` |
-| Brokers | Implement `MessageBroker` |
-| Environments | Subclass `ParallelEnv` or case study base classes |
+| Agents | Subclass `FieldAgent`, `CoordinatorAgent`, or `SystemAgent` |
+| Features | Subclass `FeatureProvider` (auto-registered via `FeatureMeta`) |
+| Protocols | Implement `CommunicationProtocol` and/or `ActionProtocol` |
+| Brokers | Implement `MessageBroker` interface |
+| Environments | Subclass `MultiAgentEnv` (extends `EnvCore`) |
