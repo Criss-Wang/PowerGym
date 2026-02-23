@@ -381,7 +381,7 @@ class Agent(ABC):
         # Use protocol to produce subordinate actions (mirrors event-driven coordinate()).
         # This allows parent-controlled action decomposition (e.g., broadcast, vector split)
         # in training mode, not just event-driven mode.
-        if self._should_send_subordinate_actions() and self.action is not None:
+        if self._should_send_subordinate_actions():
             _, sub_actions = self.protocol.coordinate(
                 coordinator_state=self.state,
                 coordinator_action=self.action,
@@ -513,13 +513,14 @@ class Agent(ABC):
         else:
             if self.level == FIELD_LEVEL and not self.upstream_id:
                 raise ValueError(f"Warning: {self} has no policy and no upstream action")
-
+            print(f"{self} skipping action: no upstream action received and no local policy (upstream={self.upstream_id})")
+            return
 
         # Coordinate subordinate actions if needed
         if self._should_send_subordinate_actions():
             self.coordinate(obs, action)
 
-        # Set self action 
+        # Set self action
         self.set_action(action)
         if self.action:
             # if action is not None, apply it to update state and sync with proxy
@@ -567,6 +568,8 @@ class Agent(ABC):
     # ============================================
     def _should_send_subordinate_actions(self) -> bool:
         """Check if agent should coordinate subordinate actions."""
+        if not self.action or not self.action.is_valid():
+            return False
         if not self.subordinates or not self.protocol:
             return False
         return not self.protocol.no_action()

@@ -474,21 +474,9 @@ def train_ctde(env: MultiAgentEnv, num_episodes=100, steps_per_episode=50, gamma
             # Coordinator computes joint action
             coordinator_action = coordinator_policy.forward(coordinator_observation)
 
-            # Protocol distributes coordinator action to field agents
-            # Get coordinator from environment
-            coordinator_agent = env.registered_agents.get("coordinator")
-            if coordinator_agent and coordinator_agent.protocol:
-                # Use protocol to distribute actions (matching event-driven behavior)
-                _, distributed_actions = coordinator_agent.protocol.coordinate(
-                    coordinator_state=coordinator_agent.state,
-                    coordinator_action=coordinator_action,
-                    info_for_subordinates={aid: obs[aid] for aid in agent_ids},
-                    context={"subordinates": coordinator_agent.subordinates}
-                )
-                actions = distributed_actions
-            else:
-                # Fallback: use coordinator action directly
-                actions = {aid: coordinator_action for aid in agent_ids}
+            # Pass coordinator-level action — framework's handle_subordinate_actions
+            # distributes via protocol internally (matching event-driven behavior)
+            actions = {"coordinator": coordinator_action}
 
             # Store coordinator's action (not individual actions)
             trajectories["obs"].append(aggregated_obs_vec)
@@ -601,10 +589,8 @@ coordinator = ZoneCoordinator(
     agent_id="coordinator",
     subordinates={"device_1": device_1, "device_2": device_2},
     tick_config=coordinator_tick_config,
+    protocol=vertical_protocol,
 )
-# WORKAROUND: CoordinatorAgent.__init__ doesn't pass protocol to super().__init__(),
-# so base Agent overwrites it with None. We need to set it again after init.
-coordinator.protocol = vertical_protocol
 
 system = GridSystem(
     agent_id="system_agent",

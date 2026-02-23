@@ -73,7 +73,9 @@ class CoordinatorAgent(Agent):
         pass
 
     def set_action(self, action: Any, *args, **kwargs) -> None:
-        pass
+        """Store action for protocol-based distribution to subordinates."""
+        if isinstance(action, Action):
+            self.action = action
 
     # ============================================
     # Core Lifecycle Methods Overrides (see heron/agents/base.py for more details)

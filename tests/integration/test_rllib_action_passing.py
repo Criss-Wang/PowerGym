@@ -166,8 +166,8 @@ def create_action_passing_env(config: dict) -> ActionPassingEnv:
     coordinator = ZoneCoordinator(
         agent_id="coordinator",
         subordinates={"device_1": device_1, "device_2": device_2},
+        protocol=VerticalProtocol(),
     )
-    coordinator.protocol = VerticalProtocol()
     system = GridSystem(
         agent_id="system_agent",
         subordinates={"coordinator": coordinator},
