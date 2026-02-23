@@ -1,5 +1,6 @@
 
 
+import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Callable
 
@@ -370,7 +371,7 @@ class Agent(ABC):
         else:
             # Only warn for field agents (level 1) - higher-level agents don't need policies in CTDE
             if self.level == 1:
-                print(f"No action built for ({self}) because there's no upstream action and no action policy")
+                logging.debug(f"No action built for ({self}) because there's no upstream action and no action policy")
 
         self.apply_action()
         if not self.state:
@@ -513,7 +514,7 @@ class Agent(ABC):
         else:
             if self.level == FIELD_LEVEL and not self.upstream_id:
                 raise ValueError(f"Warning: {self} has no policy and no upstream action")
-            print(f"{self} skipping action: no upstream action received and no local policy (upstream={self.upstream_id})")
+            logging.debug(f"{self} skipping action: no upstream action received and no local policy (upstream={self.upstream_id})")
             return
 
         # Coordinate subordinate actions if needed

@@ -37,10 +37,7 @@ from heron.agents.proxy_agent import ProxyAgent
 
 # Environments
 from heron.envs.base import EnvCore, MultiAgentEnv
-from heron.envs.archive.adapters import (
-    PettingZooParallelEnv,
-    RLlibMultiAgentEnv,
-)
+from heron.envs.adapters import PettingZooParallelEnv
 
 # Protocols
 from heron.protocols.base import Protocol, NoProtocol
@@ -81,7 +78,6 @@ __all__ = [
     "EnvCore",
     "MultiAgentEnv",
     "PettingZooParallelEnv",
-    "RLlibMultiAgentEnv",
     # Protocols
     "Protocol",
     "NoProtocol",
