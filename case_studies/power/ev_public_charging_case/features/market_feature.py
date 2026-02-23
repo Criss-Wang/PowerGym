@@ -2,13 +2,14 @@
 
 import numpy as np
 from dataclasses import dataclass
+from typing import ClassVar, Sequence
 
 from heron.core.feature import FeatureProvider
 
 
-@dataclass
+@dataclass(slots=True)
 class MarketFeature(FeatureProvider):
-    visibility = ['owner', 'upper_level', 'system']
+    visibility: ClassVar[Sequence[str]] = ['owner', 'upper_level', 'system']
     lmp: float = 0.20
     t_day_s: float = 0.0
 
@@ -27,5 +28,11 @@ class MarketFeature(FeatureProvider):
         return cls(**d)
 
     def set_values(self, **kw):
-        if 'lmp' in kw: self.lmp = float(kw['lmp'])
-        if 't_day_s' in kw: self.t_day_s = float(kw['t_day_s'])
+        allowed = {'lmp', 't_day_s'}
+        for k, v in kw.items():
+            if k not in allowed:
+                continue
+            if k == 'lmp':
+                self.lmp = float(v)
+            elif k == 't_day_s':
+                self.t_day_s = float(v)

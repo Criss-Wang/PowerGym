@@ -248,36 +248,33 @@ class SystemAgent(Agent):
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
                 message={MSG_SET_TICK_RESULT: INFO_TYPE_LOCAL_STATE, MSG_KEY_BODY: tick_result},
-                delay=self._tick_config.msg_delay,
             )
 
             # Schedule next tick for continuous operation if not terminated/truncated
             if not tick_result["terminated"] and not tick_result["truncated"]:
                 scheduler.schedule_agent_tick(self.agent_id)
+
         elif MSG_SET_STATE_COMPLETION in message_content:
             if message_content[MSG_SET_STATE_COMPLETION] != "success":
                 raise ValueError(f"State update failed in proxy, cannot proceed with reward computation")
 
-            # Initiate reward computation after state update by retrieving local states from proxy agent
-
-            # Note: Parent agent will help initiate reward computation for subordinates.
-            # The alternative options is to let proxy agent directly send reward computation message to subordinates,
-            # but we want to keep the logic of "when to compute rewards" in the agent itself for better modularity and
-            # flexibility (e.g. parent agent may choose to delay subordinate reward computation until certain
-            # conditions are met, instead of immediately after state update)
+            # Initiate state syncing + reward computation after state update by propagating the set state completion message.
+            # Each coordinator handles triggering its own subordinate (field agent) reward computation
+            # internally (see CoordinatorAgent.message_delivery_handler get_local_state_response branch).
             for subordinate_id in self.subordinates:
                 scheduler.schedule_message_delivery(
-                    sender_id=subordinate_id,
-                    recipient_id=PROXY_AGENT_ID,
-                    message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
-                    delay=self._tick_config.msg_delay,
+                    sender_id=self.agent_id,
+                    recipient_id=subordinate_id,
+                    message={MSG_SET_STATE_COMPLETION: message_content[MSG_SET_STATE_COMPLETION]},
                 )
 
+            # System agent waits for coordinators (which wait for field agents) before
+            # computing its own reward with aggregated subordinate rewards.
             scheduler.schedule_message_delivery(
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
                 message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
-                delay=self._tick_config.msg_delay,
+                delay=self._tick_config.reward_delay,
             )
         else:
             raise NotImplementedError

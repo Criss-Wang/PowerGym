@@ -19,7 +19,7 @@ from heron.core.policies import Policy
 from heron.core.state import State
 from heron.core.action import Action
 from heron.protocols.base import Protocol
-from heron.agents.constants import PROXY_AGENT_ID, FIELD_LEVEL
+from heron.agents.constants import PROXY_AGENT_ID, FIELD_LEVEL, EMPTY_REWARD
 
 
 class Agent(ABC):
@@ -233,8 +233,8 @@ class Agent(ABC):
         return rewards
     
     def compute_local_reward(self, local_state: dict) -> float:
-        # Default implementation returns 0 reward. Override in subclasses for custom reward logic.
-        return 0.0
+        # Default implementation returns empty reward. Override in subclasses for custom reward logic.
+        return EMPTY_REWARD
 
     # ============================================
     # Info related functions
@@ -332,6 +332,7 @@ class Agent(ABC):
 
         # run self action & store local state updates in proxy
         self.handle_self_action(actions['self'], proxy)
+
         # run subordinate actions & store local state updates in proxy
         self.handle_subordinate_actions(actions['subordinates'], proxy)
 
@@ -377,8 +378,19 @@ class Agent(ABC):
         proxy.set_local_state(self.agent_id, self.state)  # Pass State object directly
 
     def handle_subordinate_actions(self, actions: Dict[AgentID, Any], proxy: Optional["ProxyAgent"] = None):
-        # Note: Parent Agent doesn't build action for subordinates, i.e. self.policy.forward only produces local action
-        # TODO: Support parent-controlled actions
+        # Use protocol to produce subordinate actions (mirrors event-driven coordinate()).
+        # This allows parent-controlled action decomposition (e.g., broadcast, vector split)
+        # in training mode, not just event-driven mode.
+        if self._should_send_subordinate_actions():
+            _, sub_actions = self.protocol.coordinate(
+                coordinator_state=self.state,
+                coordinator_action=self.action,
+                info_for_subordinates={sub_id: None for sub_id in self.subordinates},
+            )
+            for sub_id, sub_action in sub_actions.items():
+                if sub_id in actions and sub_action is not None:
+                    actions[sub_id]['self'] = sub_action
+
         for subordinate_id, subordinate in self.subordinates.items():
             if subordinate_id in actions:
                 subordinate.execute(actions[subordinate_id], proxy)
@@ -501,13 +513,14 @@ class Agent(ABC):
         else:
             if self.level == FIELD_LEVEL and not self.upstream_id:
                 raise ValueError(f"Warning: {self} has no policy and no upstream action")
-
+            print(f"{self} skipping action: no upstream action received and no local policy (upstream={self.upstream_id})")
+            return
 
         # Coordinate subordinate actions if needed
         if self._should_send_subordinate_actions():
             self.coordinate(obs, action)
 
-        # Set self action 
+        # Set self action
         self.set_action(action)
         if self.action:
             # if action is not None, apply it to update state and sync with proxy
@@ -555,6 +568,8 @@ class Agent(ABC):
     # ============================================
     def _should_send_subordinate_actions(self) -> bool:
         """Check if agent should coordinate subordinate actions."""
+        if not self.action or not self.action.is_valid():
+            return False
         if not self.subordinates or not self.protocol:
             return False
         return not self.protocol.no_action()

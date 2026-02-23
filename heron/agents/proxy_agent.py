@@ -237,6 +237,9 @@ class ProxyAgent(Agent):
 
             state_type = message_content[MSG_SET_STATE]
             if state_type == STATE_TYPE_GLOBAL:
+                # Clear previous tick results — new simulation cycle starts fresh
+                self._tick_results = {}
+
                 # Global state is dict of {agent_id: state_dict}
                 global_state_payload = message_content.get(MSG_KEY_BODY, {})
                 agent_states = global_state_payload.get("agent_states", {})

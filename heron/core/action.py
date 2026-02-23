@@ -75,6 +75,10 @@ class Action:
 
     _space: Optional[gym.Space] = None
 
+    def is_valid(self) -> bool:
+        """Check whether this action has been configured with actual dimensions."""
+        return self.dim_c > 0 or self.dim_d > 0
+
     @property
     def space(self) -> "gym.Space":
         """Lazily-constructed Gymnasium action space for this Action."""
