@@ -100,20 +100,14 @@ class CoordinatorAgent(Agent):
         for subordinate_id in self.subordinates:
             scheduler.schedule_agent_tick(subordinate_id)
         
-        if self._upstream_action:
-            print(f"{self} received upstream action: {self._upstream_action}")
-            self.compute_action(self._upstream_action, scheduler)
-        elif self.policy:
-            # Compute & execute self action
-            # Ask proxy_agent for global state to compute local action
-            scheduler.schedule_message_delivery(
-                sender_id=self.agent_id,
-                recipient_id=PROXY_AGENT_ID,
-                message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
-                delay=self._tick_config.msg_delay,
-            )
-        else:
-            print(f"{self} doesn't act itself, because there's no action policy")
+        # Always request obs from proxy first for state sync.
+        # Upstream action (if any) will be applied after sync in get_obs_response handler
+        scheduler.schedule_message_delivery(
+            sender_id=self.agent_id,
+            recipient_id=PROXY_AGENT_ID,
+            message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
+            delay=self._tick_config.msg_delay,
+        )
 
     # ============================================
     # Custom Handlers for Event-Driven Execution

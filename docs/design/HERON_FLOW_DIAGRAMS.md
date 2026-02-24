@@ -135,45 +135,56 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
+    participant ENV as Environment
     participant ES as EventScheduler
     participant SYS as SystemAgent
-    participant BK as MessageBroker
     participant COORD as CoordinatorAgent
     participant FA as FieldAgent
     participant PX as ProxyAgent
+    participant BK as MessageBroker
+
+    Note over ENV: env.run_event_driven(t_end)
+    ENV->>ES: scheduler.run_until(t_end)
 
     Note over ES: t=0.0
     ES->>SYS: AGENT_TICK
+    SYS->>ENV: pre_step() hook
     SYS->>ES: schedule_agent_tick(coordinator)
-    SYS->>PX: request obs (msg_delay)
+    SYS->>ES: schedule_message_delivery(PX, obs_request, msg_delay)
     SYS->>ES: schedule_simulation(wait_interval)
 
     Note over ES: t=msg_delay
-    ES->>PX: MESSAGE_DELIVERY (obs request)
-    PX->>PX: get_observation() + get_local_state()
-    PX->>ES: schedule response (msg_delay)
+    ES->>PX: MESSAGE_DELIVERY (SYS obs request)
+    PX->>PX: get_observation(SYS) + get_local_state(SYS)
+    PX->>ES: schedule_message_delivery(SYS, obs_response, msg_delay)
 
     Note over ES: t=2×msg_delay
     ES->>SYS: MESSAGE_DELIVERY (obs response)
-    SYS->>SYS: sync_state + compute_action
+    SYS->>SYS: sync_state + compute_action (via policy)
+    SYS->>SYS: protocol.coordinate() → decompose action
     SYS->>BK: send_subordinate_action(coord, action)
-    SYS->>ES: schedule_action_effect(act_delay)
+    Note right of SYS: SYS.set_action() is no-op, no ACTION_EFFECT scheduled
 
     Note over ES: t=coord_tick
     ES->>COORD: AGENT_TICK
-    COORD->>COORD: _check_for_upstream_action() via broker
+    COORD->>BK: broker.consume(action_channel)
+    BK-->>COORD: upstream action (cached in self._upstream_action)
     COORD->>ES: schedule_agent_tick(field agents)
-    alt Has upstream action
-        COORD->>COORD: compute_action(upstream_action)
-        COORD->>BK: send_subordinate_action(field, action)
-    else Has policy (no upstream)
-        COORD->>PX: request obs (msg_delay)
-    end
+    COORD->>ES: schedule_message_delivery(PX, obs_request, msg_delay)
+    Note right of COORD: Always requests obs first for state sync, same as FieldAgent
+
+    Note over ES: t=coord_tick + 2×msg_delay
+    ES->>COORD: MESSAGE_DELIVERY (obs response)
+    COORD->>COORD: sync_state + compute_action — uses cached upstream if present
+    COORD->>COORD: protocol.coordinate() → decompose action
+    COORD->>BK: send_subordinate_action(field, action)
 
     Note over ES: t=field_tick
     ES->>FA: AGENT_TICK
-    FA->>FA: _check_for_upstream_action() via broker
-    FA->>PX: request obs (msg_delay, always for state sync)
+    FA->>BK: broker.consume(action_channel)
+    BK-->>FA: upstream action (cached in self._upstream_action)
+    FA->>ES: schedule_message_delivery(PX, obs_request, msg_delay)
+    Note right of FA: Always requests obs first for state sync, regardless of upstream action
 
     Note over ES: t=field_tick + 2×msg_delay
     ES->>FA: MESSAGE_DELIVERY (obs response)
@@ -184,23 +195,46 @@ sequenceDiagram
     Note over ES: t=field_tick + 2×msg_delay + act_delay
     ES->>FA: ACTION_EFFECT
     FA->>FA: apply_action() → update state
-    FA->>PX: send state update (msg_delay)
+    FA->>ES: schedule_message_delivery(PX, set_state(local), msg_delay)
 
     Note over ES: t=wait_interval
     ES->>SYS: SIMULATION
-    SYS->>PX: request global_state
-    PX-->>SYS: global_state (after msg_delay)
-    SYS->>SYS: run_simulation()
-    SYS->>PX: set_global_state(updated)
+    SYS->>ES: schedule_message_delivery(PX, get_global_state, msg_delay)
 
-    Note over ES: State completion triggers reward cascade
-    PX->>SYS: set_state_completion (back to sender)
-    SYS->>COORD: propagate set_state_completion
-    COORD->>FA: propagate set_state_completion
-    FA->>PX: request local_state for reward
-    COORD->>PX: request local_state (after reward_delay)
-    SYS->>PX: request local_state (after reward_delay)
-    Note over FA,SYS: Each agent: sync + compute_local_reward()
+    Note over ES: t=wait_interval + msg_delay
+    ES->>PX: MESSAGE_DELIVERY (global_state request)
+    PX->>PX: get_global_states(SYS, for_simulation=True)
+    PX->>ES: schedule_message_delivery(SYS, global_state_response, msg_delay)
+
+    Note over ES: t=wait_interval + 2×msg_delay
+    ES->>SYS: MESSAGE_DELIVERY (global_state response)
+    SYS->>SYS: global_state_to_env_state()
+    SYS->>ENV: run_simulation(env_state)
+    ENV-->>SYS: updated_env_state
+    SYS->>SYS: env_state_to_global_state()
+    SYS->>ES: schedule_message_delivery(PX, set_global_state, msg_delay)
+
+    Note over ES: PX stores updated global state
+    ES->>PX: MESSAGE_DELIVERY (set_global_state)
+    PX->>PX: update state_cache for all agents
+    PX->>ES: schedule_message_delivery(SYS, set_state_completion, msg_delay)
+
+    Note over ES: Reward cascade
+    ES->>SYS: MESSAGE_DELIVERY (set_state_completion)
+    Note over FA, SYS: set_state_completion as a signal to trigger reward computation, get_local_state to retrieve latest state for reward
+    SYS->>ES: schedule_message_delivery(COORD, set_state_completion)
+    SYS->>ES: schedule_message_delivery(PX, get_local_state, reward_delay)
+
+    ES->>COORD: MESSAGE_DELIVERY (set_state_completion)
+    COORD->>ES: schedule_message_delivery(FA, set_state_completion)
+    COORD->>ES: schedule_message_delivery(PX, get_local_state, reward_delay)
+
+    ES->>FA: MESSAGE_DELIVERY (set_state_completion)
+    FA->>ES: schedule_message_delivery(PX, get_local_state)
+    Note right of FA: No reward_delay for field agents
+
+    Note over FA,SYS: Each agent: PX returns local_state, sync_state + compute_local_reward(), send tick_result to PX
+    Note over SYS: If not terminated/truncated, schedule next AGENT_TICK
 ```
 
 **Novelty:** HERON is the first MARL framework to offer **native dual-mode execution** — synchronous CTDE for training and event-driven for deployment testing — using the same agent hierarchy and protocol system. Existing frameworks (PettingZoo, EPyMARL, MARLlib) only support synchronous `step()`. Event-driven execution cannot be achieved by wrapping; it requires changing the fundamental execution loop.
@@ -318,14 +352,16 @@ flowchart TD
     end
 
     subgraph CoordinatorAgent["CoordinatorAgent (L2)"]
-        C_CHECK["_check_for_upstream_action()"]
-        C_DECIDE{Has upstream<br/>action?}
+        C_CHECK["_check_for_upstream_action()<br/>(caches upstream action)"]
+        C_SYNC["Request obs from proxy<br/>(always, for state sync)"]
+        C_RECV["Receive obs + local_state<br/>sync_state_from_observed()"]
+        C_DECIDE{Has cached<br/>upstream action?}
         C_USE["Use upstream action<br/>(priority!)"]
         C_OWN["Own policy.forward()"]
         C_COORD["Protocol.coordinate()"]
         C_SEND["send_subordinate_action()"]
 
-        C_CHECK --> C_DECIDE
+        C_CHECK --> C_SYNC --> C_RECV --> C_DECIDE
         C_DECIDE -->|Yes| C_USE --> C_COORD --> C_SEND
         C_DECIDE -->|No| C_OWN --> C_COORD
     end
@@ -575,7 +611,7 @@ sequenceDiagram
     PX->>PX: State.from_dict() → set_local_state()
     PX->>FA: {set_state_completion: "success"} (back to sender)
 
-    Note over SYS: SystemAgent also receives<br/>set_state_completion for global state
+    Note over SYS: SystemAgent also receives set_state_completion for global state
     SYS->>COORD: propagate {set_state_completion: "success"}
     COORD->>FA: propagate {set_state_completion: "success"}
 
@@ -585,13 +621,13 @@ sequenceDiagram
     FA->>FA: sync_state + compute_local_reward()
     FA->>PX: {set_tick_result: {reward: 0.3, ...}}
 
-    Note over COORD: Coordinator waits (reward_delay)<br/>then requests own local state
+    Note over COORD: Coordinator waits (reward_delay) then requests own local state
     COORD->>PX: get_local_state(coord_1, protocol)
     PX-->>COORD: coord_1 local_state (filtered + sub_rewards)
     COORD->>COORD: sync_state + compute_local_reward()
     COORD->>PX: {set_tick_result: {reward: 0.5, ...}}
 
-    Note over SYS: SystemAgent waits (reward_delay)<br/>then computes own reward
+    Note over SYS: SystemAgent waits (reward_delay) then computes own reward
     SYS->>PX: get_local_state(system, protocol)
     PX-->>SYS: system local_state (filtered + sub_rewards)
     SYS->>SYS: sync_state + compute_local_reward()

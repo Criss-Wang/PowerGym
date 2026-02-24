@@ -341,32 +341,23 @@ handle_self_action(None, proxy)  # No external action
     └─> self.action.set_values(action)
 ```
 
-**Event-Driven Mode - FieldAgent with Upstream Action:**
+**Event-Driven Mode (FieldAgent and CoordinatorAgent):**
 ```
-FieldAgent.tick()
+agent.tick()
 ├─> _check_for_upstream_action()
-│   └─> self._upstream_action = broker.consume(action_channel)
-│
-├─> If self._upstream_action is not None:
-│   ├─> set_action(self._upstream_action)  # Direct assignment!
-│   ├─> self._upstream_action = None       # Clear after use
-│   └─> schedule_action_effect(delay=act_delay)
-```
+│   └─> self._upstream_action = broker.consume(action_channel)  # Cached
+└─> Always request obs from proxy (for state sync)
+    └─> schedule_message_delivery(proxy, {get_info: "obs"})
 
-**Event-Driven Mode - Agent with Policy:**
-```
-Agent.tick()
-├─> Request observation via message
-└─> [Later] Receive observation response
-
-message_delivery_handler() - "get_obs_response"
+[Later] message_delivery_handler() - "get_obs_response"
 ├─> body = message["get_obs_response"]["body"]
 ├─> obs_dict = body["obs"]
 ├─> local_state = body["local_state"]
 ├─> obs = Observation.from_dict(obs_dict)
 ├─> sync_state_from_observed(local_state)  # Sync first!
 └─> compute_action(obs, scheduler)
-    ├─> action = policy.forward(observation=obs)
+    ├─> If self._upstream_action: use it (priority!), clear after use
+    ├─> Elif has policy: action = policy.forward(observation=obs)
     ├─> If protocol: coordinate() -> send subordinate actions
     ├─> set_action(action)
     └─> schedule_action_effect(delay=act_delay)
@@ -466,15 +457,14 @@ Subordinate receives:
 ├─> _check_for_upstream_action() [at start of tick]
 │   └─> self._upstream_action = broker.consume(action_channel)[-1]
 │
-├─> FieldAgent: Direct assignment
-│   ├─> set_action(upstream_action)
-│   └─> schedule_action_effect(delay)
+├─> Both FieldAgent and CoordinatorAgent always request obs from proxy first
+│   └─> schedule_message_delivery(proxy, {get_info: "obs"})
 │
-├─> CoordinatorAgent: Via compute_action pipeline
-│   └─> compute_action(upstream_action, scheduler)
-│       ├─> Uses upstream_action directly (priority!)
-│       ├─> coordinate() -> decompose for subordinates
-│       └─> schedule_action_effect(delay)
+└─> On obs response: compute_action(obs, scheduler)
+    ├─> If self._upstream_action: use it (priority!)
+    ├─> Elif has policy: policy.forward(obs)
+    ├─> CoordinatorAgent: coordinate() -> decompose for subordinates
+    └─> FieldAgent: set_action + schedule_action_effect
 ```
 
 ### **Action Passing Flow Diagram**
@@ -494,9 +484,11 @@ Subordinate receives:
 ┌─────────────────────────────────────────────────────────────────┐
 │ CoordinatorAgent (Level 2)                                      │
 ├─────────────────────────────────────────────────────────────────┤
-│ 1. _check_for_upstream_action() -> consume from broker          │
-│ 2. If upstream action exists: compute_action(upstream, sched)   │
-│ 3. Else: compute own action via policy                          │
+│ 1. _check_for_upstream_action() -> cache from broker            │
+│ 2. Always request obs from proxy (for state sync)               │
+│ 3. On obs response: compute_action(obs, scheduler)              │
+│    - Uses cached upstream action if present (priority)          │
+│    - Else uses own policy                                       │
 │ 4. Protocol.coordinate() decomposes into field actions          │
 │ 5. send_subordinate_action() to each field agent                │
 └─────────────────────────────────────────────────────────────────┘
@@ -506,12 +498,13 @@ Subordinate receives:
 ┌─────────────────────────────────────────────────────────────────┐
 │ FieldAgent (Level 1)                                            │
 ├─────────────────────────────────────────────────────────────────┤
-│ 1. _check_for_upstream_action() -> consume from broker          │
-│ 2. If upstream action exists:                                   │
-│    - set_action(upstream_action)  # DIRECT SET (not compute!)   │
-│    - schedule_action_effect(delay)                              │
-│ 3. Else: compute own action via policy                          │
-│ 4. [ACTION_EFFECT event]: apply_action() -> Update state        │
+│ 1. _check_for_upstream_action() -> cache from broker            │
+│ 2. Always request obs from proxy (for state sync)               │
+│ 3. On obs response: compute_action(obs, scheduler)              │
+│    - Uses cached upstream action if present (priority)          │
+│    - Else uses own policy                                       │
+│ 4. set_action(action) + schedule_action_effect(delay)           │
+│ 5. [ACTION_EFFECT event]: apply_action() -> Update state        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -604,14 +597,18 @@ t=0.0: AGENT_TICK(system_agent)
 │   └─> schedule_simulation()
 
 t=coord_tick: AGENT_TICK(coordinator_1)
-├─> _check_for_upstream_action() -> consume from broker
+├─> _check_for_upstream_action() -> consume from broker (caches in self._upstream_action)
 ├─> Schedule subordinate ticks
-├─> If upstream_action:
-│   └─> compute_action(upstream_action, scheduler)
-│       ├─> coordinate() -> field actions via protocol
-│       └─> send_subordinate_action(field_id, action) for each
-├─> Elif has policy:
-│   └─> Request obs from proxy
+└─> Always request obs from proxy (for state sync):
+    └─> schedule_message_delivery(proxy, {get_info: "obs"})
+
+t=coord_tick+2×msg_delay: MESSAGE_DELIVERY(coordinator_1) - obs response
+├─> sync_state_from_observed(local_state)  # State sync first!
+└─> compute_action(obs, scheduler)
+    ├─> If self._upstream_action: use it (priority!)
+    ├─> Elif has policy: policy.forward(obs)
+    ├─> coordinate() -> field actions via protocol
+    └─> send_subordinate_action(field_id, action) for each
 
 t=field_tick: AGENT_TICK(field_1)
 ├─> _check_for_upstream_action() -> consume from broker (caches in self._upstream_action)
@@ -1513,18 +1510,33 @@ SystemAgent.message_delivery_handler()
 CoordinatorAgent.tick(scheduler, current_time)
 │
 ├─> super().tick() -> _check_for_upstream_action()
-│   └─> self._upstream_action = broker.consume(action_channel)[-1]
+│   └─> self._upstream_action = broker.consume(action_channel)[-1]  # Cached!
 │
 ├─> Schedule subordinate ticks
 │
-├─> If self._upstream_action:
-│   └─> compute_action(upstream_action, scheduler)
-│       ├─> Uses upstream action (priority!)
-│       ├─> coordinate() -> field actions via protocol
-│       └─> send_subordinate_action(field_id, action) for each
+└─> Always request obs from proxy (for state sync):
+    └─> schedule_message_delivery(
+            sender=self.agent_id, recipient=proxy,
+            message={get_info: "obs", protocol: protocol},
+            delay=msg_delay
+        )
+```
+
+#### **t=coord_tick+2×msg_delay: MESSAGE_DELIVERY(coordinator_1) - obs response**
+
+```
+CoordinatorAgent.message_delivery_handler() on "get_obs_response"
 │
-├─> Elif has policy:
-│   └─> schedule obs request to proxy
+├─> Parse obs + local_state from response body
+├─> obs = Observation.from_dict(obs_dict)
+├─> sync_state_from_observed(local_state)  # State sync first!
+│
+└─> compute_action(obs, scheduler)
+    ├─> If self._upstream_action: use it (priority!)
+    │   └─> self._upstream_action = None  # Clear after use
+    ├─> Elif has policy: action = policy.forward(obs)
+    ├─> coordinate() -> field actions via protocol
+    └─> send_subordinate_action(field_id, action) for each
 ```
 
 ---
@@ -1982,10 +1994,10 @@ env.step({"battery_1": Action(c=[0.3])}):
 - Enables state syncing via `sync_state_from_observed()`
 - Design principle: "agent asks for obs, proxy gives both"
 
-### **4. Action Passing Has Different Paths**
-- FieldAgent: direct `set_action(upstream_action)` (no compute_action)
-- CoordinatorAgent: via `compute_action(upstream_action, scheduler)` for protocol coordination
-- Upstream actions always have priority over policy
+### **4. Action Passing Uses Obs-First Pattern**
+- Both FieldAgent and CoordinatorAgent always request obs from proxy first (for state sync)
+- Upstream actions (cached via `_check_for_upstream_action()`) have priority over policy in `compute_action()`
+- CoordinatorAgent additionally runs `protocol.coordinate()` to decompose actions for subordinates
 
 ### **5. Reward Computation Is Parent-Initiated (Event-Driven)**
 - State completion triggers cascade from parent agent
