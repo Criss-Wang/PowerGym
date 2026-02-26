@@ -184,7 +184,7 @@ Mixin providing HERON functionality to any environment. Handles:
 ### BaseEnv
 Single-agent Gymnasium-compatible environment.
 
-### MultiAgentEnv
+### HeronEnv
 Multi-agent environment base class. Adapters available for:
 - PettingZoo (`PettingZooParallelEnv`)
 - RLlib (`RLlibMultiAgentEnv`)

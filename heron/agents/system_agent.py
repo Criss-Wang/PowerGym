@@ -310,14 +310,21 @@ class SystemAgent(Agent):
     ):
         """
         simulation_func: simulation function passed from environment
-        wait_interval: waiting time between action kick-off and simulation starts
+        wait_interval: waiting time between action kick-off and simulation starts.
+            If None, derives from current tick_config.tick_interval at runtime.
         pre_step_func: optional hook called at the start of each step (before actions)
         """
         self._simulation_func = simulation_func
         self._env_state_to_global_state = env_state_to_global_state
         self._global_state_to_env_state = global_state_to_env_state
-        self._simulation_wait_interval = wait_interval or self.tick_config.tick_interval
+        self._explicit_wait_interval = wait_interval  # None means derive from tick_config
         self._pre_step_func = pre_step_func
+
+    @property
+    def _simulation_wait_interval(self) -> float:
+        if self._explicit_wait_interval is not None:
+            return self._explicit_wait_interval
+        return self.tick_config.tick_interval
 
     def simulate(self, global_state: Dict[AgentID, Any]) -> Any:
         # proxy.get_global_states() returns a flat {agent_id: state_dict} dict,

@@ -1,10 +1,13 @@
 """Adaptors for integrating HERON environments with RL training frameworks."""
 
 try:
-    from heron.adaptors.rllib import RLlibAdapter
+    from heron.adaptors.rllib import RLlibBasedHeronEnv
 except ImportError:
     pass
 
-from heron.adaptors.epymarl import HeronEPyMARLAdapter
+try:
+    from heron.adaptors.epymarl import HeronEPyMARLAdapter
+except ImportError:
+    pass
 
-__all__ = ["RLlibAdapter", "HeronEPyMARLAdapter"]
+__all__ = ["RLlibBasedHeronEnv", "HeronEPyMARLAdapter"]

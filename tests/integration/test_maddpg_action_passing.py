@@ -1,7 +1,7 @@
 """MADDPG integration test with HERON action-passing environment.
 
 Custom PyTorch MADDPG implementation (MADDPG was removed from RLlib >=2.10).
-Uses the RLlibAdapter with continuous action spaces.
+Uses the RLlibBasedHeronEnv with continuous action spaces.
 
 Run::
 
@@ -23,9 +23,9 @@ from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.agents.system_agent import SystemAgent
 from heron.core.feature import FeatureProvider
 from heron.core.action import Action
-from heron.envs.base import MultiAgentEnv
+from heron.envs.base import HeronEnv
 from heron.protocols.vertical import VerticalProtocol
-from heron.adaptors.rllib import RLlibAdapter
+from heron.adaptors.rllib import RLlibBasedHeronEnv
 
 
 # =============================================================================
@@ -100,7 +100,7 @@ class EnvState:
         self.device_powers = device_powers or {"device_1": 0.0, "device_2": 0.0}
 
 
-class ActionPassingEnv(MultiAgentEnv):
+class ActionPassingEnv(HeronEnv):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -141,30 +141,26 @@ class ActionPassingEnv(MultiAgentEnv):
         )
 
 
-def create_action_passing_env(config: dict) -> ActionPassingEnv:
-    device_1 = DeviceAgent(
-        agent_id="device_1",
-        features=[DevicePowerFeature(power=0.0, capacity=1.0)],
-    )
-    device_2 = DeviceAgent(
-        agent_id="device_2",
-        features=[DevicePowerFeature(power=0.0, capacity=1.0)],
-    )
-    coordinator = ZoneCoordinator(
-        agent_id="coordinator",
-        subordinates={"device_1": device_1, "device_2": device_2},
-        protocol=VerticalProtocol(),
-    )
-    system = GridSystem(
-        agent_id="system_agent",
-        subordinates={"coordinator": coordinator},
-    )
-    return ActionPassingEnv(
-        system_agent=system,
-        scheduler_config={"start_time": 0.0, "time_step": 1.0},
-        message_broker_config={"buffer_size": 1000, "max_queue_size": 100},
-        simulation_wait_interval=0.01,
-    )
+ACTION_PASSING_ENV_CONFIG = {
+    "agents": [
+        {"agent_id": "device_1", "agent_cls": DeviceAgent,
+         "features": [DevicePowerFeature(power=0.0, capacity=1.0)],
+         "coordinator": "coordinator"},
+        {"agent_id": "device_2", "agent_cls": DeviceAgent,
+         "features": [DevicePowerFeature(power=0.0, capacity=1.0)],
+         "coordinator": "coordinator"},
+    ],
+    "coordinators": [
+        {"coordinator_id": "coordinator", "agent_cls": ZoneCoordinator,
+         "protocol": VerticalProtocol()},
+    ],
+    "env_class": ActionPassingEnv,
+    "env_kwargs": {
+        "scheduler_config": {"start_time": 0.0, "time_step": 1.0},
+        "message_broker_config": {"buffer_size": 1000, "max_queue_size": 100},
+        "simulation_wait_interval": 0.01,
+    },
+}
 
 
 # =============================================================================
@@ -267,7 +263,7 @@ class MADDPGTrainer:
 
     def __init__(
         self,
-        env: RLlibAdapter,
+        env: RLlibBasedHeronEnv,
         lr_actor: float = 1e-4,
         lr_critic: float = 1e-3,
         gamma: float = 0.95,
@@ -536,8 +532,8 @@ def run_maddpg(num_episodes: int = 500, max_steps: int = 30):
     print(f"  Theoretical optimal reward: 0  (action=0 every step)")
     print(f"  Random baseline reward:    -5  (uniform random actions)")
 
-    env = RLlibAdapter({
-        "env_creator": create_action_passing_env,
+    env = RLlibBasedHeronEnv({
+        **ACTION_PASSING_ENV_CONFIG,
         "max_steps": max_steps,
     })
 

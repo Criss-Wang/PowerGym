@@ -389,7 +389,12 @@ class Agent(ABC):
                 info_for_subordinates={sub_id: None for sub_id in self.subordinates},
             )
             for sub_id, sub_action in sub_actions.items():
-                if sub_id in actions and sub_action is not None:
+                if sub_action is None:
+                    continue
+                if sub_id not in actions:
+                    actions[sub_id] = {'self': sub_action, 'subordinates': {}}
+                elif actions[sub_id].get('self') is None:
+                    # Upstream actions > protocol-coordinated actions > no action
                     actions[sub_id]['self'] = sub_action
 
         for subordinate_id, subordinate in self.subordinates.items():

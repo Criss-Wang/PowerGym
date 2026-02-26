@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import uuid
 
 import gymnasium as gym
@@ -117,6 +117,8 @@ class EnvCore:
             seed: Random seed
             **kwargs: Additional reset parameters
         """
+        # Sync tick configs in case agents were reconfigured after construction
+        self.scheduler.sync_tick_configs(self.registered_agents)
         # reset scheduler and clear messages before resetting agents to ensure a clean slate
         self.scheduler.reset(start_time=0.0)  # Always reset to time 0
         self.clear_broker_environment()
@@ -278,7 +280,7 @@ class EnvCore:
             self.message_broker.close()
     
 
-class MultiAgentEnv(EnvCore):
+class HeronEnv(EnvCore):
     def close(self) -> None:
         """Clean up environment resources."""
         self.close_core()

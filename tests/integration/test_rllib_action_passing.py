@@ -2,7 +2,7 @@
 
 Uses the same action-passing scenario as ``test_action_passing.py``
 (two devices coordinated by one coordinator with VerticalProtocol),
-but trains with RLlib algorithms through the ``RLlibAdapter``.
+but trains with RLlib algorithms through the ``RLlibBasedHeronEnv``.
 
 See also:
   - ``test_qmix_action_passing.py``   — QMIX (custom PyTorch)
@@ -24,9 +24,9 @@ from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.agents.system_agent import SystemAgent
 from heron.core.feature import FeatureProvider
 from heron.core.action import Action
-from heron.envs.base import MultiAgentEnv
+from heron.envs.base import HeronEnv
 from heron.protocols.vertical import VerticalProtocol
-from heron.adaptors.rllib import RLlibAdapter
+from heron.adaptors.rllib import RLlibBasedHeronEnv
 
 
 # =============================================================================
@@ -105,7 +105,7 @@ class EnvState:
         self.device_powers = device_powers or {"device_1": 0.0, "device_2": 0.0}
 
 
-class ActionPassingEnv(MultiAgentEnv):
+class ActionPassingEnv(HeronEnv):
     """Minimal multi-agent env for testing action passing."""
 
     def __init__(self, **kwargs):
@@ -150,34 +150,29 @@ class ActionPassingEnv(MultiAgentEnv):
 
 
 # =============================================================================
-# Environment factory (module-level for Ray serialisation)
+# Shared env_config (passed to RLlibBasedHeronEnv)
 # =============================================================================
 
-def create_action_passing_env(config: dict) -> ActionPassingEnv:
-    """Build and return the HERON action-passing environment."""
-    device_1 = DeviceAgent(
-        agent_id="device_1",
-        features=[DevicePowerFeature(power=0.0, capacity=1.0)],
-    )
-    device_2 = DeviceAgent(
-        agent_id="device_2",
-        features=[DevicePowerFeature(power=0.0, capacity=1.0)],
-    )
-    coordinator = ZoneCoordinator(
-        agent_id="coordinator",
-        subordinates={"device_1": device_1, "device_2": device_2},
-        protocol=VerticalProtocol(),
-    )
-    system = GridSystem(
-        agent_id="system_agent",
-        subordinates={"coordinator": coordinator},
-    )
-    return ActionPassingEnv(
-        system_agent=system,
-        scheduler_config={"start_time": 0.0, "time_step": 1.0},
-        message_broker_config={"buffer_size": 1000, "max_queue_size": 100},
-        simulation_wait_interval=0.01,
-    )
+ACTION_PASSING_ENV_CONFIG = {
+    "agents": [
+        {"agent_id": "device_1", "agent_cls": DeviceAgent,
+         "features": [DevicePowerFeature(power=0.0, capacity=1.0)],
+         "coordinator": "coordinator"},
+        {"agent_id": "device_2", "agent_cls": DeviceAgent,
+         "features": [DevicePowerFeature(power=0.0, capacity=1.0)],
+         "coordinator": "coordinator"},
+    ],
+    "coordinators": [
+        {"coordinator_id": "coordinator", "agent_cls": ZoneCoordinator,
+         "protocol": VerticalProtocol()},
+    ],
+    "env_class": ActionPassingEnv,
+    "env_kwargs": {
+        "scheduler_config": {"start_time": 0.0, "time_step": 1.0},
+        "message_broker_config": {"buffer_size": 1000, "max_queue_size": 100},
+        "simulation_wait_interval": 0.01,
+    },
+}
 
 
 # =============================================================================
@@ -208,8 +203,8 @@ def _get_mean_reward(result) -> float:
 def sanity_check():
     """Verify that the adapter wraps, resets, and steps correctly."""
     print("\n--- Sanity Check ---")
-    adapter = RLlibAdapter({
-        "env_creator": create_action_passing_env,
+    adapter = RLlibBasedHeronEnv({
+        **ACTION_PASSING_ENV_CONFIG,
         "max_steps": 30,
     })
     agent_ids = adapter.get_agent_ids()
@@ -222,27 +217,11 @@ def sanity_check():
     for aid, o in obs.items():
         assert adapter._obs_spaces[aid].contains(o), f"{aid} obs shape mismatch"
 
-    actions = adapter.action_space_sample()
+    actions = {aid: adapter.action_space[aid].sample() for aid in agent_ids}
     obs2, rew, term, trunc, info2 = adapter.step(actions)
     assert set(obs2.keys()) == agent_ids, "Agent IDs mismatch after step"
     assert "__all__" in term and "__all__" in trunc
     print("  Reset / step shapes OK")
-
-    # Discretised variant
-    from gymnasium.spaces import Discrete, Dict as DictSpace
-    adapter_d = RLlibAdapter({
-        "env_creator": create_action_passing_env,
-        "max_steps": 30,
-        "discrete_actions": 11,
-    })
-    assert isinstance(adapter_d.action_space, DictSpace), "Expected Dict action space"
-    # Per-agent spaces should be Discrete
-    for aid in adapter_d.get_agent_ids():
-        assert isinstance(adapter_d._act_spaces[aid], Discrete), f"{aid}: expected Discrete"
-    obs_d, _ = adapter_d.reset(seed=0)
-    act_d = adapter_d.action_space_sample()
-    obs_d2, *_ = adapter_d.step(act_d)
-    print("  Discrete-action variant OK")
 
     print("--- Sanity Check PASSED ---\n")
 
@@ -263,9 +242,9 @@ def run_mappo(num_iters: int = 5, max_steps: int = 30) -> dict:
     config = (
         PPOConfig()
         .environment(
-            env=RLlibAdapter,
+            env=RLlibBasedHeronEnv,
             env_config={
-                "env_creator": create_action_passing_env,
+                **ACTION_PASSING_ENV_CONFIG,
                 "max_steps": max_steps,
             },
         )
@@ -305,9 +284,9 @@ def run_ippo(num_iters: int = 5, max_steps: int = 30) -> dict:
     config = (
         PPOConfig()
         .environment(
-            env=RLlibAdapter,
+            env=RLlibBasedHeronEnv,
             env_config={
-                "env_creator": create_action_passing_env,
+                **ACTION_PASSING_ENV_CONFIG,
                 "max_steps": max_steps,
             },
         )

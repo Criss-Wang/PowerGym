@@ -1,7 +1,7 @@
 """QMIX integration test with HERON action-passing environment.
 
 Custom PyTorch QMIX implementation (QMIX was removed from RLlib >=2.10).
-Uses the RLlibAdapter with discrete action spaces.
+Uses the RLlibBasedHeronEnv with discrete action spaces.
 
 Run::
 
@@ -23,9 +23,9 @@ from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.agents.system_agent import SystemAgent
 from heron.core.feature import FeatureProvider
 from heron.core.action import Action
-from heron.envs.base import MultiAgentEnv
+from heron.envs.base import HeronEnv
 from heron.protocols.vertical import VerticalProtocol
-from heron.adaptors.rllib import RLlibAdapter
+from heron.adaptors.rllib import RLlibBasedHeronEnv
 
 
 # =============================================================================
@@ -48,7 +48,12 @@ class DevicePowerFeature(FeatureProvider):
             self.capacity = kwargs["capacity"]
 
 
+N_DISCRETE_ACTIONS = 11
+
+
 class DeviceAgent(FieldAgent):
+    """Device agent with native discrete action space for QMIX."""
+
     @property
     def power(self) -> float:
         return self.state.features["DevicePowerFeature"].power
@@ -59,8 +64,7 @@ class DeviceAgent(FieldAgent):
 
     def init_action(self, features: List[FeatureProvider] = []):
         action = Action()
-        action.set_specs(dim_c=1, range=(np.array([-1.0]), np.array([1.0])))
-        action.set_values(np.array([0.0]))
+        action.set_specs(dim_d=1, ncats=[N_DISCRETE_ACTIONS])
         return action
 
     def compute_local_reward(self, local_state: dict) -> float:
@@ -70,20 +74,17 @@ class DeviceAgent(FieldAgent):
         return 0.0
 
     def set_action(self, action: Any) -> None:
-        if isinstance(action, Action):
-            if len(action.c) != self.action.dim_c:
-                self.action.set_values(action.c[: self.action.dim_c])
-            else:
-                self.action.set_values(c=action.c)
-        else:
-            self.action.set_values(action)
-
-    def set_state(self) -> None:
-        new_power = self.action.c[0] * 0.5
-        self.state.features["DevicePowerFeature"].set_values(power=new_power)
+        self.action.set_values(action)
 
     def apply_action(self):
-        self.set_state()
+        # Map discrete index to continuous power: index 5 (midpoint) → 0.0
+        idx = int(self.action.d[0])
+        frac = (idx + 0.5) / N_DISCRETE_ACTIONS
+        power = (-1.0 + 2.0 * frac) * 0.5
+        self.state.features["DevicePowerFeature"].set_values(power=power)
+
+    def set_state(self) -> None:
+        pass
 
 
 class ZoneCoordinator(CoordinatorAgent):
@@ -100,7 +101,7 @@ class EnvState:
         self.device_powers = device_powers or {"device_1": 0.0, "device_2": 0.0}
 
 
-class ActionPassingEnv(MultiAgentEnv):
+class ActionPassingEnv(HeronEnv):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -141,30 +142,26 @@ class ActionPassingEnv(MultiAgentEnv):
         )
 
 
-def create_action_passing_env(config: dict) -> ActionPassingEnv:
-    device_1 = DeviceAgent(
-        agent_id="device_1",
-        features=[DevicePowerFeature(power=0.0, capacity=1.0)],
-    )
-    device_2 = DeviceAgent(
-        agent_id="device_2",
-        features=[DevicePowerFeature(power=0.0, capacity=1.0)],
-    )
-    coordinator = ZoneCoordinator(
-        agent_id="coordinator",
-        subordinates={"device_1": device_1, "device_2": device_2},
-        protocol=VerticalProtocol(),
-    )
-    system = GridSystem(
-        agent_id="system_agent",
-        subordinates={"coordinator": coordinator},
-    )
-    return ActionPassingEnv(
-        system_agent=system,
-        scheduler_config={"start_time": 0.0, "time_step": 1.0},
-        message_broker_config={"buffer_size": 1000, "max_queue_size": 100},
-        simulation_wait_interval=0.01,
-    )
+ACTION_PASSING_ENV_CONFIG = {
+    "agents": [
+        {"agent_id": "device_1", "agent_cls": DeviceAgent,
+         "features": [DevicePowerFeature(power=0.0, capacity=1.0)],
+         "coordinator": "coordinator"},
+        {"agent_id": "device_2", "agent_cls": DeviceAgent,
+         "features": [DevicePowerFeature(power=0.0, capacity=1.0)],
+         "coordinator": "coordinator"},
+    ],
+    "coordinators": [
+        {"coordinator_id": "coordinator", "agent_cls": ZoneCoordinator,
+         "protocol": VerticalProtocol()},
+    ],
+    "env_class": ActionPassingEnv,
+    "env_kwargs": {
+        "scheduler_config": {"start_time": 0.0, "time_step": 1.0},
+        "message_broker_config": {"buffer_size": 1000, "max_queue_size": 100},
+        "simulation_wait_interval": 0.01,
+    },
+}
 
 
 # =============================================================================
@@ -266,7 +263,7 @@ class QMIXTrainer:
 
     def __init__(
         self,
-        env: RLlibAdapter,
+        env: RLlibBasedHeronEnv,
         n_actions: int = 11,
         lr: float = 5e-4,
         gamma: float = 0.99,
@@ -458,14 +455,13 @@ def run_qmix(num_episodes: int = 600, max_steps: int = 30):
     print("QMIX: Value Decomposition (Custom PyTorch)")
     print("=" * 60)
     print(f"  Episodes: {num_episodes}, Max steps: {max_steps}")
-    print(f"  Discrete actions: 11 bins")
-    print(f"  Theoretical optimal reward: 0  (action=0 every step)")
+    print(f"  Discrete actions: {N_DISCRETE_ACTIONS} (native)")
+    print(f"  Theoretical optimal reward: 0  (action=midpoint every step)")
     print(f"  Random baseline reward:    -5  (uniform random actions)")
 
-    env = RLlibAdapter({
-        "env_creator": create_action_passing_env,
+    env = RLlibBasedHeronEnv({
+        **ACTION_PASSING_ENV_CONFIG,
         "max_steps": max_steps,
-        "discrete_actions": 11,
     })
 
     agent_ids = sorted(env.get_agent_ids())
@@ -475,7 +471,7 @@ def run_qmix(num_episodes: int = 600, max_steps: int = 30):
 
     trainer = QMIXTrainer(
         env=env,
-        n_actions=11,
+        n_actions=N_DISCRETE_ACTIONS,
         lr=5e-4,
         gamma=0.99,
         epsilon_start=1.0,

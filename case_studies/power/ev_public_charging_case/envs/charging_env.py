@@ -1,7 +1,7 @@
-"""Multi-station EV charging environment using HERON MultiAgentEnv.
+"""Multi-station EV charging environment using HERON HeronEnv.
 
 Follows the same pattern as powergrid/envs/hierarchical_microgrid_env.py:
-- Extends MultiAgentEnv (which extends EnvCore)
+- Extends HeronEnv (which extends EnvCore)
 - Implements the 3 abstract simulation methods
 - Receives coordinator_agents, EnvCore auto-creates SystemAgent
 - CTDE training via system_agent.execute() → layer_actions → act → simulate
@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from heron.envs.base import MultiAgentEnv
+from heron.envs.base import HeronEnv
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.utils.typing import AgentID, MultiAgentDict
 
@@ -19,7 +19,7 @@ from case_studies.power.ev_public_charging_case.envs.common import EnvState, Slo
 from case_studies.power.ev_public_charging_case.envs.market_scenario import MarketScenario
 
 
-class ChargingEnv(MultiAgentEnv):
+class ChargingEnv(HeronEnv):
     """Multi-station EV public charging environment.
 
     Agent hierarchy (auto-built by EnvCore):

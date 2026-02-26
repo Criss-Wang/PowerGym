@@ -217,9 +217,9 @@ Built-in protocols: `VerticalProtocol` (joint action decomposition), `Horizontal
 Create environments by implementing three abstract methods that bridge HERON agents to your physics simulator:
 
 ```python
-from heron.envs import MultiAgentEnv
+from heron.envs import HeronEnv
 
-class MyEnv(MultiAgentEnv):
+class MyEnv(HeronEnv):
     def global_state_to_env_state(self, global_state):
         """Convert HERON state dict → your simulator's input format."""
         ...
@@ -263,7 +263,7 @@ A step-by-step guide to building a complete multi-agent system from scratch:
 |---|----------|-------|------|
 | 01 | [Features & State](case_studies/power/tutorials/01_features_and_state.ipynb) | `FeatureProvider`, declarative visibility, state classes | 15 min |
 | 02 | [Building Agents](case_studies/power/tutorials/02_building_agents.ipynb) | `FieldAgent`, `CoordinatorAgent`, `SystemAgent` hierarchy | 20 min |
-| 03 | [Building Environment](case_studies/power/tutorials/03_building_environment.ipynb) | `MultiAgentEnv`, `ProxyAgent`, state conversion pattern | 15 min |
+| 03 | [Building Environment](case_studies/power/tutorials/03_building_environment.ipynb) | `HeronEnv`, `ProxyAgent`, state conversion pattern | 15 min |
 | 04 | [Training with RLlib](case_studies/power/tutorials/04_training_with_rllib.ipynb) | CTDE training with MAPPO, `VerticalProtocol` | 10 min |
 | 05 | [Event-Driven Testing](case_studies/power/tutorials/05_event_driven_testing.ipynb) | `TickConfig`, `EventScheduler`, jitter, dual-mode | 15 min |
 | 06 | [Custom Protocols](case_studies/power/tutorials/06_custom_protocols.ipynb) | Composing `CommunicationProtocol` + `ActionProtocol` | 15 min |
@@ -301,7 +301,7 @@ This generates:
 my_project/
 ├── my_domain/
 │   ├── agents/      # Your agents extending FieldAgent, CoordinatorAgent
-│   ├── envs/        # Your environments extending MultiAgentEnv
+│   ├── envs/        # Your environments extending HeronEnv
 │   └── utils/
 ├── examples/
 ├── tests/
@@ -312,7 +312,7 @@ To extend HERON for a new domain, you typically need to:
 
 1. **Define features** — Subclass `FeatureProvider` with domain-specific state variables
 2. **Create agents** — Extend `FieldAgent` (devices) and optionally `CoordinatorAgent` (groups)
-3. **Build an environment** — Implement `MultiAgentEnv` with your simulator
+3. **Build an environment** — Implement `HeronEnv` with your simulator
 4. **Choose/create protocols** — Use built-in `VerticalProtocol` or compose your own
 
 ---

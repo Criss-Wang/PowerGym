@@ -21,7 +21,7 @@ from heron.core.observation import Observation
 from heron.core.feature import FeatureProvider
 from heron.core.action import Action
 from heron.core.policies import Policy, obs_to_vector, vector_to_action
-from heron.envs.base import MultiAgentEnv
+from heron.envs.base import HeronEnv
 from heron.protocols.base import (
     Protocol,
     CommunicationProtocol,
@@ -217,7 +217,7 @@ class EnvState:
         self.device_powers = device_powers or {"device_1": 0.0, "device_2": 0.0}
 
 
-class ActionPassingEnv(MultiAgentEnv):
+class ActionPassingEnv(HeronEnv):
     """Environment for testing action passing through protocols."""
 
     def __init__(self, **kwargs):
@@ -415,7 +415,7 @@ class CoordinatorNeuralPolicy(Policy):
 # CTDE Training Loop
 # =============================================================================
 
-def train_ctde(env: MultiAgentEnv, num_episodes=100, steps_per_episode=50, gamma=0.99, lr=0.01):
+def train_ctde(env: HeronEnv, num_episodes=100, steps_per_episode=50, gamma=0.99, lr=0.01):
     """Train coordinator policy using CTDE with action distribution via protocol.
 
     Key: Coordinator computes joint action, protocol distributes to field agents.

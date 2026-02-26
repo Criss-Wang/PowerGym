@@ -39,7 +39,7 @@ heron/                          # Domain-agnostic MARL framework
 │   └── analysis.py             # EventAnalyzer, EpisodeResult
 │
 ├── envs/                       # Base environment interfaces
-│   └── base.py                 # EnvCore, MultiAgentEnv (extends EnvCore)
+│   └── base.py                 # EnvCore, HeronEnv (extends EnvCore)
 │
 ├── adaptors/                   # RL framework adaptors
 │   ├── epymarl.py              # EPyMARL integration
@@ -200,4 +200,4 @@ class MessageBroker(ABC):
 | Features | Subclass `FeatureProvider` (auto-registered via `FeatureMeta`) |
 | Protocols | Implement `CommunicationProtocol` and/or `ActionProtocol` |
 | Brokers | Implement `MessageBroker` interface |
-| Environments | Subclass `MultiAgentEnv` (extends `EnvCore`) |
+| Environments | Subclass `HeronEnv` (extends `EnvCore`) |

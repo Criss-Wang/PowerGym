@@ -1,21 +1,25 @@
 """RLlib adapter for HERON multi-agent environments.
 
-Provides ``RLlibAdapter`` — a thin wrapper that converts a HERON
-``MultiAgentEnv`` into an RLlib-compatible ``MultiAgentEnv`` so that
+Provides ``RLlibBasedHeronEnv`` — a thin wrapper that converts a HERON
+``HeronEnv`` into an RLlib-compatible ``MultiAgentEnv`` so that
 HERON environments can be plugged directly into RLlib training
 pipelines (PPO / MAPPO / IPPO, QMIX, etc.).
 
-Usage::
-
-    from ray.rllib.algorithms.ppo import PPOConfig
-    from heron.adaptors.rllib import RLlibAdapter
+Usage — pass agent/coordinator specs directly in ``env_config``::
 
     config = (
         PPOConfig()
         .environment(
-            env=RLlibAdapter,
+            env=RLlibBasedHeronEnv,
             env_config={
-                "env_creator": my_heron_env_factory,
+                "agents": [
+                    {"agent_id": "drone_0", "agent_cls": Drone,
+                     "features": [DroneFeature()], "coordinator": "fleet"},
+                ],
+                "coordinators": [
+                    {"coordinator_id": "fleet", "agent_cls": FleetManager},
+                ],
+                "simulation": my_sim_func,
                 "max_steps": 100,
             },
         )
@@ -28,63 +32,99 @@ from typing import Any, Dict, Optional, Set
 
 import numpy as np
 import gymnasium as gym
-from gymnasium.spaces import Box, Dict as DictSpace, Discrete, MultiDiscrete
+from gymnasium.spaces import Box, Dict as DictSpace
+from ray.rllib.env.multi_agent_env import MultiAgentEnv
 
-try:
-    from ray.rllib.env.multi_agent_env import MultiAgentEnv as _RLlibMAEnv
-except ImportError as exc:
-    raise ImportError(
-        "ray[rllib] is required for the RLlib adapter. "
-        "Install with: pip install 'ray[rllib]>=2.9.0'"
-    ) from exc
-
-from heron.envs.base import MultiAgentEnv as HeronEnv
-from heron.core.observation import Observation
+from heron.envs.base import HeronEnv
+from heron.envs.builder import EnvBuilder
 
 
-# ---------------------------------------------------------------------------
-#  Helpers
-# ---------------------------------------------------------------------------
+def _build_heron_env(config: Dict[str, Any]) -> HeronEnv:
+    """Build a HERON env from a flat config dict.
 
-def _obs_to_vec(obs) -> np.ndarray:
-    """Convert a HERON ``Observation`` (or raw array) to a flat float32 vector."""
-    if isinstance(obs, Observation):
-        return obs.vector()
-    if isinstance(obs, np.ndarray):
-        return obs.astype(np.float32)
-    return np.asarray(obs, dtype=np.float32)
+    Reads ``agents``, ``coordinators``, and either ``simulation`` or
+    ``env_class`` keys and constructs an ``EnvBuilder`` internally.
+    """
+    if "agents" not in config:
+        raise ValueError(
+            "env_config must contain 'agents' (list of agent specs)."
+        )
+
+    builder = EnvBuilder(config.get("env_id", "default_env"))
+
+    for agent_cfg in config["agents"]:
+        extra = {
+            k: v for k, v in agent_cfg.items()
+            if k not in ("agent_id", "agent_cls", "features", "coordinator")
+        }
+        builder.add_agent(
+            agent_id=agent_cfg["agent_id"],
+            agent_cls=agent_cfg["agent_cls"],
+            features=agent_cfg.get("features"),
+            coordinator=agent_cfg.get("coordinator"),
+            **extra,
+        )
+
+    for coord_cfg in config.get("coordinators", []):
+        extra = {
+            k: v for k, v in coord_cfg.items()
+            if k not in (
+                "coordinator_id", "agent_cls", "features",
+                "protocol", "subordinates",
+            )
+        }
+        builder.add_coordinator(
+            coordinator_id=coord_cfg["coordinator_id"],
+            agent_cls=coord_cfg.get("agent_cls"),
+            features=coord_cfg.get("features"),
+            protocol=coord_cfg.get("protocol"),
+            subordinates=coord_cfg.get("subordinates"),
+            **extra,
+        )
+
+    if "env_class" in config:
+        builder.env_class(config["env_class"], **config.get("env_kwargs", {}))
+    elif "simulation" in config:
+        builder.simulation(config["simulation"])
+
+    return builder.build()
 
 
-# ---------------------------------------------------------------------------
-#  Adapter
-# ---------------------------------------------------------------------------
+class RLlibBasedHeronEnv(MultiAgentEnv):
+    """Wraps a HERON ``HeronEnv`` for RLlib training.
 
-class RLlibAdapter(_RLlibMAEnv):
-    """Wraps a HERON ``MultiAgentEnv`` for RLlib training.
+    The adapter exposes HERON agents (those whose ``action_space`` is not
+    ``None``) as RLlib agents.  HERON ``Observation`` objects are flattened
+    to float32 numpy vectors and RLlib actions are forwarded directly to the
+    underlying env.
 
-    The adapter exposes HERON field-level agents (those whose
-    ``action_space`` is not ``None``) as RLlib agents.  HERON
-    ``Observation`` objects are flattened to float32 numpy vectors and
-    RLlib actions are forwarded directly to the underlying env.
+    HERON's ``Action`` class natively supports continuous (``Box``), discrete
+    (``Discrete`` / ``MultiDiscrete``), and mixed action spaces — define them
+    in your agent's ``init_action()`` and they will be exposed to RLlib
+    automatically.
 
     Parameters (passed via *config* dict)
     --------------------------------------
-    env_creator : Callable[[dict], HeronEnv]
-        Factory that builds and returns a HERON ``MultiAgentEnv``.
-        Must be a **module-level** function so that Ray can pickle it
-        for remote workers.
-    env_config : dict, optional
-        Forwarded to *env_creator* (default ``{}``).
+    agents : list[dict]
+        Agent specs: ``{"agent_id", "agent_cls", "features"?, "coordinator"?, **kwargs}``.
+    coordinators : list[dict]
+        Coordinator specs: ``{"coordinator_id", "agent_cls"?, "features"?,
+        "protocol"?, "subordinates"?, **kwargs}``.
+    simulation : Callable
+        Simulation function for ``SimpleEnv`` auto-bridge.
+        Mutually exclusive with *env_class*.
+    env_class : type, optional
+        Custom ``HeronEnv`` subclass. Use instead of *simulation* when
+        you need a full custom env (e.g. with ``run_simulation``).
+    env_kwargs : dict, optional
+        Extra kwargs forwarded to *env_class* constructor.
+    env_id : str, optional
+        Environment identifier (default ``"default_env"``).
     max_steps : int, optional
         Episode truncation length (default 50).
     agent_ids : list[str], optional
         Subset of agent IDs to expose.  Defaults to every registered
         agent whose ``action_space is not None``.
-    discrete_actions : int or None, optional
-        If set, continuous (``Box``) action spaces are replaced with
-        ``Discrete(N)`` (1-D) or ``MultiDiscrete`` (N-D) and actions
-        are mapped back to continuous midpoints.  Useful for
-        value-decomposition methods (QMIX / VDN).
     """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -93,13 +133,9 @@ class RLlibAdapter(_RLlibMAEnv):
 
         self.max_steps: int = config.get("max_steps", 50)
         self._step_count: int = 0
-        self._disc_n: Optional[int] = config.get("discrete_actions")
 
         # ---- build the underlying HERON env ----
-        creator = config.get("env_creator")
-        if creator is None:
-            raise ValueError("config must contain 'env_creator'")
-        self.heron_env: HeronEnv = creator(config.get("env_config", {}))
+        self.heron_env: HeronEnv = _build_heron_env(config)
 
         # One reset to materialise observation shapes and agent spaces
         init_obs, _ = self.heron_env.reset(seed=0)
@@ -117,28 +153,15 @@ class RLlibAdapter(_RLlibMAEnv):
         # ---- per-agent spaces ----
         self._obs_spaces: Dict[str, gym.Space] = {}
         self._act_spaces: Dict[str, gym.Space] = {}
-        self._orig_act_spaces: Dict[str, gym.Space] = {}
 
         for aid in sorted(self._agent_ids):
             ag = self.heron_env.registered_agents[aid]
-            obs_vec = _obs_to_vec(init_obs[aid])
+            obs_vec = np.asarray(init_obs[aid], dtype=np.float32)
 
             self._obs_spaces[aid] = Box(
                 -np.inf, np.inf, shape=obs_vec.shape, dtype=np.float32,
             )
-            self._orig_act_spaces[aid] = ag.action_space
-
-            # Optional discretisation for value-based methods
-            if self._disc_n is not None and isinstance(ag.action_space, Box):
-                n_dims = int(np.prod(ag.action_space.shape))
-                if n_dims == 1:
-                    self._act_spaces[aid] = Discrete(self._disc_n)
-                else:
-                    self._act_spaces[aid] = MultiDiscrete(
-                        [self._disc_n] * n_dims
-                    )
-            else:
-                self._act_spaces[aid] = ag.action_space
+            self._act_spaces[aid] = ag.action_space
 
         # PettingZoo-style attributes required by RLlib's new API stack.
         self.possible_agents = sorted(self._agent_ids)
@@ -154,14 +177,14 @@ class RLlibAdapter(_RLlibMAEnv):
         )
 
     # ------------------------------------------------------------------ #
-    #  RLlib MultiAgentEnv interface                                       #
+    #  RLlib interface                                                      #
     # ------------------------------------------------------------------ #
 
     def reset(self, *, seed=None, options=None):
         self._step_count = 0
         raw, _ = self.heron_env.reset(seed=seed)
         obs = {
-            aid: _obs_to_vec(raw[aid])
+            aid: np.asarray(raw[aid], dtype=np.float32)
             for aid in self._agent_ids
             if aid in raw
         }
@@ -170,21 +193,12 @@ class RLlibAdapter(_RLlibMAEnv):
     def step(self, action_dict: Dict[str, Any]):
         self._step_count += 1
 
-        # Map (possibly discretised) actions back to HERON format
-        heron_actions: Dict[str, Any] = {}
-        for aid, act in action_dict.items():
-            orig = self._orig_act_spaces.get(aid)
-            if self._disc_n is not None and isinstance(orig, Box):
-                heron_actions[aid] = self._disc_to_cont(act, orig)
-            else:
-                heron_actions[aid] = act
-
         raw_obs, raw_rew, raw_term, raw_trunc, raw_info = (
-            self.heron_env.step(heron_actions)
+            self.heron_env.step(action_dict)
         )
 
         obs = {
-            aid: _obs_to_vec(raw_obs[aid])
+            aid: np.asarray(raw_obs[aid], dtype=np.float32)
             for aid in self._agent_ids
             if aid in raw_obs
         }
@@ -200,44 +214,3 @@ class RLlibAdapter(_RLlibMAEnv):
         info = {aid: raw_info.get(aid, {}) for aid in self._agent_ids}
 
         return obs, rew, term, trunc, info
-
-    # ------------------------------------------------------------------ #
-    #  Space accessors                                                     #
-    # ------------------------------------------------------------------ #
-
-    def get_agent_ids(self) -> Set[str]:
-        return self._agent_ids
-
-    def observation_space_sample(self, agent_ids=None):
-        ids = agent_ids or list(self._agent_ids)
-        return {aid: self._obs_spaces[aid].sample() for aid in ids}
-
-    def action_space_sample(self, agent_ids=None):
-        ids = agent_ids or list(self._agent_ids)
-        return {aid: self._act_spaces[aid].sample() for aid in ids}
-
-    def observation_space_contains(self, x):
-        return isinstance(x, dict) and all(
-            self._obs_spaces[k].contains(v)
-            for k, v in x.items()
-            if k in self._obs_spaces
-        )
-
-    def action_space_contains(self, x):
-        return isinstance(x, dict) and all(
-            self._act_spaces[k].contains(v)
-            for k, v in x.items()
-            if k in self._act_spaces
-        )
-
-    # ------------------------------------------------------------------ #
-    #  Internal helpers                                                    #
-    # ------------------------------------------------------------------ #
-
-    def _disc_to_cont(self, act, orig_space: Box) -> np.ndarray:
-        """Map a discrete (or multi-discrete) action to a continuous midpoint."""
-        lo = orig_space.low
-        hi = orig_space.high
-        act_arr = np.atleast_1d(act).astype(np.float32)
-        frac = (act_arr + 0.5) / self._disc_n
-        return (lo + frac * (hi - lo)).astype(np.float32)
