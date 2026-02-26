@@ -57,6 +57,14 @@ from heron.scheduling import (
     JitterType,
 )
 
+# Shortcuts
+from heron.shortcuts.numeric_feature import NumericFeature
+from heron.shortcuts.simple_field_agent import SimpleFieldAgent
+from heron.shortcuts.simulation_bridge import SimpleEnv
+from heron.shortcuts.env_builder import EnvBuilder
+from heron.shortcuts import quickstart
+from heron.shortcuts.quickstart import make_env
+
 __all__ = [
     # Version
     "__version__",
@@ -94,4 +102,11 @@ __all__ = [
     "EventScheduler",
     "TickConfig",
     "JitterType",
+    # Shortcuts
+    "NumericFeature",
+    "SimpleFieldAgent",
+    "SimpleEnv",
+    "EnvBuilder",
+    "quickstart",
+    "make_env",
 ]

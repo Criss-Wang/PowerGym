@@ -233,3 +233,178 @@ class HeronEPyMARLAdapter:
         hi = orig_space.high
         frac = (act_idx + 0.5) / self._n_discrete
         return (lo + frac * (hi - lo)).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+#  Algorithm presets
+# ---------------------------------------------------------------------------
+
+_BASE_EPYMARL_CONFIG: Dict = {
+    "runner": "episode",
+    "mac": "basic_mac",
+    "env": "heron",
+    "common_reward": True,
+    "reward_scalarisation": "sum",
+    "env_args": {"seed": 0},
+    "batch_size_run": 1,
+    "test_nepisode": 5,
+    "test_interval": 500,
+    "test_greedy": True,
+    "log_interval": 500,
+    "runner_log_interval": 500,
+    "learner_log_interval": 500,
+    "t_max": 2000,
+    "use_cuda": False,
+    "buffer_cpu_only": True,
+    "use_tensorboard": False,
+    "use_wandb": False,
+    "wandb_team": None,
+    "wandb_project": None,
+    "wandb_mode": "offline",
+    "wandb_save_model": False,
+    "save_model": False,
+    "save_model_interval": 50000,
+    "checkpoint_path": "",
+    "evaluate": False,
+    "render": False,
+    "load_step": 0,
+    "save_replay": False,
+    "local_results_path": "results",
+    "gamma": 0.99,
+    "batch_size": 32,
+    "buffer_size": 32,
+    "lr": 0.0005,
+    "optim_alpha": 0.99,
+    "optim_eps": 0.00001,
+    "grad_norm_clip": 10,
+    "add_value_last_step": True,
+    "agent": "rnn",
+    "hidden_dim": 64,
+    "obs_agent_id": True,
+    "obs_last_action": True,
+    "obs_individual_obs": False,
+    "repeat_id": 1,
+    "label": "default_label",
+    "hypergroup": None,
+}
+
+_ALGO_CONFIGS: Dict[str, Dict] = {
+    "mappo": {
+        "action_selector": "soft_policies",
+        "mask_before_softmax": True,
+        "runner": "episode",
+        "buffer_size": 10,
+        "batch_size_run": 1,
+        "batch_size": 10,
+        "target_update_interval_or_tau": 0.01,
+        "lr": 0.0003,
+        "hidden_dim": 128,
+        "obs_agent_id": True,
+        "obs_last_action": False,
+        "obs_individual_obs": False,
+        "agent_output_type": "pi_logits",
+        "learner": "ppo_learner",
+        "entropy_coef": 0.001,
+        "use_rnn": True,
+        "standardise_returns": False,
+        "standardise_rewards": True,
+        "q_nstep": 5,
+        "critic_type": "cv_critic",
+        "epochs": 4,
+        "eps_clip": 0.2,
+        "name": "mappo",
+        "mac": "basic_mac",
+        "common_reward": True,
+        "reward_scalarisation": "sum",
+    },
+    "qmix": {
+        "action_selector": "epsilon_greedy",
+        "epsilon_start": 1.0,
+        "epsilon_finish": 0.05,
+        "epsilon_anneal_time": 5000,
+        "evaluation_epsilon": 0.0,
+        "runner": "episode",
+        "buffer_size": 5000,
+        "target_update_interval_or_tau": 200,
+        "obs_agent_id": True,
+        "obs_last_action": False,
+        "obs_individual_obs": False,
+        "standardise_returns": False,
+        "standardise_rewards": True,
+        "agent_output_type": "q",
+        "learner": "q_learner",
+        "double_q": True,
+        "mixer": "qmix",
+        "use_rnn": False,
+        "mixing_embed_dim": 32,
+        "hypernet_layers": 2,
+        "hypernet_embed": 64,
+        "name": "qmix",
+        "mac": "basic_mac",
+        "common_reward": True,
+        "reward_scalarisation": "sum",
+    },
+    "maddpg": {
+        "runner": "episode",
+        "buffer_size": 5000,
+        "target_update_interval_or_tau": 200,
+        "obs_agent_id": True,
+        "obs_last_action": False,
+        "obs_individual_obs": False,
+        "mac": "maddpg_mac",
+        "reg": 0.001,
+        "batch_size": 32,
+        "lr": 0.0005,
+        "use_rnn": True,
+        "standardise_returns": False,
+        "standardise_rewards": True,
+        "learner": "maddpg_learner",
+        "agent_output_type": "pi_logits",
+        "hidden_dim": 128,
+        "critic_type": "maddpg_critic",
+        "name": "maddpg",
+        "common_reward": True,
+        "reward_scalarisation": "sum",
+    },
+}
+
+
+class AlgoPreset:
+    """Named EPyMARL algorithm configuration.
+
+    Attributes:
+        name: Algorithm identifier (e.g. ``"mappo"``).
+        config: Algorithm-specific overrides.
+        base_config: Shared base configuration.
+    """
+
+    def __init__(self, name: str, config: Dict, base_config: Optional[Dict] = None):
+        self.name = name
+        self.config = dict(config)
+        self.base_config = dict(base_config or _BASE_EPYMARL_CONFIG)
+
+    def to_dict(self, t_max: int = 2000, seed: int = 0) -> Dict:
+        """Merge base + algo config with runtime overrides.
+
+        Returns a flat dict ready for ``SimpleNamespace(**d)`` in EPyMARL.
+        """
+        merged = dict(self.base_config)
+        merged.update(self.config)
+        merged["t_max"] = t_max
+        merged["seed"] = seed
+        merged.setdefault("env_args", {})["seed"] = seed
+        return merged
+
+    def __repr__(self) -> str:
+        return f"AlgoPreset({self.name!r})"
+
+
+class _Presets:
+    """Namespace providing ``presets.MAPPO``, ``presets.QMIX``, ``presets.MADDPG``."""
+
+    MAPPO = AlgoPreset("mappo", _ALGO_CONFIGS["mappo"])
+    QMIX = AlgoPreset("qmix", _ALGO_CONFIGS["qmix"])
+    MADDPG = AlgoPreset("maddpg", _ALGO_CONFIGS["maddpg"])
+
+
+presets = _Presets()
