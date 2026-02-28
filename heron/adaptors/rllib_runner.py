@@ -44,7 +44,7 @@ class HeronEnvRunner(MultiAgentEnvRunner):
     and ensures proper cleanup on ``stop()``.
 
     When the eval runner's ``env_config`` contains ``"eval_event_driven": True``
-    (injected via ``evaluation_config=PPOConfig.overrides(...)``),
+    (injected via ``evaluation_config=AlgorithmConfig.overrides(...)``),
     ``sample()`` creates a fresh HERON env, bridges the runner's trained
     RLModules to HERON policies, and runs event-driven simulation.
     """
@@ -70,9 +70,9 @@ class HeronEnvRunner(MultiAgentEnvRunner):
             t_end: Simulation end time per episode.
             seed: Base seed for TickConfig jitter.
         """
-        from ray.rllib.algorithms.ppo import PPOConfig
+        from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
-        return PPOConfig.overrides(
+        return AlgorithmConfig.overrides(
             env_config={
                 "eval_event_driven": True,
                 "eval_t_end": t_end,
