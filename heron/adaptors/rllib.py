@@ -163,7 +163,6 @@ class RLlibBasedHeronEnv(MultiAgentEnv):
             )
             self._act_spaces[aid] = ag.action_space
 
-        # PettingZoo-style attributes required by RLlib's new API stack.
         self.possible_agents = sorted(self._agent_ids)
         self.agents = list(self.possible_agents)
 
