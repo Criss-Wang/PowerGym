@@ -25,7 +25,7 @@ pip install ray[rllib] pettingzoo gymnasium numpy
 |----------|-------|------|-------------------|
 | [01_features_and_state](01_features_and_state.ipynb) | Features & Visibility | 15 min | `FeatureProvider`, declarative visibility, three state classes |
 | [02_building_agents](02_building_agents.ipynb) | Agent Hierarchy | 20 min | `FieldAgent`, `CoordinatorAgent`, `SystemAgent`, bottom-up construction |
-| [03_building_environment](03_building_environment.ipynb) | Environment | 15 min | `MultiAgentEnv`, `ProxyAgent`, state conversion pattern |
+| [03_building_environment](03_building_environment.ipynb) | Environment | 15 min | `HeronEnv`, `ProxyAgent`, state conversion pattern |
 | [04_training_with_rllib](04_training_with_rllib.ipynb) | CTDE Training | 10 min | Centralized training, `VerticalProtocol` action decomposition, event-driven evaluation |
 | [05_event_driven_testing](05_event_driven_testing.ipynb) | Dual Mode | 15 min | `TickConfig`, `EventScheduler`, jitter, CPS-calibrated timing |
 
@@ -85,10 +85,10 @@ class SimpleBattery(FieldAgent):
     def compute_local_reward(self, local_state): ...  # Reward from local state
 ```
 
-### 3. MultiAgentEnv Pattern (Tutorial 03)
+### 3. HeronEnv Pattern (Tutorial 03)
 Three abstract methods bridge HERON agents to your physics simulation:
 ```python
-class MyEnv(MultiAgentEnv):
+class MyEnv(HeronEnv):
     def global_state_to_env_state(self, global_state) -> EnvState: ...
     def run_simulation(self, env_state) -> EnvState: ...
     def env_state_to_global_state(self, env_state) -> Dict: ...

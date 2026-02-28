@@ -371,6 +371,20 @@ class EventScheduler:
         self.event_queue.clear()
         self._sequence_counter = 0
 
+    def sync_tick_configs(self, agents: Dict[AgentID, "Agent"]) -> None:
+        """Re-sync cached tick configs from agents.
+
+        Call this after modifying agents' tick configs (e.g. changing
+        tick_interval or enabling jitter) so the scheduler uses the
+        updated values for delay/interval calculations.
+
+        Args:
+            agents: Dict mapping agent IDs to Agent instances
+        """
+        for agent_id, agent in agents.items():
+            if agent_id in self._active_agents:
+                self._agent_tick_configs[agent_id] = agent.tick_config
+
     def reset(self, start_time: float = 0.0) -> None:
         """Reset scheduler to initial state.
 

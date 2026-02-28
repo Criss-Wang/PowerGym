@@ -12,12 +12,11 @@ from heron.core.state import CoordinatorAgentState, State
 from heron.core.policies import Policy
 from heron.utils.typing import AgentID
 from heron.protocols.base import Protocol
-from heron.scheduling.tick_config import TickConfig
+from heron.scheduling.tick_config import DEFAULT_COORDINATOR_AGENT_TICK_CONFIG, TickConfig
 from heron.scheduling.scheduler import EventScheduler, Event
 from heron.agents.constants import (
     COORDINATOR_LEVEL,
     PROXY_AGENT_ID,
-    DEFAULT_COORDINATOR_TICK_INTERVAL,
     MSG_GET_INFO,
     MSG_SET_STATE_COMPLETION,
     MSG_SET_TICK_RESULT,
@@ -52,7 +51,7 @@ class CoordinatorAgent(Agent):
             upstream_id=upstream_id,
             subordinates=subordinates,
             env_id=env_id,
-            tick_config=tick_config or TickConfig.deterministic(tick_interval=DEFAULT_COORDINATOR_TICK_INTERVAL),
+            tick_config=tick_config or DEFAULT_COORDINATOR_AGENT_TICK_CONFIG,
             policy=policy,
             protocol=protocol,
         )

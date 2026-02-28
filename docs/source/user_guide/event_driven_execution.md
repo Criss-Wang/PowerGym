@@ -255,7 +255,7 @@ import numpy as np
 from heron.scheduling import TickConfig, JitterType
 
 # 1. Define environment with agents
-env = MyMultiAgentEnv()
+env = MyHeronEnv()
 
 # 2. Train policy (synchronous mode)
 for episode in range(1000):

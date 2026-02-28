@@ -4,7 +4,7 @@ Multi-station EV Charging Environment - Training Script
 Demonstrates:
 1. HERON-based multi-agent env with proper CTDE pipeline
 2. Policy gradient training with PricingPolicy (actor-critic)
-3. Optional Ray RLlib integration via factory function
+3. Optional Ray RLlib integration via flat dict config
 4. Optional event-driven deployment after training
 """
 
@@ -33,7 +33,7 @@ def create_charging_env(config: Dict[str, Any] = None) -> ChargingEnv:
         config: Dict with keys: num_stations, num_chargers, arrival_rate, dt, episode_length
 
     Returns:
-        Fully initialized ChargingEnv (HERON MultiAgentEnv)
+        Fully initialized ChargingEnv (HERON HeronEnv)
     """
     config = config or {}
     num_stations = config.get("num_stations", 2)
@@ -175,9 +175,9 @@ def train_simple(
 # Ray RLlib Training (optional)
 # ============================================================================
 def train_rllib(num_iterations: int = 50):
-    """Train with Ray RLlib PPO via the HERON RLlibAdapter.
+    """Train with Ray RLlib PPO via the HERON RLlibBasedHeronEnv.
 
-    The RLlibAdapter wraps the HERON MultiAgentEnv and handles:
+    The RLlibBasedHeronEnv wraps the HERON HeronEnv and handles:
     - Observation vectorization (Observation -> np.ndarray)
     - __all__ injection in terminated/truncated
     - max_steps truncation
@@ -189,7 +189,7 @@ def train_rllib(num_iterations: int = 50):
     try:
         import ray
         from ray.rllib.algorithms.ppo import PPOConfig
-        from heron.adaptors.rllib import RLlibAdapter
+        from heron.adaptors.rllib import RLlibBasedHeronEnv
     except ImportError:
         logger.error("Ray RLlib not installed. Run: pip install 'ray[rllib]'")
         return
@@ -200,17 +200,32 @@ def train_rllib(num_iterations: int = 50):
 
     steps_per_episode = 288  # 288 * 300s = 86400s = 1 day
 
+    num_stations = 2
+    num_chargers = 5
+
     config = (
         PPOConfig()
         .environment(
-            env=RLlibAdapter,
+            env=RLlibBasedHeronEnv,
             env_config={
-                "env_creator": create_charging_env,
-                "env_config": {
-                    "num_stations": 2,
-                    "num_chargers": 5,
+                "agents": [
+                    {"agent_id": f"station_{i}_slot_{j}",
+                     "agent_cls": ChargingSlot,
+                     "p_max_kw": 150.0,
+                     "coordinator": f"station_{i}"}
+                    for i in range(num_stations)
+                    for j in range(num_chargers)
+                ],
+                "coordinators": [
+                    {"coordinator_id": f"station_{i}",
+                     "agent_cls": StationCoordinator}
+                    for i in range(num_stations)
+                ],
+                "env_class": ChargingEnv,
+                "env_kwargs": {
                     "arrival_rate": 10.0,
                     "dt": 300.0,
+                    "episode_length": 86400.0,
                 },
                 "max_steps": steps_per_episode,
             },

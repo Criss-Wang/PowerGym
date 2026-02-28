@@ -15,7 +15,7 @@ from heron.core.observation import Observation
 from heron.core.feature import FeatureProvider
 from heron.core.action import Action
 from heron.core.policies import Policy, obs_to_vector, vector_to_action
-from heron.envs.base import MultiAgentEnv
+from heron.envs.base import HeronEnv
 from heron.scheduling import EventScheduler, EventType, TickConfig, JitterType
 from heron.scheduling.analysis import EventAnalyzer
 
@@ -99,7 +99,7 @@ class EnvState:
     def __init__(self, battery_soc: float = 0.5):
         self.battery_soc = battery_soc
 
-class EnergyManagementEnv(MultiAgentEnv):
+class EnergyManagementEnv(HeronEnv):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -301,7 +301,7 @@ class NeuralPolicy(Policy):
 
 # CTDE Training Loop
 
-def train_ctde(env: MultiAgentEnv, num_episodes=100, steps_per_episode=50, gamma=0.99, lr=0.01):
+def train_ctde(env: HeronEnv, num_episodes=100, steps_per_episode=50, gamma=0.99, lr=0.01):
     """Train policies using CTDE with policy gradient.
     
     Uses the agent hierarchy: env.step() -> GridSystemAgent -> ZoneCoordinator -> BatteryAgent

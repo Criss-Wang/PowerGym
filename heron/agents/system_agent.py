@@ -13,13 +13,12 @@ from heron.utils.typing import AgentID, MultiAgentDict
 from heron.core.policies import Policy
 from heron.protocols.base import Protocol
 from heron.scheduling.scheduler import Event, EventScheduler
-from heron.scheduling.tick_config import TickConfig
+from heron.scheduling.tick_config import DEFAULT_SYSTEM_AGENT_TICK_CONFIG, TickConfig
 from gymnasium.spaces import Box, Space
 from heron.agents.constants import (
     SYSTEM_LEVEL,
     SYSTEM_AGENT_ID,
     PROXY_AGENT_ID,
-    DEFAULT_SYSTEM_TICK_INTERVAL,
     MSG_GET_INFO,
     MSG_SET_STATE,
     MSG_SET_STATE_COMPLETION,
@@ -55,7 +54,7 @@ class SystemAgent(Agent):
             subordinates=subordinates,
             upstream_id=None,  # System agent has no upstream
             env_id=env_id,
-            tick_config=tick_config or TickConfig.deterministic(tick_interval=DEFAULT_SYSTEM_TICK_INTERVAL),
+            tick_config=tick_config or DEFAULT_SYSTEM_AGENT_TICK_CONFIG,
             policy=policy,
             protocol=protocol
         )
@@ -310,14 +309,21 @@ class SystemAgent(Agent):
     ):
         """
         simulation_func: simulation function passed from environment
-        wait_interval: waiting time between action kick-off and simulation starts
+        wait_interval: waiting time between action kick-off and simulation starts.
+            If None, derives from current tick_config.tick_interval at runtime.
         pre_step_func: optional hook called at the start of each step (before actions)
         """
         self._simulation_func = simulation_func
         self._env_state_to_global_state = env_state_to_global_state
         self._global_state_to_env_state = global_state_to_env_state
-        self._simulation_wait_interval = wait_interval or self.tick_config.tick_interval
+        self._explicit_wait_interval = wait_interval  # None means derive from tick_config
         self._pre_step_func = pre_step_func
+
+    @property
+    def _simulation_wait_interval(self) -> float:
+        if self._explicit_wait_interval is not None:
+            return self._explicit_wait_interval
+        return self.tick_config.tick_interval
 
     def simulate(self, global_state: Dict[AgentID, Any]) -> Any:
         # proxy.get_global_states() returns a flat {agent_id: state_dict} dict,
