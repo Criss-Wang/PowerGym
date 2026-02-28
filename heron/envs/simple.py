@@ -83,7 +83,7 @@ class SimpleEnv(HeronEnv):
 
     def run_simulation(self, env_state: Any, *args: Any, **kwargs: Any) -> Any:
         if self._user_simulation_func is None:
-            return env_state
+            raise NotImplementedError("No simulation function provided to SimpleEnv.")
         return self._user_simulation_func(env_state)
 
     def global_state_to_env_state(self, global_state: Dict[str, Any]) -> Dict[str, Dict]:

@@ -2,6 +2,12 @@
 
 This module provides TickConfig dataclass for centralized tick timing
 configuration with support for randomization (jitter) in testing mode.
+
+Default tick config constants for each agent type:
+
+- ``DEFAULT_FIELD_AGENT_TICK_CONFIG``       — 1.0s tick interval
+- ``DEFAULT_COORDINATOR_AGENT_TICK_CONFIG`` — 60.0s tick interval
+- ``DEFAULT_SYSTEM_AGENT_TICK_CONFIG``      — 300.0s tick interval
 """
 
 from dataclasses import dataclass, field
@@ -227,3 +233,14 @@ class TickConfig:
             min_delay=min_delay,
             rng=rng,
         )
+
+
+# =========================================================================
+# Default tick configs per agent type
+# =========================================================================
+# The tick_interval values mirror the agent hierarchy's natural cadence:
+#   Field (1s) < Coordinator (60s) < System (300s)
+
+DEFAULT_FIELD_AGENT_TICK_CONFIG = TickConfig.deterministic(tick_interval=1.0)
+DEFAULT_COORDINATOR_AGENT_TICK_CONFIG = TickConfig.deterministic(tick_interval=60.0)
+DEFAULT_SYSTEM_AGENT_TICK_CONFIG = TickConfig.deterministic(tick_interval=300.0)

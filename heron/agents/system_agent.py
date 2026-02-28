@@ -13,13 +13,12 @@ from heron.utils.typing import AgentID, MultiAgentDict
 from heron.core.policies import Policy
 from heron.protocols.base import Protocol
 from heron.scheduling.scheduler import Event, EventScheduler
-from heron.scheduling.tick_config import TickConfig
+from heron.scheduling.tick_config import DEFAULT_SYSTEM_AGENT_TICK_CONFIG, TickConfig
 from gymnasium.spaces import Box, Space
 from heron.agents.constants import (
     SYSTEM_LEVEL,
     SYSTEM_AGENT_ID,
     PROXY_AGENT_ID,
-    DEFAULT_SYSTEM_TICK_INTERVAL,
     MSG_GET_INFO,
     MSG_SET_STATE,
     MSG_SET_STATE_COMPLETION,
@@ -55,7 +54,7 @@ class SystemAgent(Agent):
             subordinates=subordinates,
             upstream_id=None,  # System agent has no upstream
             env_id=env_id,
-            tick_config=tick_config or TickConfig.deterministic(tick_interval=DEFAULT_SYSTEM_TICK_INTERVAL),
+            tick_config=tick_config or DEFAULT_SYSTEM_AGENT_TICK_CONFIG,
             policy=policy,
             protocol=protocol
         )

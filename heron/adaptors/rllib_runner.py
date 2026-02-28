@@ -21,13 +21,7 @@ Step-based training (default)::
             evaluation_num_env_runners=0,
             evaluation_duration=1,
             evaluation_duration_unit="episodes",
-            evaluation_config=PPOConfig.overrides(
-                env_config={
-                    "eval_event_driven": True,
-                    "eval_t_end": 100.0,
-                    "eval_tick_interval": 1.0,
-                },
-            ),
+            evaluation_config=HeronEnvRunner.evaluation_config(t_end=100.0),
         )
         .framework("torch")
     )
@@ -39,15 +33,8 @@ Step-based training (default)::
 from typing import Any, Dict, List
 
 import numpy as np
-
-try:
-    from ray.rllib.env.multi_agent_env_runner import MultiAgentEnvRunner
-    from ray.rllib.env.multi_agent_episode import MultiAgentEpisode
-except ImportError as exc:
-    raise ImportError(
-        "ray[rllib] is required for HeronEnvRunner. "
-        "Install with: pip install 'ray[rllib]>=2.9.0'"
-    ) from exc
+from ray.rllib.env.multi_agent_env_runner import MultiAgentEnvRunner
+from ray.rllib.env.multi_agent_episode import MultiAgentEpisode
 
 
 class HeronEnvRunner(MultiAgentEnvRunner):
@@ -65,7 +52,6 @@ class HeronEnvRunner(MultiAgentEnvRunner):
     @staticmethod
     def evaluation_config(
         t_end: float = 100.0,
-        tick_interval: float = 1.0,
         seed: int = 100,
     ) -> Any:
         """Return an ``evaluation_config`` object for event-driven HERON evaluation.
@@ -82,7 +68,6 @@ class HeronEnvRunner(MultiAgentEnvRunner):
 
         Args:
             t_end: Simulation end time per episode.
-            tick_interval: Base tick interval for agents.
             seed: Base seed for TickConfig jitter.
         """
         from ray.rllib.algorithms.ppo import PPOConfig
@@ -91,7 +76,6 @@ class HeronEnvRunner(MultiAgentEnvRunner):
             env_config={
                 "eval_event_driven": True,
                 "eval_t_end": t_end,
-                "eval_tick_interval": tick_interval,
                 "eval_seed": seed,
             },
         )
@@ -137,46 +121,37 @@ class HeronEnvRunner(MultiAgentEnvRunner):
     ) -> List[MultiAgentEpisode]:
         """Run event-driven HERON simulation and return MultiAgentEpisodes.
 
-        Creates a fresh HERON env per episode, bridges the runner's trained
-        RLModules to HERON policies via ``RLlibModuleBridge``, configures
-        tick configs, and runs event-driven simulation.  Constructs proper
-        ``MultiAgentEpisode`` objects from the reward history so that
-        RLlib's metrics pipeline can process them.
+        Builds one HERON env (tick_config is applied at construction from
+        env_config), bridges the runner's trained RLModules to HERON
+        policies, then reuses the env across episodes.  Only jitter RNG
+        seeds change per episode via ``reset(jitter_seed=...)``.
         """
         from heron.adaptors.rllib import _build_heron_env
         from heron.scheduling.analysis import EventAnalyzer
-        from heron.scheduling.tick_config import TickConfig
 
         env_config = self.config.env_config
         t_end = env_config.get("eval_t_end", 100.0)
-        tick_interval = env_config.get("eval_tick_interval", 1.0)
         seed = env_config.get("eval_seed", 100)
 
         # Agent IDs visible to RLlib (from the RLlibBasedHeronEnv wrapper)
         rllib_agent_ids = list(self.env.unwrapped.possible_agents)
 
+        # Build env once; tick_config from env_config is applied at construction.
+        # Bridge policies (stable across episodes).
+        heron_env = _build_heron_env(env_config)
+        policies = self._bridge_modules_to_policies(heron_env)
+        heron_env.set_agent_policies(policies)
+
         episodes: List[MultiAgentEpisode] = []
 
         for ep_idx in range(num_episodes):
-            # 1. Create fresh HERON env from the same config
-            heron_env = _build_heron_env(env_config)
-
-            # 2. Bridge runner's RLModules → HERON policies
-            policies = self._bridge_modules_to_policies(heron_env)
-            heron_env.set_agent_policies(policies)
-
-            # 3. Configure tick configs with jitter
+            # Reset with per-episode jitter seed (tick_config set at construction)
             ep_seed = seed + ep_idx
-            for agent in heron_env.registered_agents.values():
-                agent._tick_config = TickConfig.deterministic(tick_interval=tick_interval)
-                agent.enable_jitter(seed=ep_seed)
-
-            # 4. Reset and run event-driven simulation
-            heron_env.reset(seed=seed + ep_idx)
+            heron_env.reset(seed=ep_seed, jitter_seed=ep_seed)
             analyzer = EventAnalyzer(verbose=False, track_data=True)
             episode_result = heron_env.run_event_driven(analyzer, t_end=t_end)
 
-            # 5. Build MultiAgentEpisode from reward history
+            # 3. Build MultiAgentEpisode from reward history
             reward_history = analyzer.get_reward_history()
             summary = episode_result.summary()
 
@@ -186,7 +161,7 @@ class HeronEnvRunner(MultiAgentEnvRunner):
             )
             episodes.append(ma_episode)
 
-            # 6. Store HERON-specific metrics
+            # 4. Store HERON-specific metrics
             total_reward = sum(
                 sum(r for _, r in rewards)
                 for rewards in reward_history.values()
@@ -198,7 +173,7 @@ class HeronEnvRunner(MultiAgentEnvRunner):
                 "duration": summary["duration"],
             }
 
-            heron_env.close()
+        heron_env.close()
 
         # Populate done-episodes cache so get_metrics() can process them
         self._done_episodes_for_metrics.extend(episodes)

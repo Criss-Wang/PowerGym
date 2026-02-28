@@ -12,6 +12,7 @@ from heron.core.policies import Policy
 from heron.messaging import MessageBroker, ChannelManager, Message, MessageType
 from heron.utils.typing import AgentID, MultiAgentDict
 from heron.scheduling import EventScheduler, DefaultScheduler, Event, EventAnalyzer, EpisodeResult
+from heron.scheduling.tick_config import TickConfig
 from heron.agents.system_agent import SystemAgent
 from heron.agents.proxy_agent import ProxyAgent
 from heron.agents.constants import SYSTEM_AGENT_ID, PROXY_AGENT_ID
@@ -28,6 +29,8 @@ class EnvCore:
         coordinator_agents: Optional[List[CoordinatorAgent]] = None,
         # simulation-related params
         simulation_wait_interval: Optional[float] = None,
+        # timing
+        system_agent_tick_config: Optional[TickConfig] = None,
     ) -> None:
         # environment attributes
         self.env_id = env_id or f"env_{uuid.uuid4().hex[:8]}"
@@ -35,7 +38,7 @@ class EnvCore:
 
         # agent-specific fields
         self.registered_agents: Dict[AgentID, Agent] = {}
-        self._register_agents(system_agent, coordinator_agents)
+        self._register_agents(system_agent, coordinator_agents, system_agent_tick_config)
 
         # initialize proxy agent (singleton) for state access and action dispatch
         self.proxy_agent = ProxyAgent(agent_id=PROXY_AGENT_ID)
@@ -61,6 +64,7 @@ class EnvCore:
         self,
         system_agent: Optional[SystemAgent],
         coordinator_agents: Optional[List[CoordinatorAgent]],
+        system_agent_tick_config: Optional[TickConfig] = None,
     ) -> None:
         """Internal method to register agents during initialization."""
         # register system agent (singleton) & its subordinates
@@ -71,10 +75,13 @@ class EnvCore:
             self._system_agent = system_agent
         else:
             print("No system agent provided, using default system agent")
-            self._system_agent = SystemAgent(
-                agent_id=SYSTEM_AGENT_ID,
-                subordinates={agent.agent_id: agent for agent in coordinator_agents}
-            )
+            sys_kwargs = {
+                "agent_id": SYSTEM_AGENT_ID,
+                "subordinates": {agent.agent_id: agent for agent in coordinator_agents},
+            }
+            if system_agent_tick_config is not None:
+                sys_kwargs["tick_config"] = system_agent_tick_config
+            self._system_agent = SystemAgent(**sys_kwargs)
         self._system_agent.set_simulation(
             self.run_simulation,
             self.env_state_to_global_state,
@@ -110,13 +117,28 @@ class EnvCore:
     # ===========================================
     # Environment Interaction Methods
     # ==========================================
-    def reset(self, *, seed: Optional[int] = None, **kwargs) -> Tuple[MultiAgentDict, MultiAgentDict]:
+    def reset(
+        self,
+        *,
+        seed: Optional[int] = None,
+        jitter_seed: Optional[int] = None,
+        **kwargs,
+    ) -> Tuple[MultiAgentDict, MultiAgentDict]:
         """Reset all registered agents.
 
         Args:
-            seed: Random seed
+            seed: Random seed for agent/env reset.
+            jitter_seed: If provided, enables jitter on all agents with
+                this seed (for reproducible event-driven evaluation).
+                Tick configs should be set at agent construction time
+                (e.g. via ``tick_config`` in env_config).
             **kwargs: Additional reset parameters
         """
+        # Re-seed jitter RNG per episode for reproducible event-driven eval
+        if jitter_seed is not None:
+            for agent in self.registered_agents.values():
+                agent.enable_jitter(seed=jitter_seed)
+
         # Sync tick configs in case agents were reconfigured after construction
         self.scheduler.sync_tick_configs(self.registered_agents)
         # reset scheduler and clear messages before resetting agents to ensure a clean slate

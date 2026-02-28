@@ -29,14 +29,16 @@ from agents import TransportCoordinator, TransportDrone, NUM_DRONES_PER_FLEET
 from env_physics import case2_simulation
 from features import DronePositionFeature
 
+import ray
+from ray.rllib.algorithms.ppo import PPOConfig
+from ray.rllib.policy.policy import PolicySpec
+
+from heron.adaptors.rllib import RLlibBasedHeronEnv
+from heron.adaptors.rllib_runner import HeronEnvRunner
+from heron.scheduling import TickConfig, JitterType
 
 def main():
-    import ray
-    from ray.rllib.algorithms.ppo import PPOConfig
-    from ray.rllib.policy.policy import PolicySpec
 
-    from heron.adaptors.rllib import RLlibBasedHeronEnv
-    from heron.adaptors.rllib_runner import HeronEnvRunner
 
     print("=" * 60)
     print("Case 2: MAPPO — 2 fleet coordinators (shared policy), 3 drones each")
@@ -55,15 +57,55 @@ def main():
                 env_config={
                     "env_id": "mappo_transport",
                     "agents": [
-                        {"agent_id": f"drone_{f}_{d}", "agent_cls": TransportDrone,
-                         "features": [DronePositionFeature(y_pos=0.2 + 0.3 * d)],
-                         "coordinator": f"fleet_{f}"}
+                        {
+                            "agent_id": f"drone_{f}_{d}", 
+                            "agent_cls": TransportDrone,
+                            "features": [DronePositionFeature(y_pos=0.2 + 0.3 * d)],
+                            # Optional per-agent tick config with jitter (overrides DEFAULT_FIELD_AGENT_TICK_CONFIG)
+                            "tick_config": TickConfig.with_jitter(
+                                tick_interval=0.5,    # Field agents tick every 0.5 seconds
+                                obs_delay=0.05,       # 50ms observation delay
+                                act_delay=0.05,       # 50ms action delay
+                                msg_delay=0.05,       # 50ms message delay
+                                jitter_type=JitterType.GAUSSIAN,
+                                jitter_ratio=0.1,     # 10% jitter
+                                seed=42
+                            ),
+                            "coordinator": f"fleet_{f}"
+                        }
                         for f in range(2) for d in range(NUM_DRONES_PER_FLEET)
                     ],
                     "coordinators": [
-                        {"coordinator_id": f"fleet_{f}", "agent_cls": TransportCoordinator}
+                        {
+                            "coordinator_id": f"fleet_{f}", 
+                            "agent_cls": TransportCoordinator,
+                            # Optional per-coordinator tick config with jitter (overrides DEFAULT_COORDINATOR_AGENT_TICK_CONFIG)
+                            "tick_config": TickConfig.with_jitter(
+                                tick_interval=1.0,    # Coordinators tick every 1 second
+                                obs_delay=0.05,
+                                act_delay=0.1,
+                                msg_delay=0.05,
+                                reward_delay=0.2,     # Wait for field agent reward round-trips
+                                jitter_type=JitterType.GAUSSIAN,
+                                jitter_ratio=0.1,
+                                seed=43
+                            )
+                        }
                         for f in range(2)
                     ],
+                    # Optional top-level system tick config with jitter (overrides DEFAULT_SYSTEM_AGENT_TICK_CONFIG)
+                    "system": {
+                        "tick_config": TickConfig.with_jitter(
+                            tick_interval=2.0,    # System tick every 2 seconds
+                            obs_delay=0.05,
+                            act_delay=0.1,
+                            msg_delay=0.05,
+                            reward_delay=0.3,
+                            jitter_type=JitterType.GAUSSIAN,
+                            jitter_ratio=0.1,
+                            seed=44
+                        )
+                    },
                     "simulation": case2_simulation,
                     "max_steps": 50,
                     "agent_ids": fleet_ids,

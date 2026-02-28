@@ -14,11 +14,16 @@ Usage — pass agent/coordinator specs directly in ``env_config``::
             env_config={
                 "agents": [
                     {"agent_id": "drone_0", "agent_cls": Drone,
-                     "features": [DroneFeature()], "coordinator": "fleet"},
+                     "features": [DroneFeature()], "coordinator": "fleet",
+                     "tick_config": TickConfig(...)},   # optional per-agent
                 ],
                 "coordinators": [
-                    {"coordinator_id": "fleet", "agent_cls": FleetManager},
+                    {"coordinator_id": "fleet", "agent_cls": FleetManager,
+                     "tick_config": TickConfig(...)},   # optional per-coordinator
                 ],
+                "system": {
+                    "tick_config": TickConfig(...),      # optional for SystemAgent
+                },
                 "simulation": my_sim_func,
                 "max_steps": 100,
             },
@@ -44,6 +49,10 @@ def _build_heron_env(config: Dict[str, Any]) -> HeronEnv:
 
     Reads ``agents``, ``coordinators``, and either ``simulation`` or
     ``env_class`` keys and constructs an ``EnvBuilder`` internally.
+
+    An optional ``"system"`` dict with a ``"tick_config"`` key sets the
+    auto-created SystemAgent's tick config.  Individual agent/coordinator
+    specs can carry their own ``tick_config`` kwarg independently.
     """
     if "agents" not in config:
         raise ValueError(
@@ -52,35 +61,29 @@ def _build_heron_env(config: Dict[str, Any]) -> HeronEnv:
 
     builder = EnvBuilder(config.get("env_id", "default_env"))
 
+
+    # Add agents and coordinators
     for agent_cfg in config["agents"]:
-        extra = {
-            k: v for k, v in agent_cfg.items()
-            if k not in ("agent_id", "agent_cls", "features", "coordinator")
-        }
         builder.add_agent(
             agent_id=agent_cfg["agent_id"],
             agent_cls=agent_cfg["agent_cls"],
             features=agent_cfg.get("features"),
+            tick_config=agent_cfg.get("tick_config"),
             coordinator=agent_cfg.get("coordinator"),
-            **extra,
         )
 
     for coord_cfg in config.get("coordinators", []):
-        extra = {
-            k: v for k, v in coord_cfg.items()
-            if k not in (
-                "coordinator_id", "agent_cls", "features",
-                "protocol", "subordinates",
-            )
-        }
         builder.add_coordinator(
             coordinator_id=coord_cfg["coordinator_id"],
             agent_cls=coord_cfg.get("agent_cls"),
             features=coord_cfg.get("features"),
             protocol=coord_cfg.get("protocol"),
+            tick_config=coord_cfg.get("tick_config"),
             subordinates=coord_cfg.get("subordinates"),
-            **extra,
         )
+    # Add system agent
+    system_cfg = config.get("system", {})
+    builder.add_system_agent(tick_config=system_cfg.get("tick_config"))
 
     if "env_class" in config:
         builder.env_class(config["env_class"], **config.get("env_kwargs", {}))
