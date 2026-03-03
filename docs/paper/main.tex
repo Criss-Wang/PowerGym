@@ -24,6 +24,25 @@
 \usepackage{enumitem}
 \usepackage{tikz}
 \usetikzlibrary{shapes,arrows,positioning,fit,calc}
+\usepackage{listings}
+\usepackage{float}
+
+% Code listing style
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{blue!70!black},
+  commentstyle=\color{green!50!black},
+  stringstyle=\color{red!60!black},
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  framesep=3pt,
+  xleftmargin=6pt,
+  xrightmargin=6pt,
+  aboveskip=6pt,
+  belowskip=4pt,
+}
 
 % Custom commands
 \newcommand{\heron}{\textsc{Heron}}
@@ -32,11 +51,11 @@
 \newcommand{\etal}{\textit{et al.}}
 \newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
 \newcommand{\placeholder}[1]{\textcolor{blue}{[PLACEHOLDER: #1]}}
-\newcommand{\exampleval}[1]{\textcolor{teal}{#1}\textsuperscript{\textcolor{teal}{$\dagger$}}} % preliminary value
+\newcommand{\exampleval}[1]{\textcolor{teal}{#1}\textsuperscript{\textcolor{teal}{$\dagger$}}}
 \newcommand{\cmark}{\checkmark}
 \newcommand{\xmark}{$\times$}
 
-\title{\heron{}: Event-Driven Hierarchical Multi-Agent Simulation for Information-Constrained Coordination}
+\title{\heron{}: Agent-Centric Multi-Agent Simulation\\for Event-Driven Hierarchical Coordination}
 
 \author{
   \placeholder{Author Name}$^{1}$ \quad
@@ -51,11 +70,9 @@
 \maketitle
 
 \begin{abstract}
-Multi-agent reinforcement learning (MARL) benchmarks predominantly adopt an \emph{environment-centric, synchronous} execution model where a centralized loop broadcasts observations and collects actions from all agents simultaneously. This abstraction obscures critical realities in cyber-physical systems (CPS): (i) \emph{agents are event-driven}, reacting to messages rather than polling global state, (ii) \emph{information is partitioned} by organizational roles and communication topology, and (iii) \emph{coordination requires explicit protocols} rather than implicit global state access.
+Key MARL research questions---Does asynchronous execution degrade cooperation? How much information must agents share for stable coordination?---remain understudied because answering them requires independently varying execution model (when agents act), information structure (what they observe), and coordination mechanism (how they interact). Standard frameworks conflate all three inside a single \texttt{step()} loop; changing any one means modifying the same code that handles physics, introducing confounds that standard ablations cannot isolate.
 
-We introduce \heron{} (\textbf{H}ierarchical \textbf{E}nvironments for \textbf{R}ealistic \textbf{O}bservability in \textbf{N}etworks), a domain-agnostic MARL framework that makes \textbf{execution model}, \textbf{information structure}, and \textbf{coordination protocols} first-class design variables. \heron{}'s core contributions are: (1) an \textbf{event-driven hierarchical execution model} via \texttt{run\_event\_driven()} where agents tick independently at heterogeneous rates through a heap-based \texttt{EventScheduler}; (2) a \textbf{ProxyAgent} that centralizes state management and enforces visibility-based observation filtering, mediating all agent-state interactions; (3) \textbf{FeatureProviders} with visibility labels (\texttt{public}, \texttt{owner}, \texttt{upper\_level}, \texttt{system}) enabling systematic observability ablations; (4) a \textbf{MessageBroker} abstraction for explicit agent-to-agent communication with channel-based isolation; and (5) a modular \textbf{protocol system} separating coordination semantics from physics.
-
-We demonstrate \heron{} through a power systems case study featuring multi-microgrid coordination with PandaPower-based AC power flow, IEEE/CIGRE test networks, and 20 domain-specific FeatureProviders. A traffic network case study demonstrates cross-domain reuse of identical abstractions. \heron{} is released open-source to support reproducible research on event-driven, information-constrained multi-agent coordination.
+We introduce \heron{}, a benchmark framework that disentangles these three dimensions: \emph{agents own the coordination; the environment owns only the physics}. \heron{} provides (1)~a three-level agent hierarchy with composable coordination protocols, (2)~dual-mode execution---synchronous \texttt{step()} for CTDE training and event-driven \texttt{run\_event\_driven()} for deployment-realistic evaluation, and (3)~a four-level visibility model (\texttt{public}/\texttt{owner}/\texttt{upper\_level}/\texttt{system}) that we use to show upper-level visibility achieves near-optimal performance (+3.7\% cost) while respecting realistic information boundaries. We further show that policies trained under synchronous assumptions suffer \placeholder{X}\% degradation under communication delays calibrated to power-system SCADA timescales (seconds to minutes), and that these ordering effects hold across MAPPO, IPPO, and QMIX. We demonstrate on power systems (6 IEEE/CIGRE networks) and traffic signal control; both domains reuse identical base abstractions without any domain-specific coordination code.
 \end{abstract}
 
 %==============================================================================
@@ -63,87 +80,100 @@ We demonstrate \heron{} through a power systems case study featuring multi-micro
 \label{sec:intro}
 %==============================================================================
 
-MARL has achieved impressive results in game-like benchmarks \cite{samvelyan2019starcraft, vinyals2019grandmaster}, yet real-world deployment in networked systems remains challenging. A core issue is \textbf{simulation mismatch}: benchmarks encode assumptions that collapse in cyber-physical systems (CPS) such as smart grids, traffic networks, and robot fleets.
+MARL algorithms are typically developed in environments that share a common execution model: a centralized loop calls \texttt{env.step(actions)}, delivers observations derived from a global state snapshot, and collects actions from all agents simultaneously. This \emph{synchronous, environment-centric} paradigm---inherited from single-agent RL and extended by PettingZoo~\cite{terry2021pettingzoo}, EPyMARL~\cite{papoudakis2021benchmarking}, and MARLlib~\cite{hu2023marllib}---has been productive for algorithm benchmarking. However, it encodes three assumptions that collapse in cyber-physical systems (CPS) such as smart grids, traffic networks, and robotic fleets.
 
-\paragraph{What benchmarks should control.}
-In distributed control systems, three dimensions are critical but often conflated in MARL benchmarks:
+\paragraph{Three assumptions that break.}
+\begin{enumerate}[nosep,leftmargin=*]
+    \item \textbf{Synchronized execution.} All agents observe and act at the same instant. In reality, agents operate at heterogeneous rates---a field sensor polls every second, a zone coordinator decides every minute. Observations are stale by the time they arrive; actions take effect after physical delays.
+    \item \textbf{Global information access.} Observations are derived from a single global state snapshot, differing across agents only by what the environment \emph{chooses} to mask. In reality, information is partitioned by organizational boundaries, sensor coverage, and communication topology.
+    \item \textbf{Implicit coordination.} Agents coordinate through shared reward signals and centralized critics. In reality, coordination requires explicit mechanisms---setpoint commands flowing down a hierarchy, price signals propagating through a market, consensus protocols running among peers---each with its own latency and failure modes.
+\end{enumerate}
+
+Training a policy under MDP assumptions (shared observations, simultaneous actions) and deploying it under Dec-POMDP conditions (asymmetrically stale observations, delayed effects) exposes a structural mismatch: the optimization landscape during training does not match the decision problem at deployment.
+
+\paragraph{Why existing frameworks don't solve this.}
+Standard MARL frameworks standardize the \emph{environment-algorithm interface} and do this well. But none standardize \emph{what happens inside the environment}---how agents access state, how they communicate, or how execution timing affects observations. When a researcher needs to restrict a field agent's observation, compare centralized versus decentralized coordination, or measure timing-induced degradation, they must build these mechanisms \emph{inside the environment class}---modifying the same code that handles physics. Each variation requires a new environment implementation. Subtle differences in physics handling between variants introduce confounds that do not appear in any configuration table. You think you are comparing coordination structures, but you are comparing two partially divergent simulators.
+
+\paragraph{The agent-centric alternative.}
+\heron{} inverts the locus of control. Instead of the environment owning all agent logic, \heron{} places coordination in \textbf{agents and their protocols}:
 \begin{itemize}[nosep]
-    \item \textbf{Execution model}: Agents are event-driven, reacting to messages rather than synchronously polling global state.
-    \item \textbf{Information structure}: Observations are filtered by organizational roles and communication topology---not globally broadcast.
-    \item \textbf{Coordination protocols}: Agents coordinate through explicit mechanisms (setpoints, price signals, consensus) rather than implicit access to shared state.
+    \item \textbf{The environment owns the physics}---three bridge methods connect \heron{}'s state representation to any external simulator. Everything else is stable across experiments.
+    \item \textbf{Agents own the coordination}---agents are explicitly hierarchical (\texttt{FieldAgent} $\rightarrow$ \texttt{CoordinatorAgent} $\rightarrow$ \texttt{SystemAgent}), and coordination is defined by pluggable \texttt{Protocol} objects. Swapping from centralized dispatch to peer consensus is a constructor argument change, not an environment rewrite.
+    \item \textbf{The scheduler owns the timing}---a heap-based \texttt{EventScheduler} advances simulation time. The same agent hierarchy runs in both synchronous and event-driven modes, with per-agent \texttt{TickConfig} specifying intervals, delays, and jitter distributions.
 \end{itemize}
 
-However, most MARL benchmarks treat these as fixed implementation details. The prevalent paradigm is an \emph{environment-centric global step}: the environment exposes a \texttt{step()} API and returns observations derived from a globally accessible simulator state.
-
-\paragraph{Why global state access fails in CPS.}
-Consider a distribution grid with distributed energy resources (DERs). Commercial boundaries prevent full state sharing between microgrids. Supervisory layers see aggregates, not individual device states. Similar constraints arise in traffic control (regional vs. local signal coordination) and robotics (zone managers vs. individual robots).
-
-\paragraph{Key idea.}
-\heron{} shifts from environment-centric observation broadcast to \textbf{hierarchical, protocol-mediated coordination}. Instead of all agents receiving filtered views of global state, agents are organized in explicit hierarchies where information flows through defined channels and coordination occurs via composable protocols. A central \textbf{ProxyAgent} mediates all state access, enforcing visibility constraints and preventing agents from bypassing information boundaries.
-
 \paragraph{Contributions.}
-\heron{} is a benchmark framework with contributions around a single theme---\emph{making execution model, information structure, and coordination mechanisms explicit in multi-agent simulation}:
+\heron{} is a benchmark framework with contributions around a single theme---\emph{making execution model, information structure, and coordination mechanisms first-class design variables}:
 \begin{enumerate}[leftmargin=*, itemsep=2pt]
-    \item \textbf{Event-driven hierarchical execution} (\S\ref{sec:hierarchy}): A three-level agent hierarchy (Field, Coordinator, System) with dual execution modes---synchronous \texttt{step()} for training and event-driven \texttt{run\_event\_driven()} via a heap-based \texttt{EventScheduler} for realistic validation.
-    \item \textbf{ProxyAgent for centralized state management} (\S\ref{sec:proxy}): A dedicated agent that stores all state objects, mediates observations through visibility filtering, and prevents unauthorized state access.
-    \item \textbf{Composable observability via FeatureProviders} (\S\ref{sec:observability}): Modular, visibility-labeled feature blocks enabling systematic information ablations and controlled observability studies.
-    \item \textbf{MessageBroker for explicit communication} (\S\ref{sec:messaging}): Channel-based agent communication with environment isolation, supporting both in-memory and distributed backends.
-    \item \textbf{Protocol system for coordination topologies} (\S\ref{sec:protocols}): Vertical (hierarchical) and horizontal (peer-to-peer) protocols that decouple coordination semantics from physics.
-    \item \textbf{Two CPS case studies} (\S\ref{sec:power}, \S\ref{sec:traffic}): Power systems (20 FeatureProviders, 6 agent types, 6 test networks) and traffic networks, demonstrating cross-domain reuse.
+    \item \textbf{Agent-centric architecture} (\S\ref{sec:hierarchy}): A three-level agent hierarchy where physics, coordination, and timing are cleanly separated.
+    \item \textbf{Dual-mode execution} (\S\ref{sec:concepts}): Synchronous \texttt{env.step()} for CTDE training and event-driven \texttt{env.run\_event\_driven()} via a heap-based \texttt{EventScheduler} with 7 event types---enabling direct measurement of the synchronous-to-event-driven gap.
+    \item \textbf{ProxyAgent for state mediation} (\S\ref{sec:proxy}): A centralized gatekeeper enforcing four-level visibility constraints.
+    \item \textbf{Composable protocol system} (\S\ref{sec:protocols}): Orthogonal \texttt{CommunicationProtocol} + \texttt{ActionProtocol} composition.
+    \item \textbf{Power systems case study} (\S\ref{sec:power}): 20 FeatureProviders, 6 agent types, 6 IEEE/CIGRE test networks.
 \end{enumerate}
 
 %==============================================================================
-\section{Related Work}
-\label{sec:related}
+\section{Concepts: Event-Driven Execution as a Full Episode Lifecycle}
+\label{sec:concepts}
 %==============================================================================
 
-\textbf{Multi-agent benchmarks.}
-MPE \cite{mordatch2018emergence}, SMAC \cite{samvelyan2019starcraft}, and SMACv2 inherit synchronous stepping with globally derived observations. PettingZoo \cite{terry2021pettingzoo} provides important API standardization but its stepping abstractions do not model hierarchical information flow or explicit coordination protocols as benchmark variables. EPyMARL \cite{papoudakis2021benchmarking} and MARLlib \cite{hu2023marllib} focus on algorithm benchmarking; \heron{} addresses \emph{environment construction} for CPS---an orthogonal and complementary layer. Table~\ref{tab:comparison} summarizes differences.
+\subsection{Step-Based vs. Event-Driven Execution}
 
-\textbf{Hierarchical RL and communication.}
-Feudal networks \cite{vezhnevets2017feudal} and learned communication \cite{foerster2016learning, das2019tarmac} study coordination under partial information but focus on \emph{learning} hierarchy or communication. \heron{} provides a substrate where hierarchy and communication topology are \emph{configurable experimental variables}.
+In conventional MARL, an episode is a sequence of \emph{synchronized global steps}: at each step, all agents see the same time snapshot, decide simultaneously, and the environment advances one tick. Rewards $r_t$ are attached to individual steps. The decision process is a (PO)MDP. This is correct for CTDE training.
 
-\textbf{CPS-domain RL benchmarks.}
-Grid2Op \cite{donnot2020introducing} and gym-anm \cite{henry2021gym} provide realistic power-system simulators but are single-agent. CityLearn \cite{vazquez2019citylearn} and PowerGridworld \cite{biagioni2022powergridworld} support multi-agent settings, but observability is binary (full vs. local) and coordination protocols are not exposed as benchmark variables.
+In \emph{event-driven} execution, an episode is a continuous simulation over $[0, t_\text{end}]$ where agents act asynchronously on independent clocks. A heap-based scheduler processes events chronologically:
+\begin{itemize}[nosep]
+    \item On \texttt{AGENT\_TICK}: the agent observes (potentially stale) state, decides, and schedules an \texttt{ACTION\_EFFECT} with delay.
+    \item On \texttt{ACTION\_EFFECT}: the action takes physical effect, updating the state cache.
+    \item On \texttt{MESSAGE\_DELIVERY}: a message arrives at the recipient after communication delay.
+\end{itemize}
+
+Table~\ref{tab:exec-comparison} summarizes the differences.
 
 \begin{table}[t]
 \centering
-\caption{Comparison with related multi-agent frameworks. \heron{} uniquely combines event-driven execution, multi-level visibility control, composable protocols, and centralized state mediation via ProxyAgent.}
-\label{tab:comparison}
+\caption{Step-based vs.\ event-driven execution semantics.}
+\label{tab:exec-comparison}
 \small
-\begin{tabular}{@{}lccccccc@{}}
+\begin{tabular}{@{}lp{4.8cm}p{5.2cm}@{}}
 \toprule
-\textbf{Framework} & \textbf{Multi-Agent} & \textbf{Event-Driven} & \textbf{Hierarchy} & \textbf{Visibility} & \textbf{Protocols} & \textbf{State Mediation} & \textbf{CPS Focus} \\
+\textbf{Dimension} & \textbf{Step-based} & \textbf{Event-driven} \\
 \midrule
-PettingZoo & \cmark & \xmark & \xmark & \xmark & \xmark & \xmark & \xmark \\
-EPyMARL & \cmark & \xmark & \xmark & \xmark & \xmark & \xmark & \xmark \\
-MARLlib & \cmark & \xmark & \xmark & \xmark & \xmark & \xmark & \xmark \\
-PowerGridworld & \cmark & \xmark & \xmark & Binary & \xmark & \xmark & \cmark \\
-CityLearn & \cmark & \xmark & \xmark & Binary & \xmark & \xmark & \cmark \\
-Grid2Op & \xmark & \xmark & \xmark & N/A & \xmark & \xmark & \cmark \\
-\midrule
-\textbf{\heron{}} & \cmark & \cmark & \cmark & \textbf{4-level} & \cmark & \cmark & \cmark \\
+Observation timing & All agents see the same snapshot at time $t$ & Each agent sees whatever was last written to the state cache---different historical states \\
+Decision process & Shared-observation (PO)MDP & Dec-POMDP with asymmetrically stale observations \\
+Action effect & Immediate, simultaneous & Delayed by \texttt{act\_delay} \\
+Communication & Implicit via shared state & Explicit messages with \texttt{msg\_delay} \\
+Agent cadence & All tick together & Independent \texttt{tick\_interval} with optional jitter \\
+Reward semantics & Per-step $r_t$ & Hierarchical cascade; aggregated over episode \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\subsection{Why Both Modes in One Framework}
+
+The core scientific question \heron{} enables is: \emph{how much does policy performance degrade when we move from the training-time MDP to the deployment-time Dec-POMDP?} This requires both modes over the \emph{same} agent definitions: train with \texttt{env.step()} and evaluate with \texttt{env.run\_event\_driven()}. The reward difference quantifies the \emph{synchronous-to-event-driven gap}, which depends on the agent hierarchy, timing configuration, and information structure---all independently tunable.
+
+\subsection{Rewards in Event-Driven Mode}
+
+In step-based mode, rewards are computed per-step and returned immediately. In event-driven mode, rewards follow a \textbf{hierarchical cascade}: (1)~after physics simulation, a \texttt{set\_state\_completion} signal propagates top-down; (2)~each agent requests its updated local state from the ProxyAgent; (3)~each agent computes \texttt{compute\_local\_reward(local\_state)} from its visibility-filtered view; (4)~parent agents apply \texttt{reward\_delay} before computing their own rewards, ensuring subordinate rewards are available for hierarchical credit assignment. This reflects real CPS reward semantics: a grid operator's cost aggregates from device-level metrics with natural propagation delays.
 
 %==============================================================================
 \section{\heron{} Framework}
 \label{sec:framework}
 %==============================================================================
 
-\subsection{System Overview}
+\heron{} is organized around six modules: \textbf{Agents} (hierarchical decision-makers), \textbf{ProxyAgent} (state mediation), \textbf{Features} (visibility-labeled observations), \textbf{Messaging} (channel-based communication), \textbf{Protocols} (coordination mechanisms), and \textbf{Environments} (physics backends).
+
+\subsection{Architecture Overview}
 \label{sec:overview}
 
-\heron{} is organized around six reusable modules: \textbf{Agents} (hierarchical decision-makers), \textbf{ProxyAgent} (centralized state management and visibility enforcement), \textbf{Features} (visibility-labeled observations), \textbf{Messaging} (channel-based communication), \textbf{Protocols} (coordination mechanisms), and \textbf{Environments} (physics backends and task definitions).
-
-Figure~\ref{fig:architecture} shows the architecture. The key architectural decision is that \textbf{no agent directly accesses environment state}. Instead, all state reads and writes are mediated by the ProxyAgent, which enforces visibility constraints. This prevents agents from bypassing information boundaries---a common source of simulation mismatch in MARL benchmarks.
+Figure~\ref{fig:architecture} shows the architecture. The key invariant is that \textbf{no agent directly accesses environment state}. All state reads and writes are mediated by the ProxyAgent, which enforces visibility constraints.
 
 \begin{figure}[t]
 \centering
 \begin{tikzpicture}[
-    node distance=0.8cm,
-    box/.style={rectangle, draw, minimum width=2.2cm, minimum height=0.8cm, align=center, font=\small},
+    node distance=0.6cm,
+    box/.style={rectangle, draw, minimum width=2.0cm, minimum height=0.7cm, align=center, font=\scriptsize},
     arrow/.style={->, >=stealth, thick},
     dasharrow/.style={->, >=stealth, thick, dashed}
 ]
@@ -153,135 +183,122 @@ Figure~\ref{fig:architecture} shows the architecture. The key architectural deci
 % Environment Layer
 \node[box, fill=green!15, below=of rl] (env) {\heron{} Env\\(\texttt{step} / \texttt{run\_event\_driven})};
 
-% ProxyAgent (NEW - central to architecture)
-\node[box, fill=red!15, below left=0.8cm and 1.0cm of env] (proxy) {ProxyAgent\\(State + Visibility)};
+% ProxyAgent
+\node[box, fill=red!15, below left=0.7cm and 1.2cm of env] (proxy) {ProxyAgent\\(State + Visibility)};
 
 % Message Broker
-\node[box, fill=yellow!25, below right=0.8cm and 1.0cm of env] (broker) {MessageBroker\\(channel-based)};
+\node[box, fill=yellow!25, below right=0.7cm and 1.2cm of env] (broker) {MessageBroker\\(Channels)};
 
 % System Agent
-\node[box, fill=cyan!15, below=2.0cm of env] (sys) {SystemAgent\\(Level 3)};
+\node[box, fill=cyan!15, below=1.8cm of env] (sys) {SystemAgent (L3)};
 
 % Coordinator Agents
-\node[box, fill=orange!20, below left=0.8cm and 0.8cm of sys] (ca1) {Coordinator\\Agent 1};
-\node[box, fill=orange!20, below right=0.8cm and 0.8cm of sys] (ca2) {Coordinator\\Agent 2};
+\node[box, fill=orange!20, below left=0.6cm and 0.7cm of sys] (ca1) {Coordinator\\Agent (L2)};
+\node[box, fill=orange!20, below right=0.6cm and 0.7cm of sys] (ca2) {Coordinator\\Agent (L2)};
 
 % Field Agents
-\node[box, fill=purple!15, below=0.6cm of ca1, minimum width=1.8cm] (f1) {FieldAgents};
-\node[box, fill=purple!15, below=0.6cm of ca2, minimum width=1.8cm] (f2) {FieldAgents};
+\node[box, fill=purple!15, below=0.5cm of ca1, minimum width=1.6cm] (f1) {FieldAgents (L1)};
+\node[box, fill=purple!15, below=0.5cm of ca2, minimum width=1.6cm] (f2) {FieldAgents (L1)};
 
 % Physics
-\node[box, fill=gray!20, below=3.8cm of env, xshift=-3.5cm] (physics) {Physics Backend\\(PandaPower/SUMO)};
+\node[box, fill=gray!20, below=3.2cm of env, xshift=-3.5cm] (physics) {Physics Backend};
+
+% EventScheduler
+\node[box, fill=teal!20, right=0.3cm of broker] (sched) {Event\\Scheduler};
 
 % Arrows
 \draw[arrow] (rl) -- (env);
 \draw[arrow] (env) -- (proxy);
 \draw[arrow] (env) -- (broker);
-\draw[dasharrow] (proxy) -- node[left, font=\scriptsize] {obs} (sys);
-\draw[dasharrow] (broker) -- node[right, font=\scriptsize] {msgs} (sys);
+\draw[dasharrow] (proxy) -- node[left, font=\tiny] {filtered obs} (sys);
+\draw[dasharrow] (broker) -- node[right, font=\tiny] {msgs} (sys);
 \draw[arrow] (sys) -- (ca1);
 \draw[arrow] (sys) -- (ca2);
 \draw[arrow] (ca1) -- (f1);
 \draw[arrow] (ca2) -- (f2);
 \draw[dasharrow] (f1.south) |- (physics.east);
 \draw[dasharrow] (f2.south) |- (physics.east);
+\draw[dasharrow] (sched) -- node[above, font=\tiny] {ticks} (broker);
 
 % Protocol annotation
-\node[right=0.3cm of broker, font=\scriptsize, text=gray, align=left] (proto) {Vertical \&\\Horizontal\\Protocols};
-\draw[gray, dashed] (proto) -- (broker);
+\node[above=0.1cm of broker, font=\tiny, text=gray] (proto) {Protocols};
 
 \end{tikzpicture}
-\caption{\heron{} architecture. The ProxyAgent centralizes state management and enforces visibility-based observation filtering. The MessageBroker mediates agent communication via named channels. Agents are organized in a three-level hierarchy with composable protocols governing coordination.}
+\caption{\heron{} architecture. The ProxyAgent mediates all state access with visibility filtering. Agents are organized in a three-level hierarchy with composable protocols. The EventScheduler drives event-driven execution.}
 \label{fig:architecture}
 \end{figure}
 
+In the environment-centric paradigm (PettingZoo, RLlib), the environment class owns observation construction, action routing, reward logic, coordination, \emph{and} physics. In \heron{}'s \emph{agent-centric} paradigm, the environment owns only the physics bridge; agents carry their own features, visibility declarations, reward functions, and timing. This separation ensures that coordination changes do not become physics changes.
+
 %------------------------------------------------------------------------------
-\subsection{Hierarchical Agent Architecture}
+\subsection{Three-Level Agent Hierarchy}
 \label{sec:hierarchy}
 %------------------------------------------------------------------------------
 
-Many CPS are naturally hierarchical: fast local controllers, mid-level coordinators, and supervisory operators. \heron{} formalizes this with a three-level agent hierarchy:
-
+Many CPS are naturally hierarchical. \heron{} formalizes this:
 \begin{itemize}[nosep]
-    \item \textbf{Level 1 (FieldAgent)}: Local sensing and actuation with \texttt{owner+public} visibility. Examples: individual devices, sensors, traffic signals.
-    \item \textbf{Level 2 (CoordinatorAgent)}: Manages subordinate FieldAgents with \texttt{upper\_level+owner+public} visibility. Examples: zone controllers, microgrid aggregators.
-    \item \textbf{Level 3 (SystemAgent)}: Global coordination with \texttt{system} visibility. Examples: central operators, market coordinators, network-wide controllers.
+    \item \textbf{Level 1 (FieldAgent)}: Local sensing and actuation. Access to \texttt{owner}+\texttt{public} features. Examples: individual devices, sensors, traffic signals. Default tick: 1\,s.
+    \item \textbf{Level 2 (CoordinatorAgent)}: Manages subordinate FieldAgents via protocols. Access to \texttt{upper\_level}+\texttt{owner}+\texttt{public}. Examples: zone controllers, microgrid aggregators. Default tick: 60\,s.
+    \item \textbf{Level 3 (SystemAgent)}: Global coordination, drives simulation. Access to \texttt{system} (all scopes). Examples: central operators, network controllers. Default tick: 300\,s.
 \end{itemize}
+
+Each agent carries: (1)~\textbf{State} composed of \texttt{FeatureProvider} instances with declared visibility; (2)~\textbf{Action} with mixed continuous/discrete specification; (3)~\textbf{Reward} via \texttt{compute\_local\_reward(local\_state)}; (4)~\textbf{Timing} via \texttt{TickConfig} (tick interval, delays, jitter).
 
 \paragraph{Dual execution modes.}
-\heron{} supports two execution patterns:
-
+\heron{} supports two execution patterns over the same agent hierarchy:
 \begin{enumerate}[nosep]
-    \item \textbf{Synchronous mode} (\texttt{env.step(actions)}): Direct \texttt{execute()} calls where agents sync state from the ProxyAgent, then act. Fast iteration for centralized training with shared rewards (CTDE).
-    \item \textbf{Event-driven mode} (\texttt{env.run\_event\_driven()}): Discrete-event simulation via a heap-based \texttt{EventScheduler}. Agents \texttt{tick()} independently at heterogeneous rates with configurable delays and jitter.
+    \item \textbf{Synchronous} (\texttt{env.step(actions)}): Direct \texttt{execute()} calls; agents sync state from ProxyAgent, then act. CTDE-compatible.
+    \item \textbf{Event-driven} (\texttt{env.run\_event\_driven(t\_end)}): Discrete-event simulation via heap-based \texttt{EventScheduler} with seven event types (\texttt{AGENT\_TICK}, \texttt{ACTION\_EFFECT}, \texttt{MESSAGE\_DELIVERY}, \texttt{OBSERVATION\_READY}, \texttt{ENV\_UPDATE}, \texttt{SIMULATION}, \texttt{CUSTOM}). Agents tick independently at heterogeneous rates with configurable delays and jitter.
 \end{enumerate}
 
-This dual-mode design enables training in synchronous mode and validation in event-driven mode with realistic CPS timing constraints (calibrated to IEEE 2030, NTCIP 1202).
-
-\paragraph{Event-driven execution via discrete-event simulation.}
-The event-driven mode (Algorithm~\ref{alg:event-driven}) uses a priority-queue \texttt{EventScheduler} with seven event types: \texttt{AGENT\_TICK}, \texttt{ACTION\_EFFECT}, \texttt{MESSAGE\_DELIVERY}, \texttt{OBSERVATION\_READY}, \texttt{ENV\_UPDATE}, \texttt{SIMULATION}, and \texttt{CUSTOM}. Key features:
-\begin{itemize}[nosep]
-    \item Agents \textbf{tick independently} at configurable intervals via \texttt{TickConfig}
-    \item \textbf{Configurable delays}: observation delay, action effect delay, message delivery delay
-    \item \textbf{Optional jitter}: Uniform or Gaussian randomization for robustness testing
-    \item \textbf{Heterogeneous decision rates} across the agent hierarchy
-\end{itemize}
+Algorithm~\ref{alg:event-driven} outlines the event-driven execution loop.
 
 \begin{algorithm}[t]
 \caption{Event-driven execution via \texttt{EventScheduler}}
 \label{alg:event-driven}
 \begin{algorithmic}[1]
-\REQUIRE EventScheduler $\mathcal{S}$ with heap-based priority queue, ProxyAgent $\mathcal{P}$
-\REQUIRE Registered agents with TickConfig (tick\_interval, obs\_delay, act\_delay)
+\REQUIRE EventScheduler $\mathcal{S}$ (heap-based priority queue), ProxyAgent $\mathcal{P}$
+\REQUIRE Agents with TickConfig (tick\_interval, obs\_delay, act\_delay, msg\_delay)
 \STATE
-\STATE \textbf{function} \textsc{RunEventDriven}(t\_end, event\_analyzer):
-\STATE \hspace{0.5cm} \textbf{for each} event $\in$ $\mathcal{S}$.run\_until(t\_end):
+\STATE \textbf{function} \textsc{RunEventDriven}($t_\text{end}$, event\_analyzer):
+\STATE \hspace{0.5cm} \textbf{for each} event $\in$ $\mathcal{S}$.run\_until($t_\text{end}$):
 \STATE \hspace{1.0cm} \textbf{match} event.type:
 \STATE
 \STATE \hspace{1.0cm} \textbf{case} AGENT\_TICK:
-\STATE \hspace{1.5cm} agent $\gets$ agents[event.agent\_id]
-\STATE \hspace{1.5cm} agent.tick($\mathcal{S}$, event.timestamp) \COMMENT{Sets \_timestep, checks upstream actions}
-\STATE \hspace{1.5cm} obs $\gets$ $\mathcal{P}$.get\_observation(agent.agent\_id, agent.protocol) \COMMENT{Visibility-filtered}
-\STATE \hspace{1.5cm} action $\gets$ agent.compute\_action(obs, $\mathcal{S}$) \COMMENT{Policy or upstream action}
-\STATE \hspace{1.5cm} $\mathcal{S}$.schedule\_action\_effect(agent\_id, delay=act\_delay)
-\STATE \hspace{1.5cm} $\mathcal{S}$.schedule\_agent\_tick(agent\_id, t + tick\_interval) \COMMENT{Next tick}
+\STATE \hspace{1.5cm} agent.tick($\mathcal{S}$, event.timestamp) \COMMENT{Set time, check upstream}
+\STATE \hspace{1.5cm} obs $\gets$ $\mathcal{P}$.get\_observation(agent\_id, protocol) \COMMENT{Visibility-filtered}
+\STATE \hspace{1.5cm} action $\gets$ agent.compute\_action(obs) \COMMENT{Upstream $>$ policy}
+\STATE \hspace{1.5cm} $\mathcal{S}$.schedule(ACTION\_EFFECT, $t$ + act\_delay)
+\STATE \hspace{1.5cm} $\mathcal{S}$.schedule(AGENT\_TICK, $t$ + tick\_interval) \COMMENT{Next tick}
 \STATE
 \STATE \hspace{1.0cm} \textbf{case} ACTION\_EFFECT:
-\STATE \hspace{1.5cm} $\mathcal{P}$.set\_local\_state(agent\_id, new\_state) \COMMENT{Update via ProxyAgent}
+\STATE \hspace{1.5cm} agent.apply\_action() \COMMENT{Physical effect}
+\STATE \hspace{1.5cm} $\mathcal{P}$.set\_local\_state(agent\_id, new\_state)
 \STATE
 \STATE \hspace{1.0cm} \textbf{case} MESSAGE\_DELIVERY:
-\STATE \hspace{1.5cm} broker.deliver(event.sender\_id, event.recipient\_id, event.payload)
+\STATE \hspace{1.5cm} broker.deliver(sender, recipient, payload)
 \STATE
-\STATE \hspace{1.0cm} event\_analyzer.analyze(event) \COMMENT{User-defined analysis hook}
+\STATE \hspace{1.0cm} event\_analyzer.analyze(event) \COMMENT{User-defined hook}
 \end{algorithmic}
 \end{algorithm}
 
 %------------------------------------------------------------------------------
-\subsection{ProxyAgent: Centralized State Management}
+\subsection{ProxyAgent: Centralized State Mediation}
 \label{sec:proxy}
 %------------------------------------------------------------------------------
 
-A distinguishing feature of \heron{} is the \textbf{ProxyAgent}---a non-learning agent that centralizes all state management and enforces visibility constraints. In most MARL frameworks, state is either globally accessible or manually filtered per agent. \heron{} instead routes all state access through the ProxyAgent, providing:
-
+The \textbf{ProxyAgent} is a non-learning singleton that stores all agent states and mediates every observation request through visibility filtering:
 \begin{itemize}[nosep]
-    \item \textbf{State storage}: All agent \texttt{State} objects (containing \texttt{FeatureProvider} instances) are stored in the ProxyAgent, not in the agents themselves.
-    \item \textbf{Visibility enforcement}: \texttt{get\_observation(sender\_id, protocol)} calls \texttt{State.observed\_by()} to filter features based on visibility labels, the requester's identity, and hierarchy level.
-    \item \textbf{Global state aggregation}: \texttt{get\_global\_states(sender\_id)} returns a visibility-filtered view of all agents' states, enabling coordinators to see subordinate aggregates without accessing private fields.
-    \item \textbf{Protocol-aware filtering}: Protocols can further restrict or transform what agents observe, layering coordination semantics on top of visibility rules.
+    \item \textbf{State storage}: All \texttt{State} objects (containing \texttt{FeatureProvider} instances) are stored in the ProxyAgent, not in agents themselves.
+    \item \textbf{Visibility enforcement}: \texttt{get\_observation(sender\_id, protocol)} filters features by visibility labels, requester identity, and hierarchy level.
+    \item \textbf{Global aggregation}: \texttt{get\_global\_states(sender\_id)} returns visibility-filtered views of all agents, enabling coordinators to see subordinate aggregates without private fields.
 \end{itemize}
 
-The ProxyAgent enforces a key invariant: \emph{an agent can only observe features whose visibility labels include a scope accessible to that agent's hierarchy level}. This prevents the common MARL simulation error where agents trained with global information fail under realistic partial observability.
-
-%------------------------------------------------------------------------------
-\subsection{Composable Observability with FeatureProviders}
-\label{sec:observability}
-%------------------------------------------------------------------------------
-
-Observations are assembled from composable \textbf{FeatureProviders}. Each provider is a dataclass that maps a slice of state into a feature vector and declares visibility scopes via the \texttt{FeatureMeta} metaclass.
+The ProxyAgent enforces a key invariant: \emph{an agent can only observe features whose visibility labels include a scope accessible to that agent's hierarchy level}. This prevents the ``global state leak'' common in MARL benchmarks.
 
 \begin{table}[t]
 \centering
-\caption{Visibility scopes in \heron{}. The ProxyAgent enforces these constraints on every observation request.}
+\caption{Visibility scopes in \heron{}.}
 \label{tab:visibility}
 \small
 \begin{tabular}{@{}lp{3.0cm}p{6.6cm}@{}}
@@ -289,168 +306,292 @@ Observations are assembled from composable \textbf{FeatureProviders}. Each provi
 \textbf{Scope} & \textbf{Who can access} & \textbf{Example signals} \\
 \midrule
 \texttt{public} & All agents & System time, global alerts, cost/safety metrics \\
-\texttt{owner} & Owning agent only & Device SOC, internal costs, local setpoints, tap positions \\
-\texttt{upper\_level} & Parent in hierarchy & Subordinate aggregates, boundary bus voltages, system frequency \\
-\texttt{system} & System-level (L3) agents & Full network state, aggregate generation/load, inter-area flows \\
+\texttt{owner} & Owning agent only & Device SOC, internal costs, local setpoints \\
+\texttt{upper\_level} & Parent in hierarchy & Subordinate aggregates, boundary bus voltages \\
+\texttt{system} & System-level (L3) agents & Full network state, aggregate gen/load, inter-area flows \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\paragraph{Visibility logic.}
-The \texttt{observed\_by(requestor\_id, requestor\_level)} method on each \texttt{State} object filters its constituent \texttt{FeatureProvider}s:
-\begin{itemize}[nosep]
-    \item \texttt{public}: All agents observe.
-    \item \texttt{owner}: Only the owning agent (\texttt{requestor\_id == owner\_id}).
-    \item \texttt{upper\_level}: Agents one level above the owner in the hierarchy.
-    \item \texttt{system}: System-level agents (level $\geq$ 3).
-\end{itemize}
+This enables \textbf{systematic observability ablations}: progressively restrict visibility (\texttt{system} $\rightarrow$ \texttt{upper\_level} $\rightarrow$ \texttt{owner}) to quantify minimum information requirements---by changing a single \texttt{visibility} class attribute on each \texttt{FeatureProvider}, with no environment code changes.
 
-This enables \textbf{systematic observability ablations}: benchmarks can progressively restrict visibility (\eg \texttt{system} $\rightarrow$ \texttt{upper\_level} $\rightarrow$ \texttt{owner}) to quantify minimum information requirements for stable operation.
+%------------------------------------------------------------------------------
+\subsection{Composable Observability with FeatureProviders}
+\label{sec:observability}
+%------------------------------------------------------------------------------
+
+Observations are assembled from composable \textbf{FeatureProviders}---dataclasses that map a slice of state into a feature vector and declare visibility scopes via the \texttt{FeatureMeta} metaclass. Example:
+
+\begin{lstlisting}
+class BatterySOC(FeatureProvider):
+    visibility: ClassVar = ["owner"]      # Only owning agent
+    soc: float = 0.5
+    capacity_kwh: float = 100.0
+
+class SystemFrequency(FeatureProvider):
+    visibility: ClassVar = ["system"]     # Only SystemAgent
+    frequency_hz: float = 50.0
+\end{lstlisting}
+
+To change what agents observe, modify the \texttt{visibility} attribute---no environment code changes needed.
 
 %------------------------------------------------------------------------------
 \subsection{MessageBroker for Explicit Communication}
 \label{sec:messaging}
 %------------------------------------------------------------------------------
 
-\heron{} decouples agent communication from observation through a \textbf{MessageBroker} abstraction. Messages are typed dataclasses with six types: \texttt{ACTION}, \texttt{INFO}, \texttt{BROADCAST}, \texttt{STATE\_UPDATE}, \texttt{RESULT}, and \texttt{CUSTOM} (for domain-specific extensions via \texttt{MessageTypeRegistry}).
-
-\paragraph{Key abstractions.}
-\begin{itemize}[nosep]
-    \item \textbf{Channels}: Named communication paths via \texttt{ChannelManager} with convention: \texttt{env\_\{id\}\_\_action\_\_\{upstream\}\_to\_\{child\}}, \texttt{env\_\{id\}\_\_info\_\_\{child\}\_to\_\{upstream\}}.
-    \item \textbf{Publish/Consume}: Agents publish messages to channels; recipients consume via the broker. In event-driven mode, delivery is scheduled with configurable delay.
-    \item \textbf{Environment isolation}: Channel names include environment ID for multi-environment parallel training.
-\end{itemize}
-
-\paragraph{Implementation.}
-The default \texttt{InMemoryBroker} is thread-safe and suitable for single-process training. The interface supports extension to distributed backends (Kafka, RabbitMQ) for deployment.
+\heron{} decouples agent communication from observation through a \textbf{MessageBroker} with six message types (\texttt{ACTION}, \texttt{INFO}, \texttt{BROADCAST}, \texttt{STATE\_UPDATE}, \texttt{RESULT}, \texttt{CUSTOM}). Channels are named with convention \texttt{env\_\{id\}\_\_action\_\_\{sender\}\_to\_\{recipient\}}, providing environment isolation for multi-environment parallel training. The default \texttt{InMemoryBroker} supports single-process training; the interface is extensible to distributed backends.
 
 %------------------------------------------------------------------------------
 \subsection{Protocol System for Coordination}
 \label{sec:protocols}
 %------------------------------------------------------------------------------
 
-\heron{} separates \emph{coordination semantics} from \emph{physics} through a modular protocol system. Each \texttt{Protocol} combines two components:
-
+\heron{} separates coordination semantics from physics through a modular protocol system. Each \texttt{Protocol} composes:
 \begin{enumerate}[nosep]
-    \item \textbf{CommunicationProtocol}: Defines what messages are exchanged between agents (\eg state sharing, price signals, bids).
-    \item \textbf{ActionProtocol}: Defines how a coordinator's action is decomposed into subordinate actions.
+    \item \textbf{CommunicationProtocol}: What messages are exchanged (\eg state sharing, price signals).
+    \item \textbf{ActionProtocol}: How a coordinator's action decomposes into subordinate actions.
 \end{enumerate}
 
-\paragraph{Built-in protocol implementations.}
-\heron{} provides two base protocol families:
+Built-in families: \textbf{VerticalProtocol} (hierarchical: \texttt{NoCommunication} + \texttt{VectorDecomposition}---splits joint action into per-subordinate segments), \textbf{HorizontalProtocol} (peer-to-peer: \texttt{StateShare} + \texttt{NoAction}). Domain-specific protocols (\eg setpoint dispatch, market clearing, consensus) are subclasses. Under identical observability, researchers compare coordination strategies by swapping protocols at configuration time.
 
-\begin{itemize}[nosep]
-    \item \textbf{VerticalProtocol} (hierarchical): Default uses \texttt{VectorDecompositionActionProtocol}, which splits a coordinator's joint action vector into per-subordinate action segments. Communication defaults to \texttt{NoCommunication} (pure top-down control).
-    \item \textbf{HorizontalProtocol} (peer-to-peer): Default uses \texttt{StateShareCommunicationProtocol}, where agents share selected state fields with neighbors according to a configurable topology. Action defaults to \texttt{NoActionCoordination} (independent decisions with shared information).
-\end{itemize}
+%==============================================================================
+\section{Event-Driven Execution: The Five Mismatches}
+\label{sec:mismatches}
+%==============================================================================
 
-\paragraph{Extensibility.}
-Domain-specific protocols (\eg setpoint dispatch, price-based coordination, market clearing, consensus averaging) are implemented by subclassing \texttt{CommunicationProtocol} and/or \texttt{ActionProtocol}. This enables controlled experiments: under identical observability, researchers can compare centralized dispatch vs. price-based coordination vs. peer trading by swapping protocols at configuration time.
+Classical MARL assumes policies operate under well-behaved MDP dynamics. In event-driven execution with hierarchical control, five categories of mismatch arise---each violating specific MDP assumptions.
+
+\paragraph{1. Stale observations (timing-induced).}
+Agents at different hierarchy levels tick at different rates. A coordinator observing at 1\,Hz cannot see the 100 micro-actions a field agent has taken since its last tick. The coordinator's state transition model assumes a static world between decisions---violated by continuous subordinate activity. \emph{In \heron{}}: configurable via per-agent \texttt{TickConfig.tick\_interval}.
+
+\paragraph{2. Partial observability (asymmetric information).}
+Each agent sees only features matching its visibility scope. Agent A detects a local event invisible to Agent B, leading to conflicting decisions. \emph{In \heron{}}: modeled via \texttt{FeatureProvider.visibility}---switching partial to full observability is a one-line class attribute change.
+
+\paragraph{3. Communication failure (message loss).}
+A directive from a coordinator to a subordinate may be delayed or dropped. Agents operate on incompatible plans. \emph{In \heron{}}: \texttt{MessageBroker} with configurable \texttt{msg\_delay} and optional loss probability.
+
+\paragraph{4. State corruption (external disruptions).}
+An external event disrupts an agent's state, but the coordinator's next observation reflects pre-disruption conditions. \emph{In \heron{}}: the ProxyAgent's state cache naturally models stale entries.
+
+\paragraph{5. Goal conflict (reward misalignment).}
+Hierarchical agents may optimize different objectives (speed vs.\ safety). Actions are locally rational but globally incompatible. \emph{In \heron{}}: each agent defines its own \texttt{compute\_local\_reward()}.
+
+\begin{table}[t]
+\centering
+\caption{How \heron{} makes each mismatch a systematic experimental variable.}
+\label{tab:mismatches}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Mismatch} & \textbf{Control Mechanism} & \textbf{Configuration} \\
+\midrule
+Stale observations & \texttt{TickConfig.tick\_interval} & Different rates per level \\
+Partial observability & \texttt{FeatureProvider.visibility} & \texttt{public/owner/upper/system} \\
+Communication failure & \texttt{MessageBroker} + \texttt{msg\_delay} & Delay distributions \\
+State corruption & ProxyAgent state cache & Custom event injection \\
+Goal conflict & Per-agent \texttt{compute\_local\_reward()} & Different reward functions \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The experimental protocol: train with \texttt{env.step()} (all mismatches absent), evaluate with \texttt{env.run\_event\_driven()} (mismatches present at configured levels), and quantify the gap.
+
+%==============================================================================
+\section{Related Work}
+\label{sec:related}
+%==============================================================================
+
+\textbf{Multi-agent benchmarks.}
+MPE~\cite{mordatch2018emergence}, SMAC~\cite{samvelyan2019starcraft}, and SMACv2 inherit synchronous stepping with globally derived observations. PettingZoo~\cite{terry2021pettingzoo} provides important API standardization (AEC model, reward-attribution fixes) but its abstractions do not model hierarchical information flow, event-driven execution, or coordination protocols. EPyMARL~\cite{papoudakis2021benchmarking} and MARLlib~\cite{hu2023marllib} focus on algorithm benchmarking---orthogonal to \heron{}'s focus on environment construction.
+
+\textbf{CPS-domain RL benchmarks.}
+Grid2Op~\cite{donnot2020introducing} and gym-anm~\cite{henry2021gym} are single-agent. CityLearn~\cite{vazquez2019citylearn} and PowerGridworld~\cite{biagioni2022powergridworld} support multi-agent settings but offer only binary observability and no protocol abstraction. EnEnv (AAMAS 2025) provides a rigorous MARL benchmark for battery storage with real-world physics, but inherits PettingZoo's synchronous model---no event-driven mode, implicit coordination via shared rewards.
+
+\textbf{Discrete-event multi-agent simulation.}
+ABIDES~\cite{byrd2020abides} pioneers event-driven multi-agent simulation for financial markets. However, ABIDES is event-driven \emph{only} (no synchronous CTDE mode), uses a flat agent model (no hierarchy), and provides no visibility framework or protocol system. ABIDES-MARL (2025) extends to multiple RL agents but re-introduces synchronization barriers, partially negating asynchronous benefits. \heron{} provides dual-mode execution, hierarchical agents, and systematic information control---none present in ABIDES.
+
+\textbf{Hierarchical RL and communication.}
+Feudal networks~\cite{vezhnevets2017feudal}, DIAL/CommNet~\cite{foerster2016learning}, and TarMAC~\cite{das2019tarmac} study \emph{learning} hierarchy or communication. \heron{} provides a substrate where hierarchy and communication topology are \emph{configurable experimental variables}.
+
+\begin{table}[t]
+\centering
+\caption{Comparison with related frameworks. \heron{} uniquely combines dual-mode execution, hierarchy, multi-level visibility, composable protocols, and centralized state mediation.}
+\label{tab:comparison}
+\small
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+\textbf{Framework} & \textbf{Event} & \textbf{Dual} & \textbf{Hierarchy} & \textbf{Visibility} & \textbf{Protocols} & \textbf{State Med.} \\
+\midrule
+PettingZoo & \xmark & \xmark & \xmark & \xmark & \xmark & \xmark \\
+EPyMARL & \xmark & \xmark & \xmark & \xmark & \xmark & \xmark \\
+SMAC & \xmark & \xmark & \xmark & Partial & \xmark & \xmark \\
+Grid2Op & \xmark & \xmark & \xmark & N/A & \xmark & \xmark \\
+CityLearn & \xmark & \xmark & \xmark & Binary & \xmark & \xmark \\
+ABIDES & \cmark & \xmark & \xmark & Implicit & \xmark & \xmark \\
+\midrule
+\textbf{\heron{}} & \cmark & \cmark & \cmark & \textbf{4-level} & \cmark & \cmark \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\heron{} complements PettingZoo (different abstraction level---what happens \emph{inside} the environment rather than the env-algorithm interface) and EPyMARL/MARLlib (environment construction rather than algorithm benchmarking). \heron{} environments can export to PettingZoo's API for algorithm compatibility.
+
+%==============================================================================
+\section{API and Usage}
+\label{sec:api}
+%==============================================================================
+
+\subsection{Entry Points}
+
+\heron{} exposes two primary execution APIs:
+
+\paragraph{Synchronous training.}
+\begin{lstlisting}
+obs, infos = env.reset(seed=42)
+for step in range(max_steps):
+    actions = {aid: policy(obs[aid]) for aid in obs}
+    obs, rewards, terminated, truncated, infos = env.step(actions)
+    if terminated["__all__"] or truncated["__all__"]:
+        break
+\end{lstlisting}
+
+\texttt{env.step()} delegates to \texttt{SystemAgent.execute()}, which processes actions top-down through the hierarchy, runs physics, collects visibility-filtered observations, and computes per-agent rewards.
+
+\paragraph{Event-driven evaluation.}
+\begin{lstlisting}
+# Configure realistic timing
+for agent in env.registered_agents.values():
+    if isinstance(agent, FieldAgent):
+        agent.tick_config = TickConfig.with_jitter(
+            tick_interval=1.0, obs_delay=0.1, act_delay=0.2,
+            jitter_type=JitterType.GAUSSIAN, jitter_ratio=0.2, seed=42)
+
+obs, infos = env.reset(seed=42, jitter_seed=42)
+result = env.run_event_driven(
+    event_analyzer=EventAnalyzer(), t_end=3600.0)
+\end{lstlisting}
+
+\subsection{Building Environments}
+
+\heron{} provides a fluent \texttt{EnvBuilder}:
+\begin{lstlisting}
+env = (EnvBuilder("my_env")
+    .add_agent("dev_0", MyDevice, features=[BatterySOC()])
+    .add_agent("dev_1", MyDevice, features=[BatterySOC()])
+    .add_coordinator("zone_0",
+        subordinates=["dev_0", "dev_1"],
+        protocol=VerticalProtocol())
+    .add_system_agent(tick_config=TickConfig(tick_interval=300.0))
+    .simulation(my_physics_fn)
+    .build())
+\end{lstlisting}
+
+The builder auto-creates the hierarchy, resolves subordinates, and wires up ProxyAgent, MessageBroker, and EventScheduler.
+
+\subsection{RLlib Integration}
+
+\texttt{RLlibBasedHeronEnv} wraps any \heron{} environment as an RLlib \texttt{MultiAgentEnv}:
+\begin{lstlisting}
+config = (PPOConfig()
+    .environment(env=RLlibBasedHeronEnv, env_config={
+        "agents": [{"agent_id": "bat_0", "agent_cls": BatteryAgent,
+                     "features": [BatterySOC()],
+                     "coordinator": "mg_0"}],
+        "coordinators": [{"coordinator_id": "mg_0",
+                          "protocol": VerticalProtocol()}],
+        "simulation": pandapower_sim, "max_steps": 100}))
+algo = config.build()
+algo.train()
+\end{lstlisting}
+
+The adapter handles converting \heron{} \texttt{Observation} objects to flat numpy vectors, exposing per-agent spaces, and episode truncation. For event-driven evaluation during training, use \texttt{HeronEnvRunner}:
+\begin{lstlisting}
+config = config.env_runners(
+    env_runner_cls=HeronEnvRunner,
+    evaluation_config=HeronEnvRunner.evaluation_config(t_end=3600.0))
+\end{lstlisting}
 
 %==============================================================================
 \section{Power Systems Case Study}
 \label{sec:power}
 %==============================================================================
 
-We instantiate \heron{} for multi-microgrid coordination using PandaPower AC power flow. The goal is to demonstrate a concrete CPS benchmark where information structure and coordination protocols matter.
+We instantiate \heron{} for multi-microgrid coordination using PandaPower AC power flow, demonstrating a concrete CPS benchmark where information structure and coordination protocols matter.
 
 \paragraph{Provided assets.}
 \begin{itemize}[nosep]
-    \item \textbf{Standard networks}: IEEE 13/34/123-bus, CIGRE LV, Case34 3-phase, and Case LVMG feeders.
-    \item \textbf{Device models}: Generators, energy storage systems (ESS), tap-changing transformers, inverter-based sources, shunt capacitors.
-    \item \textbf{FeatureProviders}: 20 domain-specific providers (Table~\ref{tab:features}; full details in Appendix~\ref{app:features}).
-    \item \textbf{Protocols}: Vertical (vector decomposition) and horizontal (state sharing) base protocols, extensible for domain-specific coordination.
-    \item \textbf{Tutorials}: 7 Jupyter notebooks covering single microgrid, multi-microgrid, event-driven execution, and CTDE training.
+    \item \textbf{Standard networks}: IEEE 13/34/123-bus, CIGRE LV, Case34 3-phase, Case LVMG.
+    \item \textbf{Device models}: Generators, ESS, tap-changing transformers, inverter-based sources, shunt capacitors.
+    \item \textbf{FeatureProviders}: 20 domain-specific providers (Table~\ref{tab:features}).
+    \item \textbf{Tutorials}: 7 notebooks covering single microgrid, multi-microgrid, event-driven, and CTDE training.
 \end{itemize}
 
 \begin{table}[t]
 \centering
-\caption{FeatureProviders in the power systems case study (20 total). ``Vis.'' indicates visibility labels currently implemented; others default to unrestricted. See Appendix~\ref{app:features} for full specifications.}
+\caption{FeatureProviders in the power systems case study (20 total). ``Vis.'' indicates implemented visibility; others default to unrestricted.}
 \label{tab:features}
 \small
 \begin{tabular}{@{}llll@{}}
 \toprule
 \textbf{Category} & \textbf{FeatureProvider} & \textbf{Vis.} & \textbf{Description} \\
 \midrule
-\multirow{6}{*}{\rotatebox{90}{\scriptsize Device}} & ElectricalBasePh & -- & Active/reactive power, voltage per phase \\
+\multirow{6}{*}{\rotatebox{90}{\scriptsize Device}} & ElectricalBasePh & -- & Active/reactive power, voltage \\
 & PowerLimits & -- & Min/max generation capacity \\
-& StorageBlock & owner & SOC, capacity, charge/discharge limits \\
-& StatusBlock & -- & Device availability, on/off state \\
-& TapChangerPh & -- & Transformer tap position and limits \\
-& InverterBasedSource & -- & Inverter mode, reactive capability \\
+& StorageBlock & owner & SOC, charge/discharge limits \\
+& StatusBlock & -- & Device availability \\
+& TapChangerPh & -- & Tap position and limits \\
+& InverterBasedSource & -- & Inverter mode, reactive cap. \\
 \midrule
-\multirow{4}{*}{\rotatebox{90}{\scriptsize Network}} & BusVoltages & -- & Voltage magnitudes/angles \\
-& LineFlows & -- & Branch flows, loading percentages \\
-& ThermalLoading & -- & Line thermal limits and loading \\
-& PhaseConnection & -- & Bus connection, phase information \\
+\multirow{4}{*}{\rotatebox{90}{\scriptsize Net.}} & BusVoltages & -- & Voltage magnitudes/angles \\
+& LineFlows & -- & Branch flows, loading \% \\
+& ThermalLoading & -- & Line thermal limits \\
+& PhaseConnection & -- & Bus connection info \\
 \midrule
 \multirow{5}{*}{\rotatebox{90}{\scriptsize System}} & SystemFrequency & sys, upper & System-wide frequency \\
-& AggregateGeneration & sys & Total generation across network \\
-& AggregateLoad & sys & Total load across network \\
-& InterAreaFlows & sys & Power flows between areas \\
-& SystemImbalance & sys, upper & Generation-load imbalance \\
+& AggregateGeneration & sys & Total generation \\
+& AggregateLoad & sys & Total load \\
+& InterAreaFlows & sys & Inter-area power flows \\
+& SystemImbalance & sys, upper & Gen-load imbalance \\
 \midrule
-\multirow{3}{*}{\rotatebox{90}{\scriptsize Control}} & VoltVarCurve & -- & Volt-VAR control curves \\
+\multirow{3}{*}{\rotatebox{90}{\scriptsize Ctrl}} & VoltVarCurve & -- & Volt-VAR curves \\
 & ShuntCapacitorBlock & -- & Capacitor bank state \\
-& NetworkMetrics & -- & Total generation, load, losses \\
+& NetworkMetrics & -- & Total gen, load, losses \\
 \midrule
-\multirow{2}{*}{\rotatebox{90}{\scriptsize Meta}} & StepState & -- & Timestep, episode progress \\
-& CostSafetyMetrics & public & Operating cost and safety metrics \\
+\multirow{2}{*}{\rotatebox{90}{\scriptsize Meta}} & StepState & -- & Timestep, progress \\
+& CostSafetyMetrics & public & Cost and safety metrics \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \paragraph{Agent hierarchy.}
-\begin{itemize}[nosep]
-    \item \textbf{DeviceAgent} (FieldAgent): Controls individual DERs (generator, ESS, transformer). Specialized subclasses: \texttt{Generator}, \texttt{ESS}, \texttt{Transformer}.
-    \item \textbf{PowerGridAgent} (CoordinatorAgent): Manages a microgrid's devices, integrates power flow results.
-    \item \textbf{GridSystemAgent} (SystemAgent): Network-wide coordination across microgrids.
-\end{itemize}
+\textbf{DeviceAgent} (FieldAgent): individual DERs---\texttt{Generator}, \texttt{ESS}, \texttt{Transformer} subclasses. \textbf{PowerGridAgent} (CoordinatorAgent): microgrid management, power flow integration. \textbf{GridSystemAgent} (SystemAgent): network-wide coordination.
 
 \paragraph{Benchmark questions enabled.}
 \begin{itemize}[nosep]
-    \item \textbf{Minimum observability}: What visibility scope is sufficient for stable voltage regulation and economic dispatch?
-    \item \textbf{Information asymmetry}: Can microgrids coordinate using only upper-level aggregates without revealing internal SOC/costs?
+    \item \textbf{Minimum observability}: What visibility scope is sufficient for stable voltage regulation?
+    \item \textbf{Information asymmetry}: Can microgrids coordinate with only upper-level aggregates?
     \item \textbf{Protocol sensitivity}: Under identical visibility, which coordination mechanism is more robust?
-    \item \textbf{Sim-to-real gap}: Do policies trained synchronously (CTDE) degrade under event-driven execution with realistic CPS timing?
+    \item \textbf{Sim-to-real gap}: Do synchronously trained policies degrade under event-driven execution with SCADA-calibrated timing?
 \end{itemize}
-
-%==============================================================================
-\section{Traffic Network Case Study}
-\label{sec:traffic}
-%==============================================================================
-
-\todo{Traffic domain implementation in progress. Target: 14 FeatureProviders, 4 protocols, 5$\times$5 intersection grid with SUMO backend. See Appendix~\ref{app:traffic} for planned design matching power domain parity.}
-
-To demonstrate cross-domain reuse, we instantiate \heron{} for traffic signal control using the same base abstractions. The traffic domain maps naturally to \heron{}'s hierarchy:
-
-\begin{itemize}[nosep]
-    \item \textbf{SignalAgent} (FieldAgent): Controls individual intersection signals. Observes queue lengths, phase durations, wait times.
-    \item \textbf{CorridorAgent} (CoordinatorAgent): Manages a corridor of intersections. Sees neighbor queue states, corridor throughput.
-    \item \textbf{NetworkAgent} (SystemAgent): Network-wide coordination. Observes global congestion, incident reports.
-\end{itemize}
-
-The key evidence for domain-agnostic design: \textbf{identical base classes} (\texttt{FieldAgent}, \texttt{CoordinatorAgent}, \texttt{Protocol}, \texttt{FeatureProvider}) are reused without modification. Only domain-specific subclasses and physics backends differ.
 
 %==============================================================================
 \section{Experiments}
 \label{sec:experiments}
 %==============================================================================
 
-We present experiments demonstrating \heron{}'s benchmark capabilities across five categories. Values marked with $\dagger$ are preliminary; full results will accompany the public release.
+We present experiments demonstrating \heron{}'s benchmark capabilities. Values marked with $\dagger$ are preliminary.
 
 \subsection{Observability Ablation}
 
-Using FeatureProviders, we train agents under progressively restricted visibility on both domains.
-
 \begin{table}[h]
 \centering
-\caption{Observability ablation (IEEE 34-bus, 3 microgrids, summer peak scenario).}
+\caption{Observability ablation (IEEE 34-bus, 3 microgrids).}
 \label{tab:observability-ablation}
 \small
-\begin{tabular}{@{}lccccc@{}}
+\begin{tabular}{@{}lcccc@{}}
 \toprule
-\textbf{Observability} & \textbf{Cost (\$)} & \textbf{Degradation} & \textbf{Safety Viol. (\%)} & \textbf{Converge (ep)} \\
+\textbf{Observability} & \textbf{Cost (\$)} & \textbf{Degrad.} & \textbf{Safety (\%)} & \textbf{Conv.\ (ep)} \\
 \midrule
 System (full) & \exampleval{859} & Baseline & \exampleval{2.1} & \exampleval{2400} \\
 Upper-level & \exampleval{891} & \exampleval{+3.7\%} & \exampleval{2.8} & \exampleval{2600} \\
@@ -460,20 +601,16 @@ Public-only & \exampleval{1543} & \exampleval{+80\%} & \exampleval{24} & Fails \
 \end{tabular}
 \end{table}
 
-\textbf{Hypothesis}: Upper-level visibility provides a favorable trade-off---modest cost increase while respecting information boundaries. Public-only visibility fails to converge, highlighting minimum information requirements.
-
-\subsection{Centralized-to-Distributed Mismatch (Sim-to-Real Gap)}
-
-We train with full visibility (synchronous mode) and evaluate under restricted visibility (event-driven mode) to quantify the sim-to-real gap.
+\subsection{Sim-to-Real Gap (Train/Test Mismatch)}
 
 \begin{table}[h]
 \centering
-\caption{Train/test visibility mismatch.}
+\caption{Synchronous-to-event-driven performance gap.}
 \label{tab:mismatch}
 \small
 \begin{tabular}{@{}lccc@{}}
 \toprule
-\textbf{Train Visibility} & \textbf{Test Visibility} & \textbf{Cost (\$)} & \textbf{Degradation} \\
+\textbf{Train Vis.} & \textbf{Test Vis.} & \textbf{Cost (\$)} & \textbf{Degrad.} \\
 \midrule
 System & System & \exampleval{859} & -- \\
 Upper-level & Upper-level & \exampleval{891} & +3.7\% \\
@@ -483,11 +620,7 @@ Upper-level & Upper-level & \exampleval{891} & +3.7\% \\
 \end{tabular}
 \end{table}
 
-\textbf{Hypothesis}: Policies trained with full observability degrade significantly when deployed with realistic information constraints. This motivates training under target observability.
-
 \subsection{Protocol Comparison}
-
-Under identical upper-level observability, we compare coordination protocols.
 
 \begin{table}[h]
 \centering
@@ -496,7 +629,7 @@ Under identical upper-level observability, we compare coordination protocols.
 \small
 \begin{tabular}{@{}lccc@{}}
 \toprule
-\textbf{Protocol} & \textbf{Cost (\$)} & \textbf{Coord. Overhead} & \textbf{Info Shared} \\
+\textbf{Protocol} & \textbf{Cost (\$)} & \textbf{Overhead} & \textbf{Info Shared} \\
 \midrule
 Vertical (setpoint) & \exampleval{891} & Low & Full control \\
 Vertical (price signal) & \exampleval{912} & Medium & Prices only \\
@@ -506,18 +639,15 @@ Horizontal (state share) & \exampleval{928} & High & Neighbor states \\
 \end{table}
 
 \subsection{Event-Driven Timing Sensitivity}
-\label{sec:timing}
-
-We evaluate trained policies under CPS-calibrated timing configurations.
 
 \begin{table}[h]
 \centering
-\caption{Event-driven timing sensitivity (policy trained synchronously, evaluated with delays).}
+\caption{Timing sensitivity (trained synchronously, evaluated with delays).}
 \label{tab:timing}
 \small
 \begin{tabular}{@{}llcc@{}}
 \toprule
-\textbf{Config} & \textbf{Distribution} & \textbf{Degradation} & \textbf{Safety Viol.} \\
+\textbf{Config} & \textbf{Distribution} & \textbf{Degrad.} & \textbf{Safety} \\
 \midrule
 Synchronous & -- & Baseline & \exampleval{2.1\%} \\
 Uniform delay & $U(0, 2\text{s})$ & \exampleval{+8\%} & \exampleval{4.3\%} \\
@@ -530,16 +660,14 @@ Heterogeneous & Per-agent different $\tau$ & \exampleval{+22\%} & \exampleval{8.
 
 \subsection{Algorithm Comparison}
 
-We verify that observability effects are consistent across algorithm families.
-
 \begin{table}[h]
 \centering
-\caption{Algorithm comparison under system vs. owner-only visibility (IEEE 34-bus).}
+\caption{Algorithm comparison under system vs.\ owner-only visibility.}
 \label{tab:algorithms}
 \small
 \begin{tabular}{@{}lcccc@{}}
 \toprule
-\textbf{Algorithm} & \textbf{System Cost} & \textbf{Owner Cost} & \textbf{Degradation} & \textbf{Category} \\
+\textbf{Algorithm} & \textbf{Sys Cost} & \textbf{Owner Cost} & \textbf{Degrad.} & \textbf{Category} \\
 \midrule
 MAPPO & \exampleval{859} & \exampleval{1024} & \exampleval{+19\%} & Policy gradient \\
 IPPO & \exampleval{903} & \exampleval{1089} & \exampleval{+21\%} & Independent \\
@@ -549,14 +677,14 @@ TarMAC & \todo{TBD} & \todo{TBD} & \todo{TBD} & Communication \\
 \end{tabular}
 \end{table}
 
-\textbf{Hypothesis}: The relative ordering (system $>$ upper-level $>$ owner) holds across all algorithm families, validating that observability effects are algorithm-agnostic properties of the benchmark.
+\textbf{Hypothesis}: The relative ordering (system $>$ upper-level $>$ owner) holds across algorithm families, validating that observability effects are algorithm-agnostic properties of the benchmark.
 
 %==============================================================================
 \section{Conclusion}
 \label{sec:conclusion}
 %==============================================================================
 
-We presented \heron{}, a hierarchical multi-agent framework that makes \textbf{execution model, information structure, and coordination mechanisms} explicit as benchmark variables. Through a ProxyAgent mediating all state access, FeatureProviders with visibility labels, a channel-based MessageBroker, and composable protocols, \heron{} enables systematic studies of how information constraints affect MARL in cyber-physical systems. Power systems and traffic network case studies demonstrate cross-domain reuse of identical abstractions.
+We presented \heron{}, a hierarchical multi-agent framework built on an agent-centric design principle: \emph{agents own the coordination; the environment owns only the physics}. This separation makes execution model, information structure, and coordination mechanisms explicit as benchmark variables---without modifying the physics backend. Through a ProxyAgent mediating all state access, FeatureProviders with four-level visibility, a channel-based MessageBroker, and composable protocols, \heron{} enables systematic studies of how information constraints and timing realism affect MARL in cyber-physical systems. Dual-mode execution (synchronous CTDE for training, event-driven for deployment validation) provides a direct measurement of the simulation-to-deployment gap. A power systems case study demonstrates these capabilities concretely. \heron{} is released open-source to support reproducible research on event-driven, information-constrained multi-agent coordination.
 
 %==============================================================================
 % References
@@ -571,10 +699,8 @@ We presented \heron{}, a hierarchical multi-agent framework that makes \textbf{e
 \newpage
 \appendix
 
-\section{API Reference}
+\section{Core API Reference}
 \label{app:api}
-
-Table~\ref{tab:api} summarizes the core \heron{} API. All methods are implemented and tested.
 
 \begin{table}[h]
 \centering
@@ -585,98 +711,66 @@ Table~\ref{tab:api} summarizes the core \heron{} API. All methods are implemente
 \toprule
 \textbf{Method} & \textbf{Signature and Description} \\
 \midrule
-\multicolumn{2}{l}{\textit{Environment (BaseEnv)}} \\
-\texttt{step} & \texttt{step(actions: Dict[AgentID, Any]) -> (obs, rewards, term, trunc, info)} \\
-\texttt{run\_event\_driven} & \texttt{run\_event\_driven(event\_analyzer, t\_end, max\_events) -> EpisodeResult} \\
+\multicolumn{2}{l}{\textit{Environment (EnvCore)}} \\
+\texttt{step} & \texttt{step(actions: Dict) -> (obs, rewards, term, trunc, info)} \\
+\texttt{run\_event\_driven} & \texttt{run\_event\_driven(analyzer, t\_end) -> EpisodeResult} \\
+\texttt{reset} & \texttt{reset(seed, jitter\_seed) -> (obs, infos)} \\
 \midrule
-\multicolumn{2}{l}{\textit{Agent (BaseAgent)}} \\
-\texttt{tick} & \texttt{tick(scheduler: EventScheduler, current\_time: float) -> None} \\
-\texttt{execute} & \texttt{execute(actions: Dict[AgentID, Any], proxy: ProxyAgent) -> None} \\
-\texttt{compute\_action} & \texttt{compute\_action(obs, scheduler) -> action} (upstream > policy > none) \\
-\texttt{act} & \texttt{act(actions: Dict, proxy: ProxyAgent) -> None} \\
+\multicolumn{2}{l}{\textit{Agent}} \\
+\texttt{tick} & \texttt{tick(scheduler, current\_time) -> None} \\
+\texttt{execute} & \texttt{execute(actions, proxy) -> None} \\
+\texttt{compute\_action} & \texttt{compute\_action(obs, scheduler) -> action} \\
+\texttt{apply\_action} & \texttt{apply\_action() -> None} \\
+\texttt{compute\_local\_reward} & \texttt{compute\_local\_reward(local\_state) -> float} \\
 \midrule
 \multicolumn{2}{l}{\textit{ProxyAgent}} \\
 \texttt{get\_observation} & \texttt{get\_observation(sender\_id, protocol) -> Observation} \\
-\texttt{get\_local\_state} & \texttt{get\_local\_state(sender\_id, protocol, include\_sub\_rewards) -> Dict} \\
+\texttt{get\_local\_state} & \texttt{get\_local\_state(sender\_id, protocol) -> Dict} \\
 \texttt{get\_global\_states} & \texttt{get\_global\_states(sender\_id, protocol) -> Dict} \\
 \texttt{set\_local\_state} & \texttt{set\_local\_state(agent\_id, state) -> None} \\
 \midrule
-\multicolumn{2}{l}{\textit{Protocol}} \\
-\texttt{coordinate} & \texttt{coordinate(state, action, info\_for\_subs, context) -> (messages, actions)} \\
-\midrule
 \multicolumn{2}{l}{\textit{EventScheduler}} \\
 \texttt{run\_until} & \texttt{run\_until(t\_end, max\_events) -> Iterable[Event]} \\
-\texttt{schedule\_agent\_tick} & \texttt{schedule\_agent\_tick(agent\_id, timestamp, payload)} \\
+\texttt{schedule\_agent\_tick} & \texttt{schedule\_agent\_tick(agent\_id, timestamp)} \\
 \texttt{schedule\_action\_effect} & \texttt{schedule\_action\_effect(agent\_id, delay)} \\
-\texttt{schedule\_message\_delivery} & \texttt{schedule\_message\_delivery(sender, recipient, msg, delay)} \\
+\texttt{schedule\_message\_delivery} & \texttt{schedule\_message\_delivery(sender, recip, msg, delay)} \\
+\midrule
+\multicolumn{2}{l}{\textit{Protocol}} \\
+\texttt{coordinate} & \texttt{coordinate(state, action, context) -> (msgs, actions)} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\section{Event-Driven Execution Flow}
-\label{app:event-flow}
+\section{TickConfig Defaults}
+\label{app:tickconfig}
 
-Figure~\ref{fig:event-flow} details the complete event-driven execution flow, showing how the EventScheduler, ProxyAgent, MessageBroker, and agents interact during a single agent tick cycle.
+\begin{table}[h]
+\centering
+\caption{Default timing configurations per agent level.}
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Agent Level} & \textbf{Default Tick} & \textbf{Jitter Types} & \textbf{Description} \\
+\midrule
+FieldAgent (L1) & 1.0\,s & \textsc{None}, Uniform, Gaussian & Fast local control \\
+CoordinatorAgent (L2) & 60.0\,s & \textsc{None}, Uniform, Gaussian & Zone management \\
+SystemAgent (L3) & 300.0\,s & \textsc{None}, Uniform, Gaussian & Supervisory review \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-\todo{Add detailed sequence diagram showing: (1) EventScheduler pops AGENT\_TICK, (2) agent.tick() sets \_timestep and checks for upstream actions via receive\_upstream\_actions -> receive\_actions -> broker.consume, (3) ProxyAgent.get\_observation() filters state by visibility, (4) agent.compute\_action() with priority: upstream > policy > none, (5) if coordinator: coordinate() generates subordinate messages, (6) scheduler schedules ACTION\_EFFECT with act\_delay, (7) on ACTION\_EFFECT: ProxyAgent.set\_local\_state() updates state.}
-
-\section{Complete FeatureProvider Specifications}
-\label{app:features}
-
-\subsection{Power Systems FeatureProviders (20 total)}
-
-Table~\ref{tab:features-full} provides the complete specification of all 20 FeatureProviders in the power systems case study, including feature dimensions, data types, and current visibility implementation status.
-
-\todo{Full table with columns: FeatureProvider, Dimension, Visibility (implemented), Data Fields, Update Source}
-
-\subsection{Traffic Network FeatureProviders (Planned)}
-\label{app:traffic}
-
-\todo{14 planned traffic FeatureProviders with parity mapping to power domain providers.}
-
-\section{Full Experiment Results}
-\label{app:experiments}
-
-\subsection{Observability Ablation (Full Results)}
-\todo{Full results across all networks (IEEE 13/34/123, CIGRE LV) and both domains.}
-
-\subsection{Protocol Comparison (Full Results)}
-\todo{Detailed protocol comparison with message counts, convergence rates, and Pareto analysis.}
-
-\subsection{Event-Driven Timing (Full Results)}
-\todo{Complete timing sensitivity analysis with CPS-calibrated distributions (IEEE 2030, NTCIP 1202).}
-
-\subsection{Algorithm Comparison (Full Results)}
-\todo{MAPPO, IPPO, QMIX, TarMAC across all visibility levels and both domains.}
-
-\subsection{Scalability Analysis}
-\todo{Log-log scaling plots for 10 to 2000 agents. Breakdown by component: MessageBroker, EventScheduler, FeatureProvider. Comparison with mean-field baselines.}
-
-\section{Framework Comparison Details}
-\label{app:framework-comparison}
-
-\subsection{PettingZoo Implementation Comparison}
-
-\todo{Side-by-side LOC comparison for: (1) visibility ablation with 4 levels---PettingZoo requires 4 x 80 = 320 lines of wrapper code vs. 4 config strings in HERON, (2) protocol swap with 3 protocols---360 lines vs. 3 config strings, (3) event-driven execution---requires rewriting the step loop (impossible to wrap) vs. single flag in HERON.}
-
-\subsection{EPyMARL / MARLlib Comparison}
-
-\todo{Document missing abstractions: no visibility control, no protocol system, no event-driven mode. Attempt to implement microgrid env and document effort.}
-
-\subsection{Interoperability}
-
-\todo{Demonstrate HERON environments exporting to PettingZoo API for algorithm compatibility.}
+Each \texttt{TickConfig} parameter (\texttt{tick\_interval}, \texttt{obs\_delay}, \texttt{act\_delay}, \texttt{msg\_delay}, \texttt{reward\_delay}) supports independent jitter. \texttt{UNIFORM}: $\text{base} \pm \text{base} \times \text{ratio}$. \texttt{GAUSSIAN}: $\mathcal{N}(\text{base}, \text{base} \times \text{ratio})$. All values are clamped to a non-negative floor.
 
 \section{Network Specifications}
 \label{app:networks}
 
 \begin{table}[h]
 \centering
-\caption{Test network specifications (power case study). All networks sourced from PandaPower's standard library.}
+\caption{Test network specifications (power case study).}
 \small
 \begin{tabular}{@{}lccccl@{}}
 \toprule
-\textbf{Network} & \textbf{Buses} & \textbf{Lines} & \textbf{Voltage (kV)} & \textbf{Peak Load (MW)} & \textbf{Phases} \\
+\textbf{Network} & \textbf{Buses} & \textbf{Lines} & \textbf{Voltage (kV)} & \textbf{Peak (MW)} & \textbf{Phases} \\
 \midrule
 IEEE 13-Bus & 13 & 11 & 4.16 & 3.5 & 3-phase \\
 IEEE 34-Bus & 34 & 33 & 24.9 & 1.77 & 3-phase \\
@@ -700,23 +794,21 @@ Case LVMG & \todo{TBD} & \todo{TBD} & 0.4 & \todo{TBD} & 3-phase \\
 \textbf{Parameter} & \textbf{Value} \\
 \midrule
 Learning rate & $3 \times 10^{-4}$ \\
-Discount factor ($\gamma$) & 0.99 \\
-GAE lambda ($\lambda$) & 0.95 \\
-Clip parameter ($\epsilon$) & 0.2 \\
-Entropy coefficient & 0.01 \\
-Value loss coefficient & 0.5 \\
-Max gradient norm & 0.5 \\
-Batch size & 4096 \\
-Minibatch size & 256 \\
+Discount ($\gamma$) & 0.99 \\
+GAE $\lambda$ & 0.95 \\
+Clip $\epsilon$ & 0.2 \\
+Entropy coeff. & 0.01 \\
+Value loss coeff. & 0.5 \\
+Max grad norm & 0.5 \\
+Batch / minibatch & 4096 / 256 \\
 PPO epochs & 10 \\
-Number of workers & 4 \\
-Network architecture & [256, 256] MLP \\
-Activation & ReLU \\
+Workers & 4 \\
+Network & [256, 256] MLP, ReLU \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\section{Safety Metric Definitions}
+\section{Safety Metrics}
 \label{app:safety}
 
 \begin{align}
@@ -732,13 +824,11 @@ Voltage limits: 0.95--1.05 p.u. Line loading limit: 100\%. SOC safe range: 10--9
 
 \heron{} is available at: \url{https://github.com/Criss-Wang/PowerGym}
 
-Installation:
 \begin{verbatim}
-pip install -e ".[all]"      # Full installation
+pip install -e ".[all]"       # Full installation
 pip install -e ".[powergrid]" # Power grid case study only
-pip install -e ".[traffic]"   # Traffic case study only
 \end{verbatim}
 
-\todo{Add Croissant metadata record for NeurIPS D\&B compliance. Include dataset cards for each test network scenario.}
+\todo{Add Croissant metadata record for NeurIPS D\&B compliance.}
 
 \end{document}
