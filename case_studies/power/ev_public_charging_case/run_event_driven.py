@@ -144,96 +144,11 @@ def apply_test_event(env, event: TestEvent, elapsed_s: float) -> None:
             logger.info(f"  → Regulation signal set to {spike_magnitude:.3f}")
 
 
-def inject_events(env, events: List[TestEvent], simulator_callback: Callable) -> Callable:
-    """Create a wrapper that injects events during event-driven simulation.
-
-    Returns a callback that checks for scheduled events each simulation step.
-
-    Args:
-        env: ChargingEnv instance
-        events: List of TestEvent objects to inject
-        simulator_callback: Original run_event_driven callback
-
-    Returns:
-        Wrapped callback that also checks and applies events
-    """
-    event_times = {e.time_s for e in events}
-    applied_events = set()
-    active_events = {}  # Maps event.time_s -> event for duration tracking
-
-    def wrapped_callback():
-        current_time = getattr(env, '_time_s', 0.0)
-
-        # Apply newly triggered events
-        for event in events:
-            if event.time_s not in applied_events and current_time >= event.time_s:
-                apply_test_event(env, event, current_time)
-                applied_events.add(event.time_s)
-                active_events[event.time_s] = event
-
-        # Check if active events should end
-        for event_time, event in list(active_events.items()):
-            event_end_time = event.time_s + event.duration_s
-            if current_time >= event_end_time:
-                logger.info(f"[t={current_time:.0f}s] Event '{event.description}' duration ended")
-                del active_events[event_time]
-
-        # Call original simulator
-        return simulator_callback()
-
-    return wrapped_callback
-
-
-
-    system_config = TickConfig.with_jitter(
-        tick_interval=300.0,
-        obs_delay=1.0,
-        act_delay=2.0,
-        msg_delay=1.0,
-        reward_delay=5.0,  # wait for coordinator rewards (which wait for field agent rewards)
-        jitter_type=JitterType.GAUSSIAN,
-        jitter_ratio=0.1,
-        seed=seed,
-    )
-    coordinator_config = TickConfig.with_jitter(
-        tick_interval=300.0,
-        obs_delay=1.0,
-        act_delay=2.0,
-        msg_delay=1.0,
-        reward_delay=4.0,  # wait for field agent reward round-trips (~3 msg hops)
-        jitter_type=JitterType.GAUSSIAN,
-        jitter_ratio=0.1,
-        seed=seed + 1,
-    )
-    field_config = TickConfig.with_jitter(
-        tick_interval=300.0,
-        obs_delay=0.5,
-        act_delay=1.0,
-        msg_delay=0.5,
-        jitter_type=JitterType.GAUSSIAN,
-        jitter_ratio=0.1,
-        seed=seed + 2,
-    )
-
-    for agent_id, agent in env.registered_agents.items():
-        if isinstance(agent, SystemAgent):
-            agent.tick_config = system_config
-        elif isinstance(agent, CoordinatorAgent):
-            agent.tick_config = coordinator_config
-        elif isinstance(agent, FieldAgent):
-            agent.tick_config = field_config
-
-    # Update scheduler's cached tick configs (cached during attach())
-    for agent_id, agent in env.registered_agents.items():
-        if hasattr(agent, 'tick_config') and agent.tick_config is not None:
-            env.scheduler._agent_tick_configs[agent_id] = agent.tick_config
-
 
 def deploy_event_driven(
     env,
     policies: Dict[str, PricingPolicy],
     t_end: float = 3600.0,
-    seed: int = 100,
     test_events: Optional[List[TestEvent]] = None,
 ) -> None:
     """Deploy trained policies in event-driven mode with optional test events.
@@ -242,7 +157,6 @@ def deploy_event_driven(
         env: ChargingEnv instance
         policies: Dict mapping station_id -> trained PricingPolicy
         t_end: Simulation end time in seconds
-        seed: Seed for tick config jitter
         test_events: Optional list of TestEvent objects to inject
     """
     # Attach trained policies to coordinator agents
@@ -251,10 +165,6 @@ def deploy_event_driven(
 
     # Configure tick timing with jitter
     logger.info("Configuring TickConfigs with Gaussian jitter...")
-    configure_tick_configs(env, seed=seed)
-
-    # Reset to apply new configs
-    env.reset(seed=seed)
 
     # Log test events if any
     if test_events:
@@ -321,7 +231,6 @@ def main():
         deploy_env,
         policies,
         t_end=3600.0,
-        seed=100,
         test_events=test_events
     )
     deploy_env.close()
