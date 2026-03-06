@@ -67,8 +67,6 @@ class ChargingEnv(HeronEnv):
 
     def reset(self, *, seed: Optional[int] = None, **kwargs) -> Tuple[MultiAgentDict, MultiAgentDict]:
         """Reset environment state for a new episode."""
-        if seed is not None:
-            self._rng = np.random.default_rng(seed)
 
         self.scenario = MarketScenario(self._arrival_rate, 3600.0)
         # reset regulation scenario clock too
