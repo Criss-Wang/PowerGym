@@ -179,20 +179,23 @@ class EnvCore:
     
     def run_event_driven(
         self,
-        event_analyzer: EventAnalyzer,
         t_end: float,
+        event_analyzer: Optional[EventAnalyzer] = None,
         max_events: Optional[int] = None,
     ) -> EpisodeResult:
         """Run event-driven simulation until time limit.
 
         Args:
-            event_analyzer: EventAnalyzer to parse events during simulation
             t_end: Stop when simulation time exceeds this
+            event_analyzer: EventAnalyzer to parse events during simulation.
+                If None, a default EventAnalyzer() is used.
             max_events: Optional maximum number of events to process
 
         Returns:
             EpisodeResult containing all event analyses from the simulation
         """
+        if event_analyzer is None:
+            event_analyzer = EventAnalyzer()
         result = EpisodeResult()
         for event in self.scheduler.run_until(t_end=t_end, max_events=max_events):
             result.add_event_analysis(event_analyzer.parse_event(event))

@@ -276,7 +276,7 @@ def demo_event_driven():
     # Run event-driven simulation
     analyzer = EventAnalyzer(verbose=False, track_data=True)
     t_end = 30.0
-    result = env.run_event_driven(analyzer, t_end=t_end)
+    result = env.run_event_driven(t_end=t_end, event_analyzer=analyzer)
 
     summary = result.summary()
     print(f"  Simulation ran for {summary['duration']:.2f}s (target: {t_end}s)")
