@@ -213,6 +213,10 @@ def train_rllib(num_iterations: int = 50):
 
     config = (
         PPOConfig()
+        .api_stack(
+            enable_rl_module_and_learner=False,
+            enable_env_runner_and_connector_v2=False,
+        )
         .environment(
             env=RLlibBasedHeronEnv,
             env_config={
@@ -235,6 +239,7 @@ def train_rllib(num_iterations: int = 50):
                     "dt": 300.0,
                     "episode_length": 86400.0,
                 },
+                "agent_ids": [f"station_{i}" for i in range(num_stations)],
                 "max_steps": steps_per_episode,
             },
         )
@@ -261,13 +266,19 @@ def train_rllib(num_iterations: int = 50):
     )
 
     logger.info("Building PPO algorithm...")
-    algo = config.build_algo()
+    algo = config.build()
 
     try:
         for i in range(num_iterations):
             result = algo.train()
-            reward_mean = result.get("env_runners", {}).get("episode_reward_mean", 0)
-            episodes = result.get("num_episodes_done", 0)
+            reward_mean = (
+                result.get("env_runners", {}).get("episode_reward_mean")
+                or result.get("episode_reward_mean", 0)
+            )
+            episodes = (
+                result.get("num_episodes_done")
+                or result.get("episodes_total", 0)
+            )
             logger.info(f"Iter {i:3d} | Reward mean: {reward_mean:7.2f} | Episodes: {episodes}")
 
             if i % 10 == 0 and i > 0:

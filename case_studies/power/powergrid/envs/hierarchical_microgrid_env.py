@@ -403,10 +403,10 @@ class HierarchicalMicrogridEnv(HeronEnv):
             day = np.random.randint(0, self._total_days - 1)
             self._timestep = day * self.episode_steps
 
-        # Call parent reset (clears proxy state cache)
-        obs, info = super().reset(seed=seed, **kwargs)
+        # Reset agents and proxy (clears proxy state, resets agent hierarchy)
+        super().reset(seed=seed, **kwargs)
 
-        # Update profiles AFTER parent reset (proxy state cache is cleared in parent)
+        # Push profiles now that proxy is ready (must be after proxy.reset())
         self._update_profiles(self._timestep)
 
         # Create network on first reset
@@ -416,7 +416,8 @@ class HierarchicalMicrogridEnv(HeronEnv):
             )
             self.net = self._create_network_from_agents(global_state)
 
-        return obs, info
+        # Re-collect obs with profiles populated so dims match step()
+        return self._system_agent.reset(proxy=self.proxy)
 
     def set_train_mode(self, train: bool = True) -> None:
         """Set training/evaluation mode.

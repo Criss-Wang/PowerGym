@@ -63,16 +63,21 @@ def _build_heron_env(config: Dict[str, Any]) -> HeronEnv:
 
 
     # Add agents and coordinators
+    _agent_known_keys = {"agent_id", "agent_cls", "features", "schedule_config", "coordinator"}
     for agent_cfg in config["agents"]:
+        extra = {k: v for k, v in agent_cfg.items() if k not in _agent_known_keys}
         builder.add_agent(
             agent_id=agent_cfg["agent_id"],
             agent_cls=agent_cfg["agent_cls"],
             features=agent_cfg.get("features"),
             schedule_config=agent_cfg.get("schedule_config"),
             coordinator=agent_cfg.get("coordinator"),
+            **extra,
         )
 
+    _coord_known_keys = {"coordinator_id", "agent_cls", "features", "protocol", "schedule_config", "subordinates"}
     for coord_cfg in config.get("coordinators", []):
+        coord_extra = {k: v for k, v in coord_cfg.items() if k not in _coord_known_keys}
         builder.add_coordinator(
             coordinator_id=coord_cfg["coordinator_id"],
             agent_cls=coord_cfg.get("agent_cls"),
@@ -80,6 +85,7 @@ def _build_heron_env(config: Dict[str, Any]) -> HeronEnv:
             protocol=coord_cfg.get("protocol"),
             schedule_config=coord_cfg.get("schedule_config"),
             subordinates=coord_cfg.get("subordinates"),
+            **coord_extra,
         )
     # Add system agent
     system_cfg = config.get("system", {})
@@ -140,7 +146,9 @@ class RLlibBasedHeronEnv(MultiAgentEnv):
         # ---- build the underlying HERON env ----
         self.heron_env: HeronEnv = _build_heron_env(config)
 
-        # One reset to materialise observation shapes and agent spaces
+        # One reset to materialise observation shapes and agent spaces.
+        # SystemAgent.reset() returns vectorized np.ndarray observations
+        # consistent with the format from step() / proxy.get_step_results().
         init_obs, _ = self.heron_env.reset(seed=0)
 
         # ---- determine exposed agents ----
@@ -159,7 +167,7 @@ class RLlibBasedHeronEnv(MultiAgentEnv):
 
         for aid in sorted(self._agent_ids):
             ag = self.heron_env.registered_agents[aid]
-            obs_vec = np.asarray(init_obs[aid], dtype=np.float32)
+            obs_vec = np.asarray(init_obs[aid], dtype=np.float32).flatten()
 
             self._obs_spaces[aid] = Box(
                 -np.inf, np.inf, shape=obs_vec.shape, dtype=np.float32,
@@ -185,11 +193,12 @@ class RLlibBasedHeronEnv(MultiAgentEnv):
     def reset(self, *, seed=None, options=None):
         self._step_count = 0
         raw, _ = self.heron_env.reset(seed=seed)
-        obs = {
-            aid: np.asarray(raw[aid], dtype=np.float32)
-            for aid in self._agent_ids
-            if aid in raw
-        }
+        obs = {}
+        for aid in self._agent_ids:
+            if aid in raw:
+                obs[aid] = np.asarray(raw[aid], dtype=np.float32).flatten()
+            else:
+                obs[aid] = np.zeros(self._obs_spaces[aid].shape, dtype=np.float32)
         return obs, {aid: {} for aid in obs}
 
     def step(self, action_dict: Dict[str, Any]):
@@ -207,22 +216,27 @@ class RLlibBasedHeronEnv(MultiAgentEnv):
             aid for aid in self._agent_ids
             if aid in agents and agents[aid].is_active_at(step)
         }
-        active_next = {
-            aid for aid in self._agent_ids
-            if aid in agents and agents[aid].is_active_at(step + 1)
-        }
         all_flags = {aid: aid in active_now for aid in self._agent_ids}
 
-        obs = {
-            aid: np.asarray(raw_obs[aid], dtype=np.float32)
-            for aid in active_next if aid in raw_obs
-        }
+        hit_limit = self._step_count >= self.max_steps
+        episode_done = raw_term.get("__all__", False) or hit_limit
+
+        # RLlib requires obs for all agents on every step (including final).
+        # Use raw obs when available, fall back to zeros for inactive agents.
+        obs = {}
+        for aid in self._agent_ids:
+            if aid in raw_obs:
+                obs[aid] = np.asarray(raw_obs[aid], dtype=np.float32).flatten()
+            else:
+                obs[aid] = np.zeros(
+                    self._obs_spaces[aid].shape,
+                    dtype=np.float32,
+                )
         rew = {aid: float(raw_rew.get(aid, 0.0)) for aid in self._agent_ids}
 
         term = {aid: bool(raw_term.get(aid, False)) for aid in self._agent_ids}
         term["__all__"] = raw_term.get("__all__", False)
 
-        hit_limit = self._step_count >= self.max_steps
         trunc = {aid: hit_limit for aid in self._agent_ids}
         trunc["__all__"] = hit_limit
 
