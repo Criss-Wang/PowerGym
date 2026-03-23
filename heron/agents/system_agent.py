@@ -84,13 +84,21 @@ class SystemAgent(Agent):
     def reset(self, *, seed: Optional[int] = None, proxy: Optional[Proxy] = None, **kwargs) -> Any:
         """Reset system agent and all coordinators. [Both Modes]
 
+        Returns vectorized observations (``np.ndarray``) consistent with
+        the format returned by ``step()`` via ``proxy.get_step_results()``.
+
         Args:
             seed: Random seed
             **kwargs: Additional reset parameters
         """
         super().reset(seed=seed, proxy=proxy, **kwargs)
 
-        return self.observe(proxy=proxy), {}
+        obs = self.observe(proxy=proxy)
+        obs_vectorized = {
+            aid: o.vector() if isinstance(o, Observation) else o
+            for aid, o in obs.items()
+        }
+        return obs_vectorized, {}
     
     def execute(self, actions: Dict[AgentID, Any], proxy: Optional[Proxy] = None) -> None:
         """Execute actions with hierarchical coordination and simulation. [Training Mode]"""

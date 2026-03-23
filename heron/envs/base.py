@@ -6,7 +6,6 @@ import gymnasium as gym
 
 from heron.agents.base import Agent
 from heron.agents.coordinator_agent import CoordinatorAgent
-from heron.core.observation import Observation
 from heron.core.action import Action
 from heron.core.policies import Policy
 from heron.messaging import MessageBroker, ChannelManager, Message, MessageType
@@ -145,7 +144,7 @@ class BaseEnv:
         self.scheduler.reset(start_time=0.0)  # Always reset to time 0
         self.clear_broker_environment()
 
-        # reset agents (system agent will reset subordinates)
+        # Reset agents — SystemAgent.reset() returns (obs_vectorized, {})
         self.proxy.reset(seed=seed)
         obs = self._system_agent.reset(seed=seed, proxy=self.proxy)
         self.proxy.init_global_state()  # Cache initial state in proxy after reset
