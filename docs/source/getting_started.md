@@ -85,14 +85,14 @@ print(f"Action: {action.c}")
 
 ## Your First Environment
 
-Create a PettingZoo-compatible environment:
+Create a multi-agent environment:
 
 ```python
-from pettingzoo import ParallelEnv
+from heron.envs import HeronEnv
 from gymnasium import spaces
 import numpy as np
 
-class SimpleEnv(ParallelEnv):
+class SimpleEnv(HeronEnv):
     metadata = {"name": "simple_env_v0"}
 
     def __init__(self):

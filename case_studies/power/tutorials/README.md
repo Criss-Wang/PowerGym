@@ -14,7 +14,7 @@ Learn HERON by building a complete multi-agent RL system for power grid control.
 ## Prerequisites
 
 ```bash
-pip install ray[rllib] pettingzoo gymnasium numpy
+pip install ray[rllib] gymnasium numpy
 ```
 
 ## Tutorial Overview
@@ -107,7 +107,7 @@ _, device_actions = coordinator.protocol.coordinate(
 ```
 
 ### 5. Dual Execution Modes (Tutorial 05 — Key Differentiator)
-Train fast, test realistically—**this cannot be achieved by wrapping PettingZoo**:
+Train fast, test realistically—**this cannot be achieved by wrapping standard MARL frameworks**:
 ```python
 # Training: synchronous (fast)
 env.step(actions)

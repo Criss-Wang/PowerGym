@@ -47,49 +47,6 @@ BaseEnv
 
       Action space for each agent.
 
-PettingZoo Compatibility
-------------------------
-
-HERON environments implement the PettingZoo ``ParallelEnv`` interface:
-
-.. code-block:: python
-
-   from pettingzoo import ParallelEnv
-
-   class MyEnv(ParallelEnv):
-       metadata = {"name": "my_env_v0"}
-
-       def __init__(self, config: dict = None):
-           self.possible_agents = ["agent_0", "agent_1"]
-           self.agents = self.possible_agents.copy()
-
-       def reset(self, seed=None, options=None):
-           observations = {agent: self._get_obs(agent) for agent in self.agents}
-           infos = {agent: {} for agent in self.agents}
-           return observations, infos
-
-       def step(self, actions):
-           # Apply actions
-           for agent_id, action in actions.items():
-               self._apply_action(agent_id, action)
-
-           # Get results
-           observations = {agent: self._get_obs(agent) for agent in self.agents}
-           rewards = {agent: self._compute_reward(agent) for agent in self.agents}
-           terminateds = {agent: self._is_done() for agent in self.agents}
-           terminateds["__all__"] = self._is_done()
-           truncateds = {agent: False for agent in self.agents}
-           truncateds["__all__"] = False
-           infos = {agent: {} for agent in self.agents}
-
-           return observations, rewards, terminateds, truncateds, infos
-
-       def observation_space(self, agent):
-           return self.observation_spaces[agent]
-
-       def action_space(self, agent):
-           return self.action_spaces[agent]
-
 RLlib Integration
 -----------------
 
@@ -97,12 +54,11 @@ Wrap HERON environments for RLlib:
 
 .. code-block:: python
 
-   from ray.rllib.env.wrappers.pettingzoo_env import ParallelPettingZooEnv
    from ray.tune.registry import register_env
 
    def env_creator(config):
        env = MyHeronEnv(config)
-       return ParallelPettingZooEnv(env)
+       return env
 
    register_env("my_heron_env", env_creator)
 

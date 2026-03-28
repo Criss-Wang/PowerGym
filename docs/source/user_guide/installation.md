@@ -39,7 +39,7 @@ pip install -e .
 # With power grid domain support
 pip install -e ".[powergrid]"
 
-# With multi-agent RL support (RLlib, PettingZoo)
+# With multi-agent RL support (RLlib)
 pip install -e ".[multi_agent]"
 
 # Full installation (all features)
@@ -65,7 +65,7 @@ pytest tests/ -v
 |--------|-------------|
 | `pip install -e .` | Core HERON framework only |
 | `pip install -e ".[powergrid]"` | Adds PandaPower for power systems |
-| `pip install -e ".[multi_agent]"` | Adds RLlib, PettingZoo for MARL |
+| `pip install -e ".[multi_agent]"` | Adds RLlib for MARL |
 | `pip install -e ".[all]"` | Full installation with all features |
 | `pip install -e ".[dev,all]"` | Development dependencies + all features |
 

@@ -1,6 +1,6 @@
 # PowerGrid Environments
 
-The PowerGrid case study provides PettingZoo-compatible environments.
+The PowerGrid case study provides multi-agent environments.
 
 ## MultiAgentMicrogrids
 
@@ -154,28 +154,12 @@ penalty: 10.0
 Use with RLlib for training:
 
 ```python
-from ray.rllib.env.wrappers.pettingzoo_env import ParallelPettingZooEnv
+from ray.tune.registry import register_env
 
 def env_creator(config):
     env = MultiAgentMicrogrids(config)
-    return ParallelPettingZooEnv(env)
+    return env
 
 # Register with RLlib
-from ray.tune.registry import register_env
 register_env("multi_agent_microgrids", env_creator)
-```
-
-## Stable-Baselines3 Integration
-
-Use with SB3 via wrapper:
-
-```python
-from stable_baselines3 import PPO
-from supersuit import pettingzoo_env_to_vec_env_v1
-
-env = MultiAgentMicrogrids(config)
-vec_env = pettingzoo_env_to_vec_env_v1(env)
-
-model = PPO("MlpPolicy", vec_env, verbose=1)
-model.learn(total_timesteps=100000)
 ```

@@ -65,7 +65,7 @@ graph TB
     style PR fill:#e67e22,color:#fff
 ```
 
-**Novelty:** Unlike PettingZoo (which standardizes the env-algorithm _interface_), HERON standardizes _what happens inside the environment_: how agents access state, communicate, and coordinate. This is a fundamentally different abstraction level.
+**Novelty:** Unlike existing MARL frameworks (which standardize the env-algorithm _interface_), HERON standardizes _what happens inside the environment_: how agents access state, communicate, and coordinate. This is a fundamentally different abstraction level.
 
 ---
 
@@ -237,7 +237,7 @@ sequenceDiagram
     Note over SYS: If not terminated/truncated, schedule next AGENT_TICK
 ```
 
-**Novelty:** HERON is the first MARL framework to offer **native dual-mode execution** — synchronous CTDE for training and event-driven for deployment testing — using the same agent hierarchy and protocol system. Existing frameworks (PettingZoo, EPyMARL, MARLlib) only support synchronous `step()`. Event-driven execution cannot be achieved by wrapping; it requires changing the fundamental execution loop.
+**Novelty:** HERON is the first MARL framework to offer **native dual-mode execution** — synchronous CTDE for training and event-driven for deployment testing — using the same agent hierarchy and protocol system. Existing frameworks (EPyMARL, MARLlib) only support synchronous `step()`. Event-driven execution cannot be achieved by wrapping; it requires changing the fundamental execution loop.
 
 ---
 
@@ -644,7 +644,7 @@ sequenceDiagram
 
 ```mermaid
 graph LR
-    subgraph "PettingZoo / EPyMARL / MARLlib"
+    subgraph "EPyMARL / MARLlib"
         direction TB
         ENV1["Environment"]
         ALG1["Algorithm"]

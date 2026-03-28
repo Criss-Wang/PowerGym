@@ -63,7 +63,7 @@ python3 -m venv .venv && source .venv/bin/activate
 # Choose your installation
 pip install -e .                    # Core framework only
 pip install -e ".[powergrid]"       # + Power grid case study
-pip install -e ".[multi_agent]"     # + RLlib, PettingZoo
+pip install -e ".[multi_agent]"     # + RLlib
 pip install -e ".[all]"             # Everything (includes dev tools)
 ```
 

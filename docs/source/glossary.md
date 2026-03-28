@@ -186,7 +186,6 @@ Single-agent Gymnasium-compatible environment.
 
 ### HeronEnv
 Multi-agent environment base class. Adapters available for:
-- PettingZoo (`PettingZooParallelEnv`)
 - RLlib (`RLlibMultiAgentEnv`)
 
 ## Event-Driven Scheduling
