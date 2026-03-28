@@ -11,7 +11,7 @@ This module provides the agent hierarchy:
 from heron.agents.base import Agent
 from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
-from heron.agents.system_agent import SystemAgent
+from heron.agents.system_agent import SystemAgent, build_system_agent
 from heron.agents.proxy_agent import Proxy
 from heron.agents.constants import (
     # Agent Hierarchy Levels
@@ -29,6 +29,7 @@ __all__ = [
     "FieldAgent",
     "CoordinatorAgent",
     "SystemAgent",
+    "build_system_agent",
     "Proxy",
     # Constants
     "PROXY_LEVEL",

@@ -11,7 +11,6 @@ from heron.core.policies import Policy
 from heron.messaging import MessageBroker, ChannelManager, Message, MessageType
 from heron.utils.typing import AgentID, MultiAgentDict
 from heron.scheduling import EventScheduler, Event, EpisodeAnalyzer, EpisodeStats
-from heron.scheduling.schedule_config import ScheduleConfig
 from heron.agents.system_agent import SystemAgent
 from heron.agents.proxy_agent import Proxy
 from heron.agents.constants import SYSTEM_AGENT_ID, PROXY_AGENT_ID
@@ -28,8 +27,6 @@ class BaseEnv:
         coordinator_agents: Optional[List[CoordinatorAgent]] = None,
         # simulation-related params
         simulation_wait_interval: Optional[float] = None,
-        # timing
-        system_agent_schedule_config: Optional[ScheduleConfig] = None,
     ) -> None:
         # environment attributes
         self.env_id = env_id or f"env_{uuid.uuid4().hex[:8]}"
@@ -37,7 +34,7 @@ class BaseEnv:
 
         # agent-specific fields
         self.registered_agents: Dict[AgentID, Agent] = {}
-        self._register_agents(system_agent, coordinator_agents, system_agent_schedule_config)
+        self._register_agents(system_agent, coordinator_agents)
 
         # initialize proxy agent (singleton) for state access and action dispatch
         self.proxy = Proxy(agent_id=PROXY_AGENT_ID)
@@ -63,7 +60,6 @@ class BaseEnv:
         self,
         system_agent: Optional[SystemAgent],
         coordinator_agents: Optional[List[CoordinatorAgent]],
-        system_agent_schedule_config: Optional[ScheduleConfig] = None,
     ) -> None:
         """Internal method to register agents during initialization."""
         # register system agent (singleton) & its subordinates
@@ -74,13 +70,10 @@ class BaseEnv:
             self._system_agent = system_agent
         else:
             print("No system agent provided, using default system agent")
-            sys_kwargs = {
-                "agent_id": SYSTEM_AGENT_ID,
-                "subordinates": {agent.agent_id: agent for agent in coordinator_agents},
-            }
-            if system_agent_schedule_config is not None:
-                sys_kwargs["schedule_config"] = system_agent_schedule_config
-            self._system_agent = SystemAgent(**sys_kwargs)
+            self._system_agent = SystemAgent(
+                agent_id=SYSTEM_AGENT_ID,
+                subordinates={agent.agent_id: agent for agent in coordinator_agents},
+            )
         self._system_agent.set_simulation(
             self.run_simulation,
             self.env_state_to_global_state,

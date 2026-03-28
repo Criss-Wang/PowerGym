@@ -1,5 +1,5 @@
 import logging
-from typing import List, Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from enum import Enum
 
 from heron.agents.base import Agent
@@ -364,3 +364,34 @@ class SystemAgent(Agent):
         num_coords = len(self.subordinates)
         protocol_name = self.protocol.__class__.__name__ if self.protocol else "None"
         return f"SystemAgent(id={self.agent_id}, coordinators={num_coords}, protocol={protocol_name})"
+
+
+def build_system_agent(
+    coordinator_agents: List[CoordinatorAgent],
+    schedule_config: Optional[ScheduleConfig] = None,
+    **kwargs: Any,
+) -> SystemAgent:
+    """Build a SystemAgent from a list of coordinator agents.
+
+    This is the recommended way to create a SystemAgent with a custom
+    ``schedule_config``.  For the default schedule config, you can simply
+    pass ``coordinator_agents`` directly to ``BaseEnv`` and it will
+    create one automatically.
+
+    Parameters
+    ----------
+    coordinator_agents : list[CoordinatorAgent]
+        The coordinator agents that will be subordinates of the system agent.
+    schedule_config : ScheduleConfig, optional
+        Custom schedule config.  Defaults to ``DEFAULT_SYSTEM_AGENT_SCHEDULE_CONFIG``.
+    **kwargs
+        Additional keyword arguments forwarded to ``SystemAgent.__init__``.
+    """
+    sys_kwargs: dict = {
+        "agent_id": SYSTEM_AGENT_ID,
+        "subordinates": {agent.agent_id: agent for agent in coordinator_agents},
+    }
+    if schedule_config is not None:
+        sys_kwargs["schedule_config"] = schedule_config
+    sys_kwargs.update(kwargs)
+    return SystemAgent(**sys_kwargs)
