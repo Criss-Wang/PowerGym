@@ -26,6 +26,7 @@ import numpy as np
 
 from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
+from heron.agents.system_agent import build_system_agent
 from heron.core.action import Action
 from heron.core.feature import Feature
 from heron.core.policies import Policy, obs_to_vector, vector_to_action
@@ -203,11 +204,11 @@ def build_env_event_driven():
         subordinates={"room_a": thermo_a, "room_b": thermo_b},
         schedule_config=coord_tick,
     )
+    system_agent = build_system_agent([coordinator], schedule_config=system_tick)
     return SimpleEnv(
-        coordinator_agents=[coordinator],
+        system_agent=system_agent,
         simulation_func=thermostat_simulation,
         env_id="thermostat_event",
-        system_agent_schedule_config=system_tick,
     )
 
 
