@@ -424,7 +424,10 @@ class Agent(ABC):
             _, sub_actions = self.protocol.coordinate(
                 coordinator_state=self.state,
                 coordinator_action=self.action,
-                info_for_subordinates={sub_id: None for sub_id in self.subordinates},
+                info_for_subordinates={
+                    sub_id: proxy.get_observation(self.agent_id) if proxy else None
+                    for sub_id in self.subordinates
+                },
             )
             for sub_id, sub_action in sub_actions.items():
                 if sub_action is None:
