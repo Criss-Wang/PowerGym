@@ -230,7 +230,6 @@ class Proxy(Agent):
                         MSG_KEY_BODY: info_data
                     }
                 },
-                delay=self._schedule_config.msg_delay,
             )
         elif MSG_SET_STATE in message_content:
             from heron.core.state import State
@@ -258,7 +257,6 @@ class Proxy(Agent):
                 sender_id=recipient_id, # same as self.agent_id
                 recipient_id=sender_id,
                 message={MSG_SET_STATE_COMPLETION: "success"},
-                delay=self._schedule_config.msg_delay,
             )
         elif MSG_SET_TICK_RESULT in message_content:
             result_type = message_content[MSG_SET_TICK_RESULT]

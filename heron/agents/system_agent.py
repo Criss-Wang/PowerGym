@@ -212,7 +212,6 @@ class SystemAgent(Agent):
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
                 message={MSG_SET_STATE: STATE_TYPE_GLOBAL, MSG_KEY_BODY: updated_global_state},
-                delay=self._schedule_config.msg_delay,
             )
         elif "get_local_state_response" in message_content:
             response_data = message_content["get_local_state_response"]
@@ -274,9 +273,8 @@ class SystemAgent(Agent):
             sender_id=self.agent_id,
             recipient_id=PROXY_AGENT_ID,
             message={MSG_GET_INFO: INFO_TYPE_GLOBAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
-            delay=self._schedule_config.msg_delay,
         )
-    
+
 
     # ============================================
     # Simulation related functions - SystemAgent-specific

@@ -107,7 +107,6 @@ class CoordinatorAgent(Agent):
             sender_id=self.agent_id,
             recipient_id=PROXY_AGENT_ID,
             message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
-            delay=self._schedule_config.msg_delay,
         )
 
     # ============================================
