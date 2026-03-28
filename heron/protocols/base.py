@@ -155,7 +155,7 @@ class NoCommunication(CommunicationProtocol):
         receiver_infos: Dict[AgentID, Any],
         context: Optional[Dict[str, Any]] = None
     ) -> Dict[AgentID, Dict[str, Any]]:
-        return {r_id: {} for r_id in receiver_infos}
+        return {r_id: {} for r_id in (receiver_infos or {})}
 
 
 class NoActionCoordination(ActionProtocol):
