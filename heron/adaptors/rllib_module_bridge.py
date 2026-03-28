@@ -51,16 +51,49 @@ class RLlibModuleBridge(Policy):
         # Extract action from distribution inputs
         if "actions" in output:
             raw = output["actions"].cpu().numpy()[0]
+            action = self._action_template.copy()
+            action.set_values(raw)
         elif "action_dist_inputs" in output:
             dist_inputs = output["action_dist_inputs"].cpu().numpy()[0]
-            # For continuous: use mean (first half of dist inputs)
-            raw = dist_inputs[:len(dist_inputs) // 2]
+            action = self._action_template.copy()
+            action.set_values(
+                **self._parse_dist_inputs(dist_inputs, self._action_template)
+            )
         else:
             raise ValueError(f"Unexpected RLModule output keys: {output.keys()}")
-
-        action = self._action_template.copy()
-        action.set_values(raw)
         return action
+
+    @staticmethod
+    def _parse_dist_inputs(
+        dist_inputs: "np.ndarray", template: Action
+    ) -> dict:
+        """Extract continuous means and discrete argmax from dist_inputs.
+
+        Layout produced by RLlib:
+          - Gaussian (continuous): [means (dim_c), log_stds (dim_c)]
+          - Categorical (discrete): [logits_head_0, logits_head_1, ...]
+          - Mixed: Gaussian params first, then categorical logits
+        """
+        import numpy as np
+
+        offset = 0
+        result: dict = {}
+
+        # Continuous: first dim_c values are means, next dim_c are log_stds
+        if template.dim_c:
+            result["c"] = dist_inputs[offset : offset + template.dim_c]
+            offset += template.dim_c * 2  # skip means + log_stds
+
+        # Discrete: argmax over each head's logits
+        if template.dim_d:
+            d_vals = np.empty(template.dim_d, dtype=np.int32)
+            for i, n in enumerate(template.ncats):
+                logits = dist_inputs[offset : offset + n]
+                d_vals[i] = int(np.argmax(logits))
+                offset += n
+            result["d"] = d_vals
+
+        return result
 
     def reset(self) -> None:
         pass
