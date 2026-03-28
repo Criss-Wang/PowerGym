@@ -28,6 +28,8 @@ from heron.agents.constants import (
     STATE_TYPE_GLOBAL,
     MSG_KEY_BODY,
     MSG_KEY_PROTOCOL,
+    MSG_GET_GLOBAL_STATE_RESPONSE,
+    MSG_GET_LOCAL_STATE_RESPONSE,
 )
 
 
@@ -203,9 +205,9 @@ class SystemAgent(Agent):
         # b. getting local state -> compute rewards
         # c. receiving "state set completion" message from proxy -> schedule reward computation
         assert isinstance(message_content, dict)
-        if "get_global_state_response" in message_content:
+        if MSG_GET_GLOBAL_STATE_RESPONSE in message_content:
             # The response structure is {'get_global_state_response': {'body': {...}}}
-            response_data = message_content["get_global_state_response"]
+            response_data = message_content[MSG_GET_GLOBAL_STATE_RESPONSE]
             global_state = response_data[MSG_KEY_BODY] # a dict of {agent_id: state}
             updated_global_state = self.simulate(global_state)
             scheduler.schedule_message_delivery(
@@ -213,8 +215,8 @@ class SystemAgent(Agent):
                 recipient_id=PROXY_AGENT_ID,
                 message={MSG_SET_STATE: STATE_TYPE_GLOBAL, MSG_KEY_BODY: updated_global_state},
             )
-        elif "get_local_state_response" in message_content:
-            response_data = message_content["get_local_state_response"]
+        elif MSG_GET_LOCAL_STATE_RESPONSE in message_content:
+            response_data = message_content[MSG_GET_LOCAL_STATE_RESPONSE]
             local_state = response_data[MSG_KEY_BODY]
 
             # Sync internal state with what's stored in proxy (may have been modified by simulation)

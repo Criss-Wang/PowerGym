@@ -7,6 +7,11 @@ collecting episode-level statistics, with focus on state and action tracking.
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from heron.agents.constants import (
+    MSG_GET_OBS_RESPONSE,
+    MSG_GET_GLOBAL_STATE_RESPONSE,
+    MSG_GET_LOCAL_STATE_RESPONSE,
+)
 from heron.scheduling.event import Event, EventType
 
 
@@ -99,24 +104,24 @@ class EpisodeAnalyzer:
             message_content = payload.get("message", {})
 
             # Check for observation responses
-            if "get_obs_response" in message_content:
-                message_type = "get_obs_response"
+            if MSG_GET_OBS_RESPONSE in message_content:
+                message_type = MSG_GET_OBS_RESPONSE
                 self.observation_count += 1
-                obs_data = message_content["get_obs_response"].get("body", {})
+                obs_data = message_content[MSG_GET_OBS_RESPONSE].get("body", {})
                 data_summary = self._summarize_observation(obs_data)
 
             # Check for global state responses
-            elif "get_global_state_response" in message_content:
-                message_type = "get_global_state_response"
+            elif MSG_GET_GLOBAL_STATE_RESPONSE in message_content:
+                message_type = MSG_GET_GLOBAL_STATE_RESPONSE
                 self.global_state_count += 1
-                state_data = message_content["get_global_state_response"].get("body", {})
+                state_data = message_content[MSG_GET_GLOBAL_STATE_RESPONSE].get("body", {})
                 data_summary = self._summarize_state(state_data, "global")
 
             # Check for local state responses
-            elif "get_local_state_response" in message_content:
-                message_type = "get_local_state_response"
+            elif MSG_GET_LOCAL_STATE_RESPONSE in message_content:
+                message_type = MSG_GET_LOCAL_STATE_RESPONSE
                 self.local_state_count += 1
-                state_data = message_content["get_local_state_response"].get("body", {})
+                state_data = message_content[MSG_GET_LOCAL_STATE_RESPONSE].get("body", {})
                 data_summary = self._summarize_state(state_data, "local")
 
             # Check for state update completion
@@ -299,7 +304,7 @@ class EpisodeStats:
         """Number of observation events."""
         return sum(
             1 for a in self.event_analyses
-            if a.message_type == "get_obs_response"
+            if a.message_type == MSG_GET_OBS_RESPONSE
         )
 
     @property
@@ -307,7 +312,7 @@ class EpisodeStats:
         """Number of global state events."""
         return sum(
             1 for a in self.event_analyses
-            if a.message_type == "get_global_state_response"
+            if a.message_type == MSG_GET_GLOBAL_STATE_RESPONSE
         )
 
     @property
@@ -315,7 +320,7 @@ class EpisodeStats:
         """Number of local state events."""
         return sum(
             1 for a in self.event_analyses
-            if a.message_type == "get_local_state_response"
+            if a.message_type == MSG_GET_LOCAL_STATE_RESPONSE
         )
 
     @property
@@ -379,7 +384,7 @@ class EpisodeStats:
         """
         return [
             a for a in self.event_analyses
-            if a.agent_id == agent_id and a.message_type == "get_obs_response"
+            if a.agent_id == agent_id and a.message_type == MSG_GET_OBS_RESPONSE
         ]
 
     def summary(self) -> Dict[str, Any]:

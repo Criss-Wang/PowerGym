@@ -27,6 +27,9 @@ from heron.agents.constants import (
     STATE_TYPE_LOCAL,
     MSG_KEY_BODY,
     MSG_KEY_PROTOCOL,
+    MSG_GET_OBS_RESPONSE,
+    MSG_GET_GLOBAL_STATE_RESPONSE,
+    MSG_GET_LOCAL_STATE_RESPONSE,
 )
 
 
@@ -207,7 +210,12 @@ class Proxy(Agent):
 
             # Serialize Observation objects before sending via message
             # In async/distributed systems, objects must be serialized for message passing
-            info_type_key = "get_" + info_type + "_response" # e.g. obs -> get_obs_response
+            _RESPONSE_KEY = {
+                INFO_TYPE_OBS: MSG_GET_OBS_RESPONSE,
+                INFO_TYPE_GLOBAL_STATE: MSG_GET_GLOBAL_STATE_RESPONSE,
+                INFO_TYPE_LOCAL_STATE: MSG_GET_LOCAL_STATE_RESPONSE,
+            }
+            info_type_key = _RESPONSE_KEY[info_type]
 
             # Special handling for observation requests: send both obs and local_state
             if isinstance(info, Observation):
