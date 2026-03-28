@@ -24,6 +24,8 @@ from heron.agents.constants import (
     INFO_TYPE_LOCAL_STATE,
     MSG_KEY_BODY,
     MSG_KEY_PROTOCOL,
+    MSG_GET_OBS_RESPONSE,
+    MSG_GET_LOCAL_STATE_RESPONSE,
 )
 
 
@@ -132,9 +134,9 @@ class CoordinatorAgent(Agent):
         message_content = event.payload.get("message", {})
 
         # Publish message via broker
-        if "get_obs_response" in message_content:
+        if MSG_GET_OBS_RESPONSE in message_content:
             assert isinstance(message_content, dict)
-            response_data = message_content["get_obs_response"]
+            response_data = message_content[MSG_GET_OBS_RESPONSE]
             body = response_data[MSG_KEY_BODY]
 
             # Proxy sends both obs and local_state (design principle: agent asks for obs, proxy gives both)
@@ -149,8 +151,8 @@ class CoordinatorAgent(Agent):
 
             # Compute action - policy decides which parts of observation to use
             self.compute_action(obs, scheduler)
-        elif "get_local_state_response" in message_content:
-            response_data = message_content["get_local_state_response"]
+        elif MSG_GET_LOCAL_STATE_RESPONSE in message_content:
+            response_data = message_content[MSG_GET_LOCAL_STATE_RESPONSE]
             local_state = response_data[MSG_KEY_BODY]
 
             # Sync internal state with what's stored in proxy (may have been modified by simulation)

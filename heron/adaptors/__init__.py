@@ -5,9 +5,4 @@ try:
 except ImportError:
     pass
 
-try:
-    from heron.adaptors.epymarl import HeronEPyMARLAdapter
-except ImportError:
-    pass
-
-__all__ = ["RLlibBasedHeronEnv", "HeronEPyMARLAdapter"]
+__all__ = ["RLlibBasedHeronEnv"]
