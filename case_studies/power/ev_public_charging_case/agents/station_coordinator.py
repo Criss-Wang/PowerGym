@@ -97,21 +97,12 @@ class StationCoordinator(CoordinatorAgent):
         return rewards
 
     def compute_local_reward(self, local_state: dict) -> float:
-        """Compute station reward by aggregating subordinate slot rewards.
+        """Compute station reward from own features.
 
-        In event-driven mode, local_state includes 'subordinate_rewards' from
-        proxy (populated by field agents' set_tick_result messages post-simulation).
-        Falls back to feature-based computation if subordinate rewards unavailable
-        (e.g. during synchronous training where _tick_results is not populated).
+        Each agent computes its own reward independently using local features.
 
-        Reward = sum of subordinate (ChargingSlot) rewards.
+        Reward = occupied_fraction * margin (price - LMP).
         """
-        # Use subordinate rewards if available (event-driven mode post-simulation)
-        subordinate_rewards = local_state.get("subordinate_rewards", {})
-        if subordinate_rewards:
-            return sum(subordinate_rewards.values())
-
-        # Fallback: compute from own features (synchronous mode or no subordinate rewards yet)
         csf = local_state.get("ChargingStationFeature")
         if csf is None:
             return 0.0

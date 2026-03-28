@@ -85,7 +85,6 @@ def main():
                                 obs_delay=0.05,
                                 act_delay=0.1,
                                 msg_delay=0.05,
-                                reward_delay=0.2,     # Wait for field agent reward round-trips
                                 jitter_type=JitterType.GAUSSIAN,
                                 jitter_ratio=0.1,
                                 seed=43
@@ -100,7 +99,6 @@ def main():
                             obs_delay=0.05,
                             act_delay=0.1,
                             msg_delay=0.05,
-                            reward_delay=0.3,
                             jitter_type=JitterType.GAUSSIAN,
                             jitter_ratio=0.1,
                             seed=44

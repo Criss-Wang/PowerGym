@@ -54,7 +54,6 @@ ScheduleConfig fields:
   obs_delay       observation latency
   act_delay       action effect delay
   msg_delay       message delivery delay
-  reward_delay    reward aggregation delay
 
 Constructors:
   ScheduleConfig.deterministic(...)     no jitter (training)

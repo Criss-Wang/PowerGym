@@ -890,7 +890,7 @@ Agent needs observation
 │       ├─> global_state = get_global_states(agent_id, protocol)
 │       │   └─> For each agent: state.observed_by(requestor_id, level)
 │       │   └─> Includes "env_context" from global cache if available
-│       ├─> local_state = get_local_state(agent_id, protocol, include_subordinate_rewards=False)
+│       ├─> local_state = get_local_state(agent_id, protocol)
 │       │   └─> state.observed_by(agent_id, level)
 │       └─> return Observation(local, global_info, timestamp)
 │
@@ -906,7 +906,7 @@ Agent needs observation
 └─> Proxy.get_observation(sender_id, protocol)
     ├─> global_state = get_global_states(sender_id, protocol)
     │   └─> For each agent: state.observed_by(sender_id, requestor_level)
-    ├─> local_state = get_local_state(sender_id, protocol, include_subordinate_rewards=False)
+    ├─> local_state = get_local_state(sender_id, protocol)
     └─> return Observation(local=local_state, global_info=global_state, timestamp=self._timestep)
 ```
 
@@ -1026,26 +1026,20 @@ proxy._tick_results = {
 | Method | Input | Output | Notes |
 |--------|-------|--------|-------|
 | `set_local_state(aid, state)` | State object | None | Stores object directly |
-| `get_local_state(aid, protocol, include_sub_rewards)` | agent_id, protocol, bool | Dict[str, np.ndarray] | Returns filtered vectors + optional subordinate rewards |
+| `get_local_state(aid, protocol)` | agent_id, protocol | Dict[str, np.ndarray] | Returns visibility-filtered feature vectors |
 | `get_global_states(aid, protocol)` | agent_id, protocol | Dict[aid, Dict] | Returns all filtered states + env_context |
-| `get_observation(aid, protocol)` | agent_id, protocol | Observation | Combines local + global (excludes subordinate_rewards) |
+| `get_observation(aid, protocol)` | agent_id, protocol | Observation | Combines local + global |
 | `set_global_state(dict)` | global_dict | None | Updates global state cache via .update() |
 | `get_serialized_agent_states()` | None | Dict[aid, Dict] | Serializes all states for message passing |
 
 ### **Visibility Filtering**
 
 ```python
-def get_local_state(self, sender_id, protocol, include_subordinate_rewards=True):
+def get_local_state(self, sender_id, protocol):
     """Get agent's state filtered by visibility rules."""
     state_obj = self.state_cache["agents"][sender_id]
     requestor_level = self._agent_levels.get(sender_id, 1)
     local_state = state_obj.observed_by(sender_id, requestor_level)
-
-    # Include subordinate rewards for parent agents (reward computation only)
-    if include_subordinate_rewards:
-        subordinate_rewards = self._get_subordinate_rewards(sender_id)
-        if subordinate_rewards:
-            local_state["subordinate_rewards"] = subordinate_rewards
 
     return local_state
 

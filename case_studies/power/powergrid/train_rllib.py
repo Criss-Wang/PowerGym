@@ -78,11 +78,11 @@ _FIELD_SCHED = ScheduleConfig.with_jitter(
 )
 _COORD_SCHED = ScheduleConfig.with_jitter(
     tick_interval=10.0, obs_delay=0.2, act_delay=0.3, msg_delay=0.15,
-    reward_delay=0.6, jitter_type=JitterType.GAUSSIAN, jitter_ratio=0.1, seed=43,
+    jitter_type=JitterType.GAUSSIAN, jitter_ratio=0.1, seed=43,
 )
 _SYSTEM_SCHED = ScheduleConfig.with_jitter(
     tick_interval=30.0, obs_delay=0.3, act_delay=0.5, msg_delay=0.2,
-    reward_delay=1.0, jitter_type=JitterType.GAUSSIAN, jitter_ratio=0.1, seed=41,
+    jitter_type=JitterType.GAUSSIAN, jitter_ratio=0.1, seed=41,
 )
 
 

@@ -89,7 +89,7 @@ class DeviceAgent(FieldAgent):
 
 class ZoneCoordinator(CoordinatorAgent):
     def compute_local_reward(self, local_state: dict) -> float:
-        return sum(local_state.get("subordinate_rewards", {}).values())
+        return 0.0
 
 
 class GridSystem(SystemAgent):

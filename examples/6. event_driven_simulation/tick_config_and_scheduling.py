@@ -49,7 +49,6 @@ def demo_schedule_config_basics():
     obs_delay      -- latency for observations to arrive
     act_delay      -- delay before action takes effect
     msg_delay      -- delay for message delivery (protocols)
-    reward_delay   -- delay for reward aggregation (coordinators)
 """)
 
     # Create a config for a sensor that ticks every 0.5s
@@ -315,7 +314,7 @@ def main():
     print("=" * 60)
     print("""
   ScheduleConfig:
-    Controls tick_interval, obs/act/msg/reward delays
+    Controls tick_interval, obs/act/msg delays
     .deterministic() for training (no randomness)
     .with_jitter() for testing (realistic timing)
 

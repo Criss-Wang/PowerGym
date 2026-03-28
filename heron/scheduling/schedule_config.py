@@ -37,8 +37,6 @@ class ScheduleConfig:
         obs_delay: Base observation latency (seconds)
         act_delay: Base action effect delay (seconds)
         msg_delay: Base message delivery delay (seconds)
-        reward_delay: Base delay for reward aggregation (seconds). Used by parent
-            agents to wait for subordinate rewards before computing their own.
         jitter_type: Type of randomization to apply (NONE, UNIFORM, GAUSSIAN)
         jitter_ratio: Jitter magnitude as fraction of base value (e.g., 0.1 = +/- 10%)
         min_delay: Minimum allowed delay after jitter (clamps negative values)
@@ -64,7 +62,6 @@ class ScheduleConfig:
     obs_delay: float = 0.0
     act_delay: float = 0.0
     msg_delay: float = 0.0
-    reward_delay: float = 0.0
 
     # Jitter configuration (only active in testing/event-driven mode)
     jitter_type: JitterType = JitterType.NONE
@@ -146,14 +143,6 @@ class ScheduleConfig:
         """
         return self._apply_jitter(self.msg_delay)
 
-    def get_reward_delay(self) -> float:
-        """Get (possibly jittered) reward aggregation delay.
-
-        Returns:
-            Reward delay, clamped to min_delay
-        """
-        return self._apply_jitter(self.reward_delay)
-
     def seed(self, seed: int) -> None:
         """Set RNG seed for reproducibility.
 
@@ -169,7 +158,6 @@ class ScheduleConfig:
         obs_delay: float = 0.0,
         act_delay: float = 0.0,
         msg_delay: float = 0.0,
-        reward_delay: float = 0.0,
     ) -> "ScheduleConfig":
         """Create deterministic config (no jitter) - for training.
 
@@ -178,7 +166,6 @@ class ScheduleConfig:
             obs_delay: Observation latency
             act_delay: Action effect delay
             msg_delay: Message delivery delay
-            reward_delay: Reward aggregation delay
 
         Returns:
             ScheduleConfig with jitter disabled
@@ -188,7 +175,6 @@ class ScheduleConfig:
             obs_delay=obs_delay,
             act_delay=act_delay,
             msg_delay=msg_delay,
-            reward_delay=reward_delay,
             jitter_type=JitterType.NONE,
         )
 
@@ -199,7 +185,6 @@ class ScheduleConfig:
         obs_delay: float = 0.0,
         act_delay: float = 0.0,
         msg_delay: float = 0.0,
-        reward_delay: float = 0.0,
         jitter_type: JitterType = JitterType.GAUSSIAN,
         jitter_ratio: float = 0.1,
         min_delay: float = 0.0,
@@ -212,7 +197,6 @@ class ScheduleConfig:
             obs_delay: Base observation latency
             act_delay: Base action effect delay
             msg_delay: Base message delivery delay
-            reward_delay: Base reward aggregation delay
             jitter_type: Distribution type for jitter
             jitter_ratio: Jitter magnitude as fraction of base
             min_delay: Minimum allowed delay after jitter
@@ -227,7 +211,6 @@ class ScheduleConfig:
             obs_delay=obs_delay,
             act_delay=act_delay,
             msg_delay=msg_delay,
-            reward_delay=reward_delay,
             jitter_type=jitter_type,
             jitter_ratio=jitter_ratio,
             min_delay=min_delay,

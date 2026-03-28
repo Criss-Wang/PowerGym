@@ -282,13 +282,11 @@ class SystemAgent(Agent):
                     message={MSG_SET_STATE_COMPLETION: message_content[MSG_SET_STATE_COMPLETION]},
                 )
 
-            # System agent waits for coordinators (which wait for field agents) before
-            # computing its own reward with aggregated subordinate rewards.
+            # System agent computes its own reward independently.
             scheduler.schedule_message_delivery(
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
                 message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
-                delay=self._schedule_config.reward_delay,
             )
         else:
             raise NotImplementedError

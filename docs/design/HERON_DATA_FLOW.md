@@ -149,12 +149,10 @@ State object -> .to_dict() -> Message -> State.from_dict() -> State object
 ```
 Agent requests own state from proxy
 
-proxy.get_local_state(sender_id, protocol, include_subordinate_rewards=True)
+proxy.get_local_state(sender_id, protocol)
 ├─> Input: sender_id="battery_1"
 ├─> Retrieval: state_obj = state_cache["agents"]["battery_1"]  # State object!
 ├─> Apply visibility filtering: state_obj.observed_by(sender_id, requestor_level)
-├─> Include subordinate rewards (if parent agent):
-│   └─> subordinate_rewards = _get_subordinate_rewards(agent_id)
 └─> Return: {"BatteryChargeFeature": np.array([0.53, 100.0])}  # Feature vectors!
 ```
 
@@ -662,10 +660,10 @@ proxy.get_observation(sender_id, protocol)
 │   ├─> Include "env_context" from global cache if available
 │   └─> Returns: Dict of filtered feature vectors + env_context
 │
-├─> local_state = get_local_state(sender_id, protocol, include_subordinate_rewards=False)
+├─> local_state = get_local_state(sender_id, protocol)
 │   ├─> state_obj = state_cache["agents"][sender_id]
 │   ├─> filtered = state_obj.observed_by(sender_id, requestor_level)
-│   └─> Returns: Dict of filtered feature vectors (NO subordinate rewards for obs)
+│   └─> Returns: Dict of filtered feature vectors
 │
 └─> return Observation(
         local=local_state,        # Filtered vectors!
@@ -675,10 +673,6 @@ proxy.get_observation(sender_id, protocol)
 ```
 
 **Key Insight:** Observation contains **filtered numpy arrays**, not raw State objects!
-
-**Subordinate Rewards:** The `include_subordinate_rewards=False` parameter ensures observations
-used for action computation do not include subordinate reward data (which is only relevant for
-reward computation via `get_local_state()` with default `include_subordinate_rewards=True`).
 
 ---
 
@@ -1331,7 +1325,7 @@ obs = self.observe(proxy=proxy)
     │
     └─> observation = proxy.get_observation(sender_id=agent_id, protocol=protocol)
         │
-        ├─> local_state = get_local_state(sender_id=agent_id, protocol=protocol, include_subordinate_rewards=False)
+        ├─> local_state = get_local_state(sender_id=agent_id, protocol=protocol)
         │   └─> state.observed_by(sender_id, requestor_level)
         │   └─> Returns: {"BatteryChargeFeature": np.array([0.503, 100.0])}
         │
@@ -1362,9 +1356,7 @@ rewards = self.compute_rewards(proxy)
 └─> For each agent:
     │
     ├─> local_state = proxy.get_local_state(sender_id=agent_id, protocol=protocol)
-    │   │                                   ↑ include_subordinate_rewards=True (default)
-    │   └─> Returns: {"BatteryChargeFeature": np.array([0.503, 100.0]),
-    │                  "subordinate_rewards": {...} (if parent agent)}
+    │   └─> Returns: {"BatteryChargeFeature": np.array([0.503, 100.0])}
     │
     └─> reward = compute_local_reward(local_state)
         │
@@ -1462,7 +1454,7 @@ Proxy.message_delivery_handler()
 │
 ├─> obs = get_observation(system_agent, protocol)
 │   ├─> global = get_global_states() -> visibility-filtered
-│   ├─> local = get_local_state(include_subordinate_rewards=False)
+│   ├─> local = get_local_state()
 │   └─> return Observation(local, global, timestamp)
 │
 ├─> local_state = get_local_state(system_agent, protocol)  # For state sync
@@ -1607,11 +1599,10 @@ SystemAgent receives it first and propagates down the hierarchy.
    │               message={MSG_SET_STATE_COMPLETION: "success"}
    │           )
    │
-   └─> Request own local state (with reward_delay to wait for subordinates):
+   └─> Request own local state:
        └─> schedule_message_delivery(
                sender=self.agent_id, recipient=proxy,
-               message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: protocol},
-               delay=self._schedule_config.reward_delay
+               message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: protocol}
            )
 
 2. CoordinatorAgent.message_delivery_handler() on MSG_SET_STATE_COMPLETION:
@@ -1623,16 +1614,15 @@ SystemAgent receives it first and propagates down the hierarchy.
    │               message={MSG_SET_STATE_COMPLETION: "success"}
    │           )
    │
-   └─> Request own local state (with reward_delay to wait for field agents):
+   └─> Request own local state:
        └─> schedule_message_delivery(
                sender=self.agent_id, recipient=proxy,
-               message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: protocol},
-               delay=self._schedule_config.reward_delay
+               message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: protocol}
            )
 
 3. FieldAgent.message_delivery_handler() on MSG_SET_STATE_COMPLETION:
    │
-   └─> Request own local state immediately (no reward_delay):
+   └─> Request own local state:
        └─> schedule_message_delivery(
                sender=self.agent_id, recipient=proxy,
                message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: protocol}
@@ -1950,8 +1940,7 @@ env.step({"battery_1": Action(c=[0.3])}):
 4. Reward Computation:
     proxy.get_local_state("battery_1", protocol):
         FILTER: state.observed_by("battery_1", 1)
-        RETURN: {"BatteryChargeFeature": np.array([0.503, 100.0]),
-                 "subordinate_rewards": {...} if parent}
+        RETURN: {"BatteryChargeFeature": np.array([0.503, 100.0])}
         TYPE: Dict[str, np.ndarray]
 
     compute_local_reward(local_state):
