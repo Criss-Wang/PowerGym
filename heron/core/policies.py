@@ -109,31 +109,46 @@ class Policy(ABC):
         elif isinstance(observation, dict):
             # Event-driven mode: observation from proxy.get_observation()
             # Structure: {"local": {"FeatureName": array([...])}, "global_info": ...}
-            if "local" in observation and observation["local"]:
-                local_features = observation["local"]
-                # Get first feature vector
-                first_feature_vec = list(local_features.values())[0]
+            parts: list = []
 
-                # Convert dict to array if needed (for when features are returned as dicts)
-                if isinstance(first_feature_vec, dict):
-                    # Try to extract numeric values from feature dict
-                    values = [v for v in first_feature_vec.values() if isinstance(v, (int, float, np.number))]
-                    if values:
-                        return np.array(values, dtype=np.float32)[:obs_dim]
-                elif isinstance(first_feature_vec, np.ndarray) and first_feature_vec.size > 0:
-                    return first_feature_vec[:obs_dim] if len(first_feature_vec) > obs_dim else first_feature_vec
-                elif isinstance(first_feature_vec, (list, tuple)):
-                    arr = np.array(first_feature_vec, dtype=np.float32)
-                    return arr[:obs_dim] if len(arr) > obs_dim else arr
+            # Collect local features (sorted by key, matching Observation convention)
+            include_local = self.observation_mode in ("full", "local")
+            if include_local and "local" in observation and observation["local"]:
+                self._flatten_obs_dict(observation["local"], parts)
 
-            # Local is empty or invalid - return zeros as safe fallback
-            return np.zeros(obs_dim, dtype=np.float32)
+            # Collect global features when mode requires it
+            include_global = self.observation_mode in ("full", "global")
+            if include_global and "global_info" in observation and observation["global_info"]:
+                self._flatten_obs_dict(observation["global_info"], parts)
+
+            if not parts:
+                return np.zeros(obs_dim, dtype=np.float32)
+            vec = np.concatenate(parts).astype(np.float32)
+            return vec[:obs_dim] if len(vec) > obs_dim else vec
         elif isinstance(observation, np.ndarray) and observation.size > 0:
             # Ensure array matches expected dimension
             return observation[:obs_dim] if len(observation) > obs_dim else observation
         else:
             # Fallback to zeros
             return np.zeros(obs_dim, dtype=np.float32)
+
+    @staticmethod
+    def _flatten_obs_dict(d: dict, parts: list) -> None:
+        """Recursively flatten a dict of observation features into a list of arrays.
+
+        Mirrors Observation._flatten_dict_to_list: iterates keys in sorted order
+        so the vector layout is deterministic across calls.
+        """
+        for key in sorted(d.keys()):
+            val = d[key]
+            if isinstance(val, (int, float, np.number)):
+                parts.append(np.array([val], dtype=np.float32))
+            elif isinstance(val, np.ndarray):
+                parts.append(val.ravel().astype(np.float32))
+            elif isinstance(val, (list, tuple)):
+                parts.append(np.array(val, dtype=np.float32).ravel())
+            elif isinstance(val, dict):
+                Policy._flatten_obs_dict(val, parts)
 
     def vec_to_action(self, action_vec: np.ndarray, action_dim: int,
                      action_range: tuple = (-1.0, 1.0)) -> Action:
