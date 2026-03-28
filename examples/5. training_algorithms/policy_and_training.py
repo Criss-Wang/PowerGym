@@ -31,6 +31,7 @@ from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.core.action import Action
 from heron.core.feature import Feature
 from heron.core.policies import Policy, obs_to_vector, vector_to_action
+from heron.core.observation import Observation
 from heron.envs.simple import SimpleEnv
 
 
@@ -309,7 +310,11 @@ def main():
     policy = ThermostatPolicy(obs_dim=2, seed=0)
 
     action = policy.forward(obs["room_a"])
-    print(f"  Input:  Observation object (local={list(obs['room_a'].local.keys())})")
+    obs_a = obs["room_a"]
+    if isinstance(obs_a, Observation):
+        print(f"  Input:  Observation object (local={list(obs_a.local.keys())})")
+    else:
+        print(f"  Input:  numpy array (shape={np.asarray(obs_a).shape})")
     print(f"  Output: Action object (c={action.c}, dim_c={action.dim_c})")
     print(f"  Decorators handled the conversion automatically.\n")
 

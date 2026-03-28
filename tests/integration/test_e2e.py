@@ -314,7 +314,11 @@ def train_ctde(env: HeronEnv, num_episodes=100, steps_per_episode=50, gamma=0.99
     # With visibility filtering, global_info may include other agents' public features
     # For training, we use only local observations (each agent's own state)
     first_obs = obs[agent_ids[0]]
-    local_vec = list(first_obs.local.values())[0] if first_obs.local else np.array([])
+    if isinstance(first_obs, Observation):
+        local_vec = list(first_obs.local.values())[0] if first_obs.local else np.array([])
+    else:
+        # first_obs is a numpy array from env.reset() — use only first 2 elements (local state)
+        local_vec = first_obs[:2] if len(first_obs) > 2 else first_obs
     obs_dim = local_vec.shape[0] if hasattr(local_vec, 'shape') else 0
     print(f"Training with obs_dim={obs_dim} (local state only)")
 

@@ -362,6 +362,8 @@ class CoordinatorNeuralPolicy(Policy):
     The coordinator observes all subordinate states (aggregated) and outputs
     a single action that will be distributed to subordinates via protocol.
     """
+    observation_mode = "global"  # Coordinator sees subordinates via global_info
+
     def __init__(self, obs_dim, action_dim=1, hidden_dim=32, seed=42):
         self.obs_dim = obs_dim
         self.action_dim = action_dim
@@ -420,12 +422,11 @@ def train_ctde(env: HeronEnv, num_episodes=100, steps_per_episode=50, gamma=0.99
 
     obs, _ = env.reset(seed=0)
 
-    # Observation dimension: aggregate all field agent observations
-    # Coordinator observes all subordinates
-    first_obs = obs[agent_ids[0]]
-    local_vec = list(first_obs.local.values())[0] if first_obs.local else np.array([])
-    obs_dim_per_agent = local_vec.shape[0] if hasattr(local_vec, 'shape') else 0
-    obs_dim = obs_dim_per_agent * len(agent_ids)  # Coordinator sees all agents
+    # Observation dimension: each field agent has a DevicePowerFeature [power, capacity].
+    # In event-driven mode the coordinator sees subordinate features via global_info,
+    # so obs_dim = feature_dim * num_agents (not per-agent full obs * num_agents).
+    feature_dim = 2  # DevicePowerFeature: [power, capacity]
+    obs_dim = feature_dim * len(agent_ids)
 
     print(f"Training coordinator with obs_dim={obs_dim} (aggregated from {len(agent_ids)} agents)")
 
@@ -460,11 +461,20 @@ def train_ctde(env: HeronEnv, num_episodes=100, steps_per_episode=50, gamma=0.99
                     local_features = list(obs_value.local.values())
                     obs_vec = local_features[0] if local_features else np.array([])
                 else:
-                    obs_vec = obs_value[:obs_dim_per_agent]
+                    # Extract only the device feature portion (feature_dim per agent)
+                    # to match event-driven coordinator obs which sees subordinate
+                    # features via global_info, not full per-agent vectorized obs.
+                    obs_vec = obs_value[:feature_dim]
                 aggregated_obs.append(obs_vec)
 
             aggregated_obs_vec = np.concatenate(aggregated_obs)
-            coordinator_observation = Observation(timestamp=step, local={"obs": aggregated_obs_vec})
+            # Place subordinate features in global_info to mirror event-driven
+            # coordinator observation format (local=empty, global_info=subordinates)
+            coordinator_observation = Observation(
+                timestamp=step,
+                local={},
+                global_info={aid: obs_vec for aid, obs_vec in zip(agent_ids, aggregated_obs)}
+            )
 
             # Coordinator computes joint action
             coordinator_action = coordinator_policy.forward(coordinator_observation)
@@ -507,7 +517,7 @@ def train_ctde(env: HeronEnv, num_episodes=100, steps_per_episode=50, gamma=0.99
 
             for t in range(len(trajectories["obs"])):
                 obs_t = trajectories["obs"][t]
-                baseline = coordinator_policy.get_value(Observation(timestamp=t, local={"obs": obs_t}))
+                baseline = coordinator_policy.get_value(Observation(timestamp=t, global_info={"obs": obs_t}))
                 advantage = returns[t] - baseline
                 coordinator_policy.update(obs_t, trajectories["actions"][t], advantage, lr=lr)
                 coordinator_policy.update_critic(obs_t, returns[t], lr=lr)

@@ -25,7 +25,7 @@ This document defines the complete set of files to run and their passing criteri
 | Unit tests | 4 tests in 1 file | `pytest tests/test_env_builder.py -v` |
 | Integration tests | 5 files (manual + pytest) | See [Section 2](#2-integration-tests-pytest) |
 | Case study tests | 1 file | `pytest case_studies/power/tests/test_hierarchical_env.py -v` |
-| Case study scripts | 3 scripts | `python case_studies/power/ev_public_charging_case/*.py` |
+| Case study scripts | 3 scripts | `python -m case_studies.power.ev_public_charging_case.*` |
 | Framework examples | 20 scripts | `python examples/<N>.*/<script>.py` |
 | Framework notebooks | 2 notebooks | `examples/notebooks/` |
 | Power grid notebooks | 6 notebooks | `case_studies/power/tutorials/` |
@@ -175,7 +175,7 @@ python case_studies/power/tests/test_hierarchical_env.py
 
 **Run command:**
 ```bash
-python case_studies/power/ev_public_charging_case/run_single_station_rollout.py
+python -m case_studies.power.ev_public_charging_case.run_single_station_rollout
 ```
 
 **What it does:** Single-station rollout with random policy. 1 station, 5 charger slots, 288 steps (1 day at 300s intervals).
@@ -193,7 +193,7 @@ python case_studies/power/ev_public_charging_case/run_single_station_rollout.py
 
 **Run command:**
 ```bash
-python case_studies/power/ev_public_charging_case/train_rllib.py
+python -m case_studies.power.ev_public_charging_case.train_rllib
 ```
 
 **What it does:** CTDE REINFORCE training on multi-station EV charging environment (50 episodes default).
@@ -212,7 +212,7 @@ python case_studies/power/ev_public_charging_case/train_rllib.py
 
 **Run command:**
 ```bash
-python case_studies/power/ev_public_charging_case/run_event_driven.py
+python -m case_studies.power.ev_public_charging_case.run_event_driven
 ```
 
 **What it does:** Trains CTDE policies, then deploys in event-driven simulation with tick configs and jitter.
@@ -404,9 +404,9 @@ python tests/integration/test_rllib_action_passing.py
 ### All case study scripts
 ```bash
 source .venv/bin/activate
-python case_studies/power/ev_public_charging_case/run_single_station_rollout.py
-python case_studies/power/ev_public_charging_case/train_rllib.py
-python case_studies/power/ev_public_charging_case/run_event_driven.py
+python -m case_studies.power.ev_public_charging_case.run_single_station_rollout
+python -m case_studies.power.ev_public_charging_case.train_rllib
+python -m case_studies.power.ev_public_charging_case.run_event_driven
 ```
 
 ### All example scripts
