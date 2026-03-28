@@ -186,6 +186,12 @@ class RLlibBasedHeronEnv(MultiAgentEnv):
             {aid: self._act_spaces[aid] for aid in self.possible_agents}
         )
 
+        # Expose per-agent spaces via the new MultiAgentEnv API so that
+        # get_observation_space / get_action_space resolve directly instead
+        # of falling back to DictSpace key lookup.
+        self.observation_spaces = dict(self._obs_spaces)
+        self.action_spaces = dict(self._act_spaces)
+
     # ------------------------------------------------------------------ #
     #  RLlib interface                                                      #
     # ------------------------------------------------------------------ #
