@@ -425,18 +425,17 @@ def train_ctde(env: HeronEnv, num_episodes=100, steps_per_episode=50, gamma=0.99
 
     obs, _ = env.reset(seed=0)
 
-    # Observation dimension: aggregate all field agent observations
-    # Coordinator observes all subordinates
-    first_obs = obs[agent_ids[0]]
-    local_vec = list(first_obs.local.values())[0] if first_obs.local else np.array([])
-    obs_dim_per_agent = local_vec.shape[0] if hasattr(local_vec, 'shape') else 0
-    obs_dim = obs_dim_per_agent * len(agent_ids)  # Coordinator sees all agents
-
-    print(f"Training coordinator with obs_dim={obs_dim} (aggregated from {len(agent_ids)} agents)")
+    # Use coordinator's own observation — it already includes subordinate features
+    # via the observation pipeline (upper_level visibility). This matches what
+    # the coordinator receives in event-driven mode.
+    coord_obs = obs["coordinator"]
+    obs_dim = coord_obs.shape[0] if hasattr(coord_obs, 'shape') else coord_obs.vector().shape[0]
 
     # Coordinator policy outputs joint action for all subordinates
-    # action_dim = number of subordinates (each subordinate gets 1 action component)
-    num_subordinates = len(agent_ids)
+    coordinator_agent = env.registered_agents["coordinator"]
+    num_subordinates = len(coordinator_agent.subordinates)
+    print(f"Training coordinator with obs_dim={obs_dim} (from {num_subordinates} subordinates)")
+
     coordinator_policy = CoordinatorNeuralPolicy(obs_dim=obs_dim, action_dim=num_subordinates, seed=42)
 
     returns_history, power_history = [], []
@@ -457,19 +456,14 @@ def train_ctde(env: HeronEnv, num_episodes=100, steps_per_episode=50, gamma=0.99
         power_values = []
 
         for step in range(steps_per_episode):
-            # Coordinator observes all subordinates (aggregate observation)
-            aggregated_obs = []
-            for aid in agent_ids:
-                obs_value = obs[aid]
-                if isinstance(obs_value, Observation):
-                    local_features = list(obs_value.local.values())
-                    obs_vec = local_features[0] if local_features else np.array([])
-                else:
-                    obs_vec = obs_value[:obs_dim_per_agent]
-                aggregated_obs.append(obs_vec)
-
-            aggregated_obs_vec = np.concatenate(aggregated_obs)
-            coordinator_observation = Observation(timestamp=step, local={"obs": aggregated_obs_vec})
+            # Use coordinator's own observation (matches event-driven mode)
+            coord_obs_value = obs["coordinator"]
+            if isinstance(coord_obs_value, Observation):
+                coordinator_observation = coord_obs_value
+                aggregated_obs_vec = coord_obs_value.vector()
+            else:
+                aggregated_obs_vec = coord_obs_value
+                coordinator_observation = Observation(timestamp=step, local={"obs": aggregated_obs_vec})
 
             # Coordinator computes joint action
             coordinator_action = coordinator_policy.forward(coordinator_observation)
@@ -587,14 +581,12 @@ from heron.protocols.vertical import VerticalProtocol
 vertical_protocol = VerticalProtocol()
 coordinator = ZoneCoordinator(
     agent_id="coordinator",
-    subordinates={"device_1": device_1, "device_2": device_2},
     schedule_config=coordinator_schedule_config,
     protocol=vertical_protocol,
 )
 
 system = GridSystem(
     agent_id="system_agent",
-    subordinates={"coordinator": coordinator},
     schedule_config=system_schedule_config,
 )
 
@@ -610,7 +602,8 @@ message_broker_config = {
 }
 
 env = ActionPassingEnv(
-    system_agent=system,
+    agents=[system, coordinator, device_1, device_2],
+    hierarchy={"system_agent": ["coordinator"], "coordinator": ["device_1", "device_2"]},
     scheduler_config=scheduler_config,
     message_broker_config=message_broker_config,
     simulation_wait_interval=0.01,

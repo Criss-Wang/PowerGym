@@ -19,21 +19,22 @@ Example::
         return agent_states
 
     env = SimpleEnv(
-        coordinator_agents=[...],
+        agents=[sys, coord, field1],
+        hierarchy={"sys": ["coord"], "coord": ["field1"]},
         simulation_func=my_simulation,
     )
 """
 
 from typing import Any, Callable, Dict, List, Optional
 
-from heron.agents.coordinator_agent import CoordinatorAgent
-from heron.agents.system_agent import SystemAgent
+from heron.agents.base import Agent
 from heron.agents.constants import (
     FIELD_LEVEL,
     COORDINATOR_LEVEL,
     SYSTEM_LEVEL,
 )
 from heron.envs.base import HeronEnv
+from heron.utils.typing import AgentID
 
 _LEVEL_TO_STATE_TYPE = {
     FIELD_LEVEL: "FieldAgentState",
@@ -52,10 +53,10 @@ class SimpleEnv(HeronEnv):
 
     Parameters
     ----------
-    coordinator_agents : list[CoordinatorAgent], optional
-        Coordinator agents (BaseEnv auto-creates a SystemAgent).
-    system_agent : SystemAgent, optional
-        Explicit system agent (mutually exclusive with *coordinator_agents*).
+    agents : list[Agent]
+        All agents in the environment (created without subordinates).
+    hierarchy : dict[AgentID, list[AgentID]]
+        Flat adjacency dict mapping parent agent ID to child agent IDs.
     simulation_func : callable, optional
         ``(agent_states: dict) -> dict``.  Receives and returns a flat dict
         of ``{agent_id: {feature_name: {field: val}}}``.
@@ -63,16 +64,16 @@ class SimpleEnv(HeronEnv):
 
     def __init__(
         self,
-        coordinator_agents: Optional[List[CoordinatorAgent]] = None,
-        system_agent: Optional[SystemAgent] = None,
+        agents: List[Agent],
+        hierarchy: Dict[AgentID, List[AgentID]],
         simulation_func: Optional[Callable] = None,
         env_id: str = "simple_env",
         **kwargs: Any,
     ) -> None:
         self._user_simulation_func = simulation_func
         super().__init__(
-            coordinator_agents=coordinator_agents,
-            system_agent=system_agent,
+            agents=agents,
+            hierarchy=hierarchy,
             env_id=env_id,
             **kwargs,
         )

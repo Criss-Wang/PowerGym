@@ -32,7 +32,6 @@ class StationCoordinator(CoordinatorAgent):
     def __init__(
         self,
         agent_id: AgentID,
-        subordinates: Dict[AgentID, ChargingSlot],
         features: Optional[List[Feature]] = None,
         upstream_id: Optional[AgentID] = None,
         env_id: Optional[str] = None,
@@ -40,14 +39,10 @@ class StationCoordinator(CoordinatorAgent):
         policy: Optional[Policy] = None,
         protocol: Optional[Protocol] = None,
     ):
-        if not subordinates:
-            raise ValueError(
-                "StationCoordinator requires subordinates (ChargingSlot agents). "
-                "Create slots externally and pass as subordinates dict."
-            )
-
+        # max_chargers/open_chargers are updated in build_subordinates
+        # once the actual subordinate count is known.
         default_features = [
-            ChargingStationFeature(max_chargers=len(subordinates), open_chargers=len(subordinates)),
+            ChargingStationFeature(),
             MarketFeature(),
             RegulationFeature()
         ]
@@ -56,7 +51,6 @@ class StationCoordinator(CoordinatorAgent):
         super().__init__(
             agent_id=agent_id,
             features=all_features,
-            subordinates=subordinates,
             upstream_id=upstream_id,
             env_id=env_id,
             schedule_config=schedule_config,
@@ -70,6 +64,16 @@ class StationCoordinator(CoordinatorAgent):
         self.observation_space = Box(-np.inf, np.inf, (8,), np.float32)
         # Action: pricing in [0, 0.8] $/kWh
         self.action_space = Box(0.0, 0.8, (1,), np.float32)
+
+    def build_subordinates(self, subordinates):
+        result = super().build_subordinates(subordinates)
+        if subordinates:
+            n = len(subordinates)
+            csf = self.state.features.get("ChargingStationFeature")
+            if csf is not None:
+                csf.max_chargers = n
+                csf.open_chargers = n
+        return result
 
     @property
     def charging_slots(self) -> Dict[AgentID, ChargingSlot]:

@@ -1189,11 +1189,12 @@ def schedule_message_delivery(
 ### **Phase 0: Initialization**
 
 ```
-env = CustomEnv(system_agent=grid_system_agent)
+env = CustomEnv(agents=[all_agents], hierarchy={"system_id": ["coord_ids"], ...})
 │
 ├─> BaseEnv.__init__()
 │   │
-│   ├─> _register_agents(system_agent, coordinator_agents)
+│   ├─> _register_agents(agents, hierarchy)
+│   │   ├─> Validate hierarchy, wire parent-child relationships
 │   │   ├─> system_agent.set_simulation(run_simulation, ...)
 │   │   └─> _register_agent(system_agent) [recursive for all]
 │   │

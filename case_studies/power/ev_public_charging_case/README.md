@@ -104,21 +104,27 @@ pip install -e /Users/yulinzeng/PycharmProjects/PowerGym
 ```python
 from case_studies.power.ev_public_charging_case.agents import ChargingSlot, StationCoordinator
 from case_studies.power.ev_public_charging_case.envs.charging_env import ChargingEnv
+from heron.agents import SystemAgent
 
 # Create a station with 5 charger slots
 station_id = "station_0"
-slots = {
-    f"{station_id}_slot_{j}": ChargingSlot(
-        agent_id=f"{station_id}_slot_{j}",
-        p_max_kw=150.0
-    )
+slots = [
+    ChargingSlot(agent_id=f"{station_id}_slot_{j}", p_max_kw=150.0)
     for j in range(5)
+]
+coordinator = StationCoordinator(agent_id=station_id)
+system_agent = SystemAgent(agent_id="system")
+
+# Build hierarchy: system -> coordinator -> slots
+hierarchy = {
+    "system": [station_id],
+    station_id: [s.agent_id for s in slots],
 }
-coordinator = StationCoordinator(agent_id=station_id, subordinates=slots)
 
 # Initialize environment
 env = ChargingEnv(
-    coordinator_agents=[coordinator],
+    agents=[system_agent, coordinator] + slots,
+    hierarchy=hierarchy,
     arrival_rate=10.0,  # EVs per hour
     dt=300.0,           # 5-minute timesteps
     episode_length=86400.0,  # 24 hours
@@ -748,8 +754,15 @@ Policy learns to balance:
 ### Custom Environment Configuration
 
 ```python
+all_agents = [system_agent, coordinator1, coordinator2] + slots1 + slots2
+hierarchy = {
+    "system": ["station_0", "station_1"],
+    "station_0": [s.agent_id for s in slots1],
+    "station_1": [s.agent_id for s in slots2],
+}
 env = ChargingEnv(
-    coordinator_agents=[coordinator1, coordinator2],
+    agents=all_agents,
+    hierarchy=hierarchy,
     arrival_rate=15.0,      # More arrivals
     dt=600.0,               # 10-minute steps
     episode_length=172800.0,  # 48 hours

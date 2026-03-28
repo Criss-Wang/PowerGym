@@ -11,8 +11,9 @@ import numpy as np
 import pandapower as pp
 
 from heron.envs.base import HeronEnv
-from heron.agents.base import AgentID, Agent
-from heron.agents.system_agent import SystemAgent, SYSTEM_AGENT_ID
+from heron.agents.base import Agent
+from heron.agents.constants import SYSTEM_AGENT_ID
+from heron.utils.typing import AgentID
 from powergrid.envs.common import EnvState
 from powergrid.agents import (
     PowerGridAgent,
@@ -33,7 +34,8 @@ class HierarchicalMicrogridEnv(HeronEnv):
 
     def __init__(
         self,
-        system_agent: SystemAgent,  # REQUIRED: Always pass pre-initialized system agent
+        agents: list[Agent],
+        hierarchy: dict[AgentID, list[AgentID]],
         dataset_path: str,
         episode_steps: int = 24,
         dt: float = 1.0,
@@ -42,7 +44,8 @@ class HierarchicalMicrogridEnv(HeronEnv):
         """Initialize hierarchical microgrid environment.
 
         Args:
-            system_agent: Pre-initialized SystemAgent with agent hierarchy
+            agents: All agents (created without subordinates).
+            hierarchy: Flat adjacency dict (parent_id -> [child_ids]).
             dataset_path: Path to dataset file
             episode_steps: Episode length in time steps (default: 24)
             dt: Time step duration in hours (default: 1.0)
@@ -54,7 +57,12 @@ class HierarchicalMicrogridEnv(HeronEnv):
         """
         self.episode_steps = episode_steps
         self.dt = dt
-        self.num_microgrids = len(system_agent.subordinates)
+
+        # Derive number of microgrids from hierarchy (root's direct children)
+        all_children = {cid for children in hierarchy.values() for cid in children}
+        roots = set(hierarchy.keys()) - all_children
+        root_id = next(iter(roots))
+        self.num_microgrids = len(hierarchy.get(root_id, []))
 
         # Load dataset
         self._dataset = load_dataset(dataset_path)
@@ -70,7 +78,8 @@ class HierarchicalMicrogridEnv(HeronEnv):
 
         # Call parent init (registers agents)
         super().__init__(
-            system_agent=system_agent,
+            agents=agents,
+            hierarchy=hierarchy,
             **kwargs,
         )
 

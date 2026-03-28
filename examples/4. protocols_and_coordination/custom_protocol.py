@@ -27,6 +27,7 @@ import numpy as np
 
 from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
+from heron.agents.system_agent import SystemAgent
 from heron.core.action import Action
 from heron.core.feature import Feature
 from heron.envs.simple import SimpleEnv
@@ -301,16 +302,16 @@ def demo_through_env():
 
     coordinator = CoordinatorAgent(
         agent_id="dispatcher",
-        subordinates={
-            "district_a": district_a,
-            "district_b": district_b,
-            "district_c": district_c,
-        },
         protocol=protocol,
     )
+    system = SystemAgent()
 
     env = SimpleEnv(
-        coordinator_agents=[coordinator],
+        agents=[system, coordinator, district_a, district_b, district_c],
+        hierarchy={
+            "system_agent": ["dispatcher"],
+            "dispatcher": ["district_a", "district_b", "district_c"],
+        },
         simulation_func=water_simulation,
         env_id="water_dispatch_demo",
     )

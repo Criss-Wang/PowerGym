@@ -7,7 +7,7 @@ Pick the one that matches your complexity:
 | Approach | When to use | Boilerplate |
 |----------|-------------|-------------|
 | **SimpleEnv** | Your simulation is a `dict -> dict` function | Minimal |
-| **EnvBuilder** | You want batch agent creation, coordinator assignment, auto-coordinators | Low |
+| **EnvBuilder** | You want batch agent creation, coordinator assignment, or direct system-agent attachment | Low |
 | **Custom HeronEnv** | You need a custom state object or non-trivial state bridge | Full control |
 
 ## Quick Start
@@ -49,11 +49,11 @@ python custom_heron_env.py         # ~5 sec
 |---------|-------------|
 | `add_agents(prefix, cls, count)` | Batch-create agents with auto-generated IDs (`sensor_0`, `sensor_1`, ...) |
 | `add_agents(..., coordinator="zone_a")` | Assign agents to a coordinator at creation time |
-| Auto-coordinator | Omit `add_coordinator` and the builder wraps all agents automatically |
+| Unassigned agents | Omit `coordinator=` and agents attach directly to the system agent |
 | `add_agent(id, cls, coordinator=...)` | Single named agent with explicit coordinator assignment |
 | `add_system_agent(schedule_config=...)` | Custom system-level timing configuration |
 
-**Key takeaway**: `EnvBuilder` resolves the agent hierarchy for you. Coordinator assignment and auto-coordinators eliminate manual wiring.
+**Key takeaway**: `EnvBuilder` resolves the agent hierarchy for you. Coordinator assignment eliminates manual wiring; unassigned field agents attach directly to the system agent.
 
 ### custom_heron_env.py
 
@@ -87,7 +87,7 @@ python custom_heron_env.py         # ~5 sec
             └───────────┘             └──────────────┘
                   │
                   │  Need batch agents
-                  │  or auto-coordinators?
+                  │  or flexible agent wiring?
                   │
             ┌─────▼──────┐
             │ EnvBuilder  │

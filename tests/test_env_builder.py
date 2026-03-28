@@ -47,7 +47,7 @@ class DummyAgent(FieldAgent):
 class CustomCoordinator(CoordinatorAgent):
     """Coordinator that hardcodes its own protocol (like FleetManager)."""
 
-    def __init__(self, agent_id, subordinates, features=None, **kwargs):
+    def __init__(self, agent_id, features=None, subordinates=None, **kwargs):
         super().__init__(
             agent_id=agent_id,
             features=features or [],

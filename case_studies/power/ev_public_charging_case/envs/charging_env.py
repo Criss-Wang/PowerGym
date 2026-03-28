@@ -3,7 +3,7 @@
 Follows the same pattern as powergrid/envs/hierarchical_microgrid_env.py:
 - Extends HeronEnv (which extends BaseEnv)
 - Implements the 3 abstract simulation methods
-- Receives coordinator_agents, BaseEnv auto-creates SystemAgent
+- Receives agents + hierarchy, BaseEnv wires the agent hierarchy
 - CTDE training via system_agent.execute() → layer_actions → act → simulate
 """
 
@@ -11,8 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from heron.agents.base import Agent
 from heron.envs.base import HeronEnv
-from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.utils.typing import AgentID, MultiAgentDict
 
 from case_studies.power.ev_public_charging_case.envs.common import EnvState, SlotState
@@ -25,7 +25,8 @@ class ChargingEnv(HeronEnv):
 
     def __init__(
         self,
-        coordinator_agents: List[CoordinatorAgent],
+        agents: List[Agent],
+        hierarchy: Dict[AgentID, List[AgentID]],
         arrival_rate: float = 10.0,
         dt: float = 300.0,
         episode_length: float = 86400.0,
@@ -49,14 +50,21 @@ class ChargingEnv(HeronEnv):
         self.scenario = MarketScenario(self._arrival_rate, 3600.0)
         self.reg_scenario = RegulationScenario(reg_freq=reg_freq, alpha=reg_alpha, seed=seed or 0)
 
-        # Build slot → station mapping from coordinator subordinates
+        # Build slot → station mapping from hierarchy config
+        # Find the root (system agent), then its children are coordinators,
+        # and their children are slots.
         self._slot_to_station: Dict[str, str] = {}
-        for coord in coordinator_agents:
-            for slot_id in coord.subordinates:
-                self._slot_to_station[str(slot_id)] = str(coord.agent_id)
+        all_children = {cid for children in hierarchy.values() for cid in children}
+        roots = set(hierarchy.keys()) - all_children
+        if roots:
+            root_id = next(iter(roots))
+            for coord_id in hierarchy.get(root_id, []):
+                for slot_id in hierarchy.get(coord_id, []):
+                    self._slot_to_station[str(slot_id)] = str(coord_id)
 
         super().__init__(
-            coordinator_agents=coordinator_agents,
+            agents=agents,
+            hierarchy=hierarchy,
             env_id=env_id,
             **kwargs,
         )

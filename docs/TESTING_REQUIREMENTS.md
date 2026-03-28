@@ -252,7 +252,7 @@ All examples are standalone scripts. Each must run without error and produce mea
 | Script | Run Command | Passing Criteria |
 |--------|-------------|------------------|
 | `custom_heron_env.py` | `python "examples/3. building_environments/custom_heron_env.py"` | Water tank simulation runs 20 steps; tank levels change based on pump actions; rewards are finite |
-| `env_builder_patterns.py` | `python "examples/3. building_environments/env_builder_patterns.py"` | Batch registration creates correct agent count; coordinator assignment works; auto-coordinator creation works; custom system agent accepted |
+| `env_builder_patterns.py` | `python "examples/3. building_environments/env_builder_patterns.py"` | Batch registration creates correct agent count; coordinator assignment works; unassigned agents attach to system agent; custom system agent accepted |
 | `simple_env_quickstart.py` | `python "examples/3. building_environments/simple_env_quickstart.py"` | SimpleEnv creates without custom HeronEnv subclass; room temperatures change; 10 steps complete |
 
 ### Level 4: Protocols & Coordination (`examples/4. protocols_and_coordination/`)

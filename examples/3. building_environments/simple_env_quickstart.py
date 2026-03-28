@@ -28,6 +28,7 @@ import numpy as np
 
 from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
+from heron.agents.system_agent import SystemAgent
 from heron.core.action import Action
 from heron.core.feature import Feature
 from heron.envs.simple import SimpleEnv
@@ -137,14 +138,13 @@ def main():
     )
 
     # Group under a coordinator
-    coordinator = CoordinatorAgent(
-        agent_id="building",
-        subordinates={"room_a": thermo_a, "room_b": thermo_b},
-    )
+    coordinator = CoordinatorAgent(agent_id="building")
+    system = SystemAgent()
 
     # Build the environment -- no custom HeronEnv subclass needed
     env = SimpleEnv(
-        coordinator_agents=[coordinator],
+        agents=[system, coordinator, thermo_a, thermo_b],
+        hierarchy={"system_agent": ["building"], "building": ["room_a", "room_b"]},
         simulation_func=thermostat_simulation,
         env_id="thermostat_demo",
     )

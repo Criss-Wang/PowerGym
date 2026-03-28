@@ -313,9 +313,9 @@ def train_ctde(env: HeronEnv, num_episodes=100, steps_per_episode=50, gamma=0.99
     # Get obs_dim from local state only (agent's own features)
     # With visibility filtering, global_info may include other agents' public features
     # For training, we use only local observations (each agent's own state)
-    first_obs = obs[agent_ids[0]]
-    local_vec = list(first_obs.local.values())[0] if first_obs.local else np.array([])
-    obs_dim = local_vec.shape[0] if hasattr(local_vec, 'shape') else 0
+    # NeuralPolicy uses observation_mode="local", so obs_dim must match local features only
+    first_agent = env.registered_agents[agent_ids[0]]
+    obs_dim = sum(f.vector().shape[0] for f in first_agent.state.features.values())
     print(f"Training with obs_dim={obs_dim} (local state only)")
 
     policies = {aid: NeuralPolicy(obs_dim=obs_dim, seed=42 + i) for i, aid in enumerate(agent_ids)}
@@ -331,15 +331,12 @@ def train_ctde(env: HeronEnv, num_episodes=100, steps_per_episode=50, gamma=0.99
             # Only process agents that have policies (field agents with action spaces)
             for aid in agent_ids:
                 obs_value = obs[aid]
-                # Extract local state only for training (ignore global_info)
                 if isinstance(obs_value, Observation):
-                    # Get local state vector (first feature in local dict)
-                    local_features = list(obs_value.local.values())
-                    obs_vec = local_features[0] if local_features else np.array([])
-                    observation = Observation(timestamp=step, local=obs_value.local)
+                    obs_vec = obs_value.local_vector()
+                    observation = obs_value
                 else:
-                    # obs_value is a numpy array from step() - use only first 2 elements (local state)
-                    obs_vec = obs_value[:2] if len(obs_value) > 2 else obs_value
+                    # reset() returns vectorized obs — wrap in Observation for policy
+                    obs_vec = obs_value[:obs_dim]
                     observation = Observation(timestamp=step, local={"obs": obs_vec})
 
                 action = policies[aid].forward(observation)
@@ -406,8 +403,8 @@ battery_agent_2 = BatteryAgent(
     agent_id="battery_2",
     features=[BatteryChargeFeature(soc=0.5, capacity=100.0)]
 )
-zone_coordinator = ZoneCoordinator(agent_id="zone_1", subordinates={"battery_1": battery_agent_1, "battery_2": battery_agent_2})
-grid_system_agent = GridSystemAgent(agent_id="system_agent", subordinates={"zone_1": zone_coordinator})
+zone_coordinator = ZoneCoordinator(agent_id="zone_1")
+grid_system_agent = GridSystemAgent(agent_id="system_agent")
 
 # Configure environment with custom settings
 scheduler_config = {
@@ -423,7 +420,8 @@ message_broker_config = {
 simulation_wait_interval = 0.01  # 10ms wait between simulation steps
 
 env = EnergyManagementEnv(
-    system_agent=grid_system_agent,
+    agents=[grid_system_agent, zone_coordinator, battery_agent_1, battery_agent_2],
+    hierarchy={"system_agent": ["zone_1"], "zone_1": ["battery_1", "battery_2"]},
     scheduler_config=scheduler_config,
     message_broker_config=message_broker_config,
     simulation_wait_interval=simulation_wait_interval,

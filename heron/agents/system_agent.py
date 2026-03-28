@@ -3,7 +3,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from enum import Enum
 
 from heron.agents.base import Agent
-from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.agents.proxy_agent import Proxy
 from heron.core.action import Action
 from heron.core.feature import Feature
@@ -355,42 +354,26 @@ class SystemAgent(Agent):
     # ============================================
     # Utility Methods
     # ============================================
-    @property
-    def coordinators(self) -> Dict[AgentID, CoordinatorAgent]:
-        """Alias for subordinates - more descriptive for SystemAgent context."""
-        return self.subordinates
-
     def __repr__(self) -> str:
-        num_coords = len(self.subordinates)
+        num_subs = len(self.subordinates)
         protocol_name = self.protocol.__class__.__name__ if self.protocol else "None"
-        return f"SystemAgent(id={self.agent_id}, coordinators={num_coords}, protocol={protocol_name})"
+        return f"SystemAgent(id={self.agent_id}, subordinates={num_subs}, protocol={protocol_name})"
 
 
 def build_system_agent(
-    coordinator_agents: List[CoordinatorAgent],
     schedule_config: Optional[ScheduleConfig] = None,
     **kwargs: Any,
 ) -> SystemAgent:
-    """Build a SystemAgent from a list of coordinator agents.
-
-    This is the recommended way to create a SystemAgent with a custom
-    ``schedule_config``.  For the default schedule config, you can simply
-    pass ``coordinator_agents`` directly to ``BaseEnv`` and it will
-    create one automatically.
+    """Build a SystemAgent.
 
     Parameters
     ----------
-    coordinator_agents : list[CoordinatorAgent]
-        The coordinator agents that will be subordinates of the system agent.
     schedule_config : ScheduleConfig, optional
         Custom schedule config.  Defaults to ``DEFAULT_SYSTEM_AGENT_SCHEDULE_CONFIG``.
     **kwargs
         Additional keyword arguments forwarded to ``SystemAgent.__init__``.
     """
-    sys_kwargs: dict = {
-        "agent_id": SYSTEM_AGENT_ID,
-        "subordinates": {agent.agent_id: agent for agent in coordinator_agents},
-    }
+    sys_kwargs: dict = {"agent_id": SYSTEM_AGENT_ID}
     if schedule_config is not None:
         sys_kwargs["schedule_config"] = schedule_config
     sys_kwargs.update(kwargs)

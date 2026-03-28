@@ -85,12 +85,12 @@ class GridSystemAgent(SystemAgent):
     @property
     def cost(self) -> float:
         """Aggregate cost from all coordinators."""
-        return sum(grid.cost for grid in self.coordinators.values())
+        return sum(grid.cost for grid in self.subordinates.values())
 
     @property
     def safety(self) -> float:
         """Aggregate safety penalty from all coordinators."""
-        return sum(grid.safety for grid in self.coordinators.values())
+        return sum(grid.safety for grid in self.subordinates.values())
 
     def get_reward(self) -> DictType[str, float]:
         """Get system-wide reward metrics.
