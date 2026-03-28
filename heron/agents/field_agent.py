@@ -192,9 +192,8 @@ class FieldAgent(Agent):
             sender_id=self.agent_id,
             recipient_id=PROXY_AGENT_ID,
             message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
-            delay=self._schedule_config.msg_delay,
         )
-    
+
     # ============================================
     # Custom Handlers for Event-Driven Execution
     # ============================================
@@ -209,7 +208,6 @@ class FieldAgent(Agent):
             sender_id=self.agent_id,
             recipient_id=PROXY_AGENT_ID,
             message={MSG_SET_STATE: STATE_TYPE_LOCAL, "body": self.state.to_dict(include_metadata=True)},
-            delay=self._schedule_config.msg_delay,
         )
 
     @Agent.handler("message_delivery")
