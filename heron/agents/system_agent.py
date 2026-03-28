@@ -58,6 +58,7 @@ class SystemAgent(Agent):
             policy=policy,
             protocol=protocol
         )
+        self._simulation_configured: bool = False
 
     def init_state(self, features: List[Feature] = []) -> State:
         """Initialize a SystemAgentState from the provided features."""
@@ -104,6 +105,8 @@ class SystemAgent(Agent):
         """Execute actions with hierarchical coordination and simulation. [Training Mode]"""
         if not proxy:
             raise ValueError("We still require a valid proxy agent so far")
+        if not self._simulation_configured:
+            raise RuntimeError("Simulation not configured. Call set_simulation() before execute().")
 
         # Run pre-step hook (e.g., update profiles for current timestep)
         if self._pre_step_func is not None:
@@ -157,6 +160,9 @@ class SystemAgent(Agent):
         - Compute rewards
         - Schedule next tick
         """
+        if not self._simulation_configured:
+            raise RuntimeError("Simulation not configured. Call set_simulation() before tick().")
+
         # Run pre-step hook (e.g., update profiles for current timestep)
         if self._pre_step_func is not None:
             self._pre_step_func()
@@ -326,6 +332,7 @@ class SystemAgent(Agent):
         self._global_state_to_env_state = global_state_to_env_state
         self._explicit_wait_interval = wait_interval  # None means derive from schedule_config
         self._pre_step_func = pre_step_func
+        self._simulation_configured = True
 
     @property
     def _simulation_wait_interval(self) -> float:
