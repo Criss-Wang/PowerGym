@@ -4,7 +4,7 @@ A multi-agent coordination framework supporting:
 - Hierarchical agent architectures (Field, Coordinator, System levels)
 - Protocol-based communication and coordination
 - Event-driven scheduling with configurable timing
-- Integration with Gymnasium, PettingZoo, and RLlib
+- Integration with Gymnasium and RLlib
 
 Example:
     Basic usage with a field agent::
@@ -39,7 +39,6 @@ from heron.agents.proxy_agent import Proxy
 from heron.envs.base import BaseEnv, HeronEnv
 from heron.envs.simple import SimpleEnv
 from heron.envs.builder import EnvBuilder
-from heron.envs.adapters import PettingZooParallelEnv
 
 # Protocols
 from heron.protocols.base import Protocol, NoProtocol
@@ -81,7 +80,6 @@ __all__ = [
     "HeronEnv",
     "SimpleEnv",
     "EnvBuilder",
-    "PettingZooParallelEnv",
     # Protocols
     "Protocol",
     "NoProtocol",

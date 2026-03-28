@@ -13,8 +13,7 @@ This example demonstrates production-ready training of Multi-Agent PPO (MAPPO) o
 
 ```
 RLlib (PPO Algorithm)
-└── ParallelPettingZooEnv (Wrapper)
-    └── MultiAgentMicrogrids (PowerGrid)
+└── MultiAgentMicrogrids (PowerGrid)
         ├── GridAgent MG1
         ├── GridAgent MG2
         └── GridAgent MG3
@@ -38,12 +37,11 @@ python examples/05_mappo_training.py --iterations 100 --num-workers 4
 
 ```python
 from ray.rllib.algorithms.ppo import PPOConfig
-from ray.rllib.env.wrappers.pettingzoo_env import ParallelPettingZooEnv
 from powergrid.envs.multi_agent_microgrids import MultiAgentMicrogrids
 
 def env_creator(env_config):
     env = MultiAgentMicrogrids(env_config)
-    return ParallelPettingZooEnv(env)
+    return env
 
 # Configure PPO
 config = (

@@ -6,7 +6,6 @@ gymnasium>=0.28.1
 pandapower>=2.14.0
 
 # Multi-agent RL dependencies
-pettingzoo>=1.24.0
 ray[rllib]>=2.40.0  # Ray 2.40+ / 3.0 compatible
 torch>=2.0.0
 

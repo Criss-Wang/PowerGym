@@ -197,12 +197,12 @@ The `MessageBroker` interface can be extended for production systems (Kafka, Red
 
 ## Environment Interface
 
-HERON environments implement PettingZoo's `ParallelEnv`:
+HERON environments implement a standard multi-agent environment interface:
 
 ```python
-from pettingzoo import ParallelEnv
+from heron.envs import HeronEnv
 
-class MyEnv(ParallelEnv):
+class MyEnv(HeronEnv):
     def reset(self, seed=None, options=None):
         # Returns (observations, infos)
         pass

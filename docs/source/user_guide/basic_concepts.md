@@ -141,12 +141,12 @@ broker.publish("control_signals", {"setpoint": 1.0})
 
 ## Environment Interface
 
-HERON environments implement the PettingZoo `ParallelEnv` interface:
+HERON environments implement a standard multi-agent environment interface:
 
 ```python
-from pettingzoo import ParallelEnv
+from heron.envs import HeronEnv
 
-class MyEnv(ParallelEnv):
+class MyEnv(HeronEnv):
     def reset(self, seed=None, options=None):
         # Return (observations, infos)
         pass

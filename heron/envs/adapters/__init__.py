@@ -2,14 +2,5 @@
 
 from __future__ import annotations
 
-try:
-    from .pettingzoo import PettingZooParallelEnv, PETTINGZOO_AVAILABLE
-except Exception:  # pragma: no cover
-    PettingZooParallelEnv = None  # type: ignore
-    PETTINGZOO_AVAILABLE = False
 
-
-__all__ = [
-    "PettingZooParallelEnv",
-    "PETTINGZOO_AVAILABLE",
-]
+__all__: list[str] = []
