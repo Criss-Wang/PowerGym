@@ -180,7 +180,6 @@ class CoordinatorAgent(Agent):
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
                 message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
-                delay=self._schedule_config.reward_delay,
             )
         else:
             raise NotImplementedError

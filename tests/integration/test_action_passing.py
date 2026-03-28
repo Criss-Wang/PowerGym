@@ -194,13 +194,8 @@ class ZoneCoordinator(CoordinatorAgent):
     """Coordinator - owns policy and distributes actions via protocol."""
 
     def compute_local_reward(self, local_state: dict) -> float:
-        """Compute coordinator's local reward by aggregating subordinate rewards.
-
-        In event-driven mode, subordinate rewards are included in local_state
-        by the proxy agent under 'subordinate_rewards' key.
-        """
-        subordinate_rewards = local_state.get("subordinate_rewards", {})
-        return sum(subordinate_rewards.values())
+        """Coordinator computes its own local reward independently."""
+        return 0.0
 
 class GridSystem(SystemAgent):
     """System agent for grid management."""
@@ -559,7 +554,6 @@ coordinator_schedule_config = ScheduleConfig.with_jitter(
     obs_delay=0.1,
     act_delay=0.15,
     msg_delay=0.075,
-    reward_delay=0.3,
     jitter_type=JitterType.GAUSSIAN,
     jitter_ratio=0.1,
     seed=43
@@ -570,7 +564,6 @@ system_schedule_config = ScheduleConfig.with_jitter(
     obs_delay=0.15,
     act_delay=0.25,
     msg_delay=0.1,
-    reward_delay=0.5,
     jitter_type=JitterType.GAUSSIAN,
     jitter_ratio=0.1,
     seed=44

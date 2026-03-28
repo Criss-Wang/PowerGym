@@ -44,7 +44,7 @@ Events that fire as a **delayed result** of a prior event. The delay is the key 
 
 | Timing character | CPS examples |
 |---|---|
-| Fixed or stochastic delay after cause | Action takes effect on actuator (act_delay), observation delivered after sensor processing (obs_delay), message arrives at recipient (msg_delay), reward computed after physics settles (reward_delay) |
+| Fixed or stochastic delay after cause | Action takes effect on actuator (act_delay), observation delivered after sensor processing (obs_delay), message arrives at recipient (msg_delay) |
 
 **Why it matters**: In step-based training, all consequences are instantaneous — observe, decide, act, effect all in one tick. At deployment, each is a separate event with its own delay. This is the primary source of **physics drift / observation staleness**: the world changes between cause and effect.
 
@@ -269,7 +269,6 @@ ScheduleConfig(
     obs_delay     = 0.0,       # observation round-trip latency (Class 2)
     act_delay     = 0.15,      # time from decision to action effect (Class 2)
     msg_delay     = 0.05,      # inter-agent message latency, one-way (Class 2)
-    reward_delay  = 0.0,       # delay before reward computation (Class 2)
     jitter_type   = "gaussian",  # NONE | UNIFORM | GAUSSIAN
     jitter_ratio  = 0.1,      # magnitude as fraction of base (±10%)
 )
@@ -328,7 +327,7 @@ Phase 6: SIMULATION (Class 5)                      ← physics runs here
 
 Phase 7: Reward cascade (Class 2)
     └─ Proxy signals state update complete
-    └─ Each agent requests local state (with reward_delay)
+    └─ Each agent requests local state
     └─ Computes reward → sends tick result to EpisodeAnalyzer
 
 Phase 8: Next cycle

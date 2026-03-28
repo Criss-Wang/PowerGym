@@ -129,16 +129,17 @@ class PowerGridAgent(CoordinatorAgent):
         return {"cost": self.cost, "safety": self.safety}
 
     def compute_local_reward(self, local_state: dict) -> float:
-        """Compute coordinator reward as sum of subordinate device rewards.
+        """Compute coordinator reward from its own local features.
 
-        The coordinator's reward is the aggregated reward from all its devices,
-        since the coordinator's policy is trained to optimize total device performance.
+        Uses cost and safety metrics from local state. Each agent computes
+        its own reward independently.
 
         Args:
-            local_state: Local state dict from proxy, includes 'subordinate_rewards'
+            local_state: Local state dict from proxy (visibility-filtered features)
 
         Returns:
-            Sum of all subordinate device rewards
+            Negative sum of cost and safety penalty
         """
-        subordinate_rewards = local_state.get("subordinate_rewards", {})
-        return sum(subordinate_rewards.values())
+        cost = self.cost
+        safety = self.safety
+        return -(cost + safety)

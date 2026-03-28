@@ -223,15 +223,15 @@ sequenceDiagram
     ES->>SYS: MESSAGE_DELIVERY (set_state_completion)
     Note over FA, SYS: set_state_completion as a signal to trigger reward computation, get_local_state to retrieve latest state for reward
     SYS->>ES: schedule_message_delivery(COORD, set_state_completion)
-    SYS->>ES: schedule_message_delivery(PX, get_local_state, reward_delay)
+    SYS->>ES: schedule_message_delivery(PX, get_local_state)
 
     ES->>COORD: MESSAGE_DELIVERY (set_state_completion)
     COORD->>ES: schedule_message_delivery(FA, set_state_completion)
-    COORD->>ES: schedule_message_delivery(PX, get_local_state, reward_delay)
+    COORD->>ES: schedule_message_delivery(PX, get_local_state)
 
     ES->>FA: MESSAGE_DELIVERY (set_state_completion)
     FA->>ES: schedule_message_delivery(PX, get_local_state)
-    Note right of FA: No reward_delay for field agents
+    Note right of FA: Field agents compute reward immediately
 
     Note over FA,SYS: Each agent: PX returns local_state, sync_state + compute_local_reward(), send tick_result to PX
     Note over SYS: If not terminated/truncated, schedule next AGENT_TICK
@@ -264,7 +264,7 @@ graph TB
     end
 
     subgraph "Outbound Operations (Visibility-Filtered)"
-        GET_L["get_local_state(aid, protocol)<br/>→ Dict[str, np.ndarray]<br/>+ optional subordinate_rewards"]
+        GET_L["get_local_state(aid, protocol)<br/>→ Dict[str, np.ndarray]"]
         GET_G["get_global_states(aid, protocol)<br/>→ Dict[aid, Dict[str, np.ndarray]]<br/>+ env_context"]
         GET_O["get_observation(aid, protocol)<br/>→ Observation(local, global_info)"]
     end
@@ -535,7 +535,7 @@ graph TB
     end
 
     subgraph "ScheduleConfig (Per-Agent)"
-        TC["tick_interval: 1.0s<br/>obs_delay: 0.1s<br/>act_delay: 0.2s<br/>msg_delay: 0.05s<br/>reward_delay: 0.1s<br/>jitter: GAUSSIAN, 10%"]
+        TC["tick_interval: 1.0s<br/>obs_delay: 0.1s<br/>act_delay: 0.2s<br/>msg_delay: 0.05s<br/>jitter: GAUSSIAN, 10%"]
     end
 
     subgraph "Ordering: (timestamp, priority, sequence)"
@@ -621,13 +621,13 @@ sequenceDiagram
     FA->>FA: sync_state + compute_local_reward()
     FA->>PX: {set_tick_result: {reward: 0.3, ...}}
 
-    Note over COORD: Coordinator waits (reward_delay) then requests own local state
+    Note over COORD: Coordinator requests own local state
     COORD->>PX: get_local_state(coord_1, protocol)
     PX-->>COORD: coord_1 local_state (filtered + sub_rewards)
     COORD->>COORD: sync_state + compute_local_reward()
     COORD->>PX: {set_tick_result: {reward: 0.5, ...}}
 
-    Note over SYS: SystemAgent waits (reward_delay) then computes own reward
+    Note over SYS: SystemAgent computes own reward
     SYS->>PX: get_local_state(system, protocol)
     PX-->>SYS: system local_state (filtered + sub_rewards)
     SYS->>SYS: sync_state + compute_local_reward()
@@ -636,7 +636,7 @@ sequenceDiagram
     Note over SYS: If not terminated → schedule next tick
 ```
 
-**Novelty:** The hierarchical reward cascade propagates `set_state_completion` top-down through the hierarchy. Each agent independently requests its local state and computes rewards. Parent agents use `reward_delay` to wait for subordinate rewards before computing their own, enabling hierarchical credit assignment. This reflects real CPS patterns where supervisory systems (SCADA, traffic management centers) aggregate status from subordinate devices before making decisions.
+**Novelty:** The hierarchical reward cascade propagates `set_state_completion` top-down through the hierarchy. Each agent independently requests its local state and computes its own local reward. This decoupled design means each agent's reward computation is self-contained, simplifying the execution model while still supporting hierarchical coordination patterns found in real CPS systems (SCADA, traffic management centers).
 
 ---
 
