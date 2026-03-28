@@ -150,3 +150,11 @@ class DeviceAgent(FieldAgent):
         for f in self.state.features.values():
             if isinstance(f, CostSafetyMetrics):
                 return f
+
+    @property
+    def cost(self) -> float:
+        return self.metrics.cost
+
+    @property
+    def safety(self) -> float:
+        return self.metrics.safety
