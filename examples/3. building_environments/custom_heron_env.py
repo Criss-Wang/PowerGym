@@ -33,6 +33,7 @@ import numpy as np
 
 from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
+from heron.agents.system_agent import SystemAgent
 from heron.core.action import Action
 from heron.core.feature import Feature
 from heron.envs.base import HeronEnv
@@ -193,14 +194,13 @@ def main():
         features=[WaterLevelFeature()],
     )
 
-    coordinator = CoordinatorAgent(
-        agent_id="plant",
-        subordinates={"tank_a": pump_a, "tank_b": pump_b},
-    )
+    coordinator = CoordinatorAgent(agent_id="plant")
+    system = SystemAgent()
 
     # Build with the custom env class
     env = WaterTankEnv(
-        coordinator_agents=[coordinator],
+        agents=[system, coordinator, pump_a, pump_b],
+        hierarchy={"system_agent": ["plant"], "plant": ["tank_a", "tank_b"]},
         env_id="water_tank_demo",
     )
 

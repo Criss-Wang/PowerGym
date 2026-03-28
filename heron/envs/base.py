@@ -5,7 +5,6 @@ import uuid
 import gymnasium as gym
 
 from heron.agents.base import Agent
-from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.core.action import Action
 from heron.core.policies import Policy
 from heron.messaging import MessageBroker, ChannelManager, Message, MessageType
@@ -13,18 +12,17 @@ from heron.utils.typing import AgentID, MultiAgentDict
 from heron.scheduling import EventScheduler, Event, EpisodeAnalyzer, EpisodeStats
 from heron.agents.system_agent import SystemAgent
 from heron.agents.proxy_agent import Proxy
-from heron.agents.constants import SYSTEM_AGENT_ID, PROXY_AGENT_ID
+from heron.agents.constants import PROXY_AGENT_ID
 
 
 class BaseEnv:
     def __init__(
         self,
+        agents: List[Agent],
+        hierarchy: Dict[AgentID, List[AgentID]],
         env_id: Optional[str] = None,
         scheduler_config: Optional[Dict[str, Any]] = None,
         message_broker_config: Optional[Dict[str, Any]] = None,
-        # agents
-        system_agent: Optional[SystemAgent] = None,
-        coordinator_agents: Optional[List[CoordinatorAgent]] = None,
         # simulation-related params
         simulation_wait_interval: Optional[float] = None,
     ) -> None:
@@ -34,7 +32,7 @@ class BaseEnv:
 
         # agent-specific fields
         self.registered_agents: Dict[AgentID, Agent] = {}
-        self._register_agents(system_agent, coordinator_agents)
+        self._register_agents(agents, hierarchy)
 
         # initialize proxy agent (singleton) for state access and action dispatch
         self.proxy = Proxy(agent_id=PROXY_AGENT_ID)
@@ -58,30 +56,73 @@ class BaseEnv:
     # ============================================
     def _register_agents(
         self,
-        system_agent: Optional[SystemAgent],
-        coordinator_agents: Optional[List[CoordinatorAgent]],
+        agents: List[Agent],
+        hierarchy: Dict[AgentID, List[AgentID]],
     ) -> None:
-        """Internal method to register agents during initialization."""
-        # register system agent (singleton) & its subordinates
-        if system_agent and coordinator_agents:
-            raise ValueError("Cannot provide both SystemAgent and List[CoordinatorAgent]. Provide one or the other.")
-        self._system_agent = None
-        if system_agent:
-            self._system_agent = system_agent
-        else:
-            print("No system agent provided, using default system agent")
-            self._system_agent = SystemAgent(
-                agent_id=SYSTEM_AGENT_ID,
-                subordinates={agent.agent_id: agent for agent in coordinator_agents},
-            )
-        self._system_agent.set_simulation(
+        """Validate, wire, configure, and register all agents."""
+        agent_map = {a.agent_id: a for a in agents}
+        root_id = self._validate_hierarchy(agent_map, hierarchy)
+        self._wire_hierarchy(agent_map, hierarchy)
+        self._system_agent = agent_map[root_id]
+        self._configure_simulation(self._system_agent)
+        self._register_agent(self._system_agent)
+
+    @staticmethod
+    def _validate_hierarchy(
+        agent_map: Dict[AgentID, Agent],
+        hierarchy: Dict[AgentID, List[AgentID]],
+    ) -> AgentID:
+        """Validate hierarchy and return the root agent ID.
+
+        Checks:
+            - All parent/child IDs in hierarchy exist in agent_map
+            - Exactly one root (parent that never appears as a child)
+            - Root is a SystemAgent
+            - No orphaned agents (in agent_map but absent from hierarchy)
+        """
+        all_children: set = set()
+        for parent_id, child_ids in hierarchy.items():
+            if parent_id not in agent_map:
+                raise ValueError(f"Parent '{parent_id}' in hierarchy not found in agents list.")
+            for cid in child_ids:
+                if cid not in agent_map:
+                    raise ValueError(f"Child '{cid}' in hierarchy not found in agents list.")
+                all_children.add(cid)
+
+        parents = set(hierarchy.keys())
+        roots = parents - all_children
+        if len(roots) != 1:
+            raise ValueError(f"Hierarchy must have exactly one root agent, found: {roots}")
+        root_id = roots.pop()
+        if not isinstance(agent_map[root_id], SystemAgent):
+            raise TypeError(f"Root agent '{root_id}' must be a SystemAgent, got {type(agent_map[root_id]).__name__}.")
+
+        orphans = set(agent_map.keys()) - (parents | all_children)
+        if orphans:
+            raise ValueError(f"Agents not in hierarchy (orphaned): {orphans}")
+
+        return root_id
+
+    @staticmethod
+    def _wire_hierarchy(
+        agent_map: Dict[AgentID, Agent],
+        hierarchy: Dict[AgentID, List[AgentID]],
+    ) -> None:
+        """Set subordinates on each parent according to the hierarchy."""
+        for parent_id, child_ids in hierarchy.items():
+            parent = agent_map[parent_id]
+            subs = {cid: agent_map[cid] for cid in child_ids}
+            parent.subordinates = parent.build_subordinates(subs)
+
+    def _configure_simulation(self, system_agent: SystemAgent) -> None:
+        """Bind env simulation callables to the system agent."""
+        system_agent.set_simulation(
             self.run_simulation,
             self.env_state_to_global_state,
             self.global_state_to_env_state,
             self.simulation_wait_interval,
             self.pre_step,
         )
-        self._register_agent(self._system_agent)
         
 
     def get_agent(self, agent_id: AgentID) -> Optional[Agent]:

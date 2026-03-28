@@ -27,6 +27,7 @@ import numpy as np
 
 from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
+from heron.agents.system_agent import SystemAgent
 from heron.core.action import Action
 from heron.core.feature import Feature
 from heron.core.state import FieldAgentState
@@ -380,13 +381,12 @@ def demo_custom_env():
         features=[BatteryFeature()],
     )
 
-    coordinator = CoordinatorAgent(
-        agent_id="grid_op",
-        subordinates={"solar_1": solar, "battery_1": battery},
-    )
+    coordinator = CoordinatorAgent(agent_id="grid_op")
+    system = SystemAgent()
 
     env = MicrogridEnv(
-        coordinator_agents=[coordinator],
+        agents=[system, coordinator, solar, battery],
+        hierarchy={"system_agent": ["grid_op"], "grid_op": ["solar_1", "battery_1"]},
         irradiance_profile=[0.8, 0.9, 1.0, 0.7, 0.5],
         env_id="microgrid_demo",
     )

@@ -293,13 +293,14 @@ MSG_KEY_PROTOCOL = "protocol"
 ### **1. Initialization Flow**
 
 ```
-env = CustomEnv(system_agent=..., coordinator_agents=[...])
+env = CustomEnv(agents=[...], hierarchy={"parent_id": ["child_ids"]})
 │
 ├─> BaseEnv.__init__()
 │   │
-│   ├─> _register_agents(system_agent, coordinator_agents)
-│   │   ├─> If system_agent provided: use it directly
-│   │   ├─> Elif coordinator_agents: create default SystemAgent wrapping them
+│   ├─> _register_agents(agents, hierarchy)
+│   │   ├─> Build agent_map from flat agents list
+│   │   ├─> Validate hierarchy: exactly one root (SystemAgent), no orphans
+│   │   ├─> Wire hierarchy: parent.subordinates = build_subordinates(children)
 │   │   ├─> system_agent.set_simulation(
 │   │   │       run_simulation,
 │   │   │       env_state_to_global_state,

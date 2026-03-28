@@ -28,6 +28,7 @@ import numpy as np
 
 from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
+from heron.agents.system_agent import SystemAgent
 from heron.core.action import Action
 from heron.core.feature import Feature
 from heron.core.policies import Policy, obs_to_vector, vector_to_action
@@ -171,12 +172,11 @@ def build_env():
     """Build the two-room thermostat environment."""
     thermo_a = Thermostat(agent_id="room_a", features=[RoomTempFeature()])
     thermo_b = Thermostat(agent_id="room_b", features=[RoomTempFeature()])
-    coordinator = CoordinatorAgent(
-        agent_id="building",
-        subordinates={"room_a": thermo_a, "room_b": thermo_b},
-    )
+    coordinator = CoordinatorAgent(agent_id="building")
+    system = SystemAgent()
     return SimpleEnv(
-        coordinator_agents=[coordinator],
+        agents=[system, coordinator, thermo_a, thermo_b],
+        hierarchy={"system_agent": ["building"], "building": ["room_a", "room_b"]},
         simulation_func=thermostat_simulation,
         env_id="thermostat_training",
     )
@@ -309,7 +309,11 @@ def main():
     policy = ThermostatPolicy(obs_dim=2, seed=0)
 
     action = policy.forward(obs["room_a"])
-    print(f"  Input:  Observation object (local={list(obs['room_a'].local.keys())})")
+    room_obs = obs["room_a"]
+    if hasattr(room_obs, 'local'):
+        print(f"  Input:  Observation object (local={list(room_obs.local.keys())})")
+    else:
+        print(f"  Input:  Vectorized observation (shape={room_obs.shape})")
     print(f"  Output: Action object (c={action.c}, dim_c={action.dim_c})")
     print(f"  Decorators handled the conversion automatically.\n")
 

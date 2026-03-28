@@ -128,13 +128,13 @@ def _build_env(
     )
     coordinator = SimpleCoordinator(
         agent_id="coord",
-        subordinates={"fast": fast_agent, "slow": slow_agent},
         protocol=VerticalProtocol(),
     )
-    system = SystemAgent(
-        subordinates={"coord": coordinator},
+    system = SystemAgent()
+    env = SimpleEnv(
+        agents=[system, coordinator, fast_agent, slow_agent],
+        hierarchy={"system_agent": ["coord"], "coord": ["fast", "slow"]},
     )
-    env = SimpleEnv(system_agent=system)
     return env
 
 

@@ -423,57 +423,74 @@ class CoordinatorNeuralPolicy(Policy):
 # Environment Setup
 # =============================================================================
 
-def create_microgrid(mg_id: str, num_gen: int = 1, num_ess: int = 1) -> PowerGridAgent:
-    """Create a microgrid coordinator with generators and ESS devices."""
-    subordinates = {}
+def create_microgrid(mg_id: str, num_gen: int = 1, num_ess: int = 1):
+    """Create a microgrid coordinator with generators and ESS devices.
+
+    Returns:
+        Tuple of (PowerGridAgent, list of device agents, hierarchy dict entry).
+    """
+    device_agents = []
+    device_ids = []
 
     for i in range(num_gen):
         gen_id = f"{mg_id}_Gen{i + 1}"
-        subordinates[gen_id] = Generator(
+        device_agents.append(Generator(
             agent_id=gen_id,
             bus=f"{mg_id}_bus",
             p_min_MW=0.1,
             p_max_MW=1.0 + 0.5 * i,
             cost_curve_coefs=(0.01 + 0.005 * i, 0.4 + 0.1 * i, 0.0),
-        )
+        ))
+        device_ids.append(gen_id)
 
     for i in range(num_ess):
         ess_id = f"{mg_id}_ESS{i + 1}"
-        subordinates[ess_id] = ESS(
+        device_agents.append(ESS(
             agent_id=ess_id,
             bus=f"{mg_id}_bus",
             capacity_MWh=2.0 + i,
             p_min_MW=-0.5 - 0.1 * i,
             p_max_MW=0.5 + 0.1 * i,
             degr_cost_per_MWh=0.1,
-        )
+        ))
+        device_ids.append(ess_id)
 
     vertical_protocol = VerticalProtocol()
     mg = PowerGridAgent(
         agent_id=mg_id,
-        subordinates=subordinates,
         protocol=vertical_protocol,
     )
 
-    return mg
+    return mg, device_agents, {mg_id: device_ids}
 
 
-def create_3mg_system(schedule_config: Optional[ScheduleConfig] = None) -> SystemAgent:
+def create_3mg_system(schedule_config: Optional[ScheduleConfig] = None):
     """Create system agent with 3 microgrids.
 
     Args:
-        schedule_config: Optional tick config for system agent. If provided,
-            _simulation_wait_interval will use this tick_interval.
-    """
-    mg1 = create_microgrid("MG1", num_gen=1, num_ess=1)
-    mg2 = create_microgrid("MG2", num_gen=2, num_ess=1)
-    mg3 = create_microgrid("MG3", num_gen=1, num_ess=2)
+        schedule_config: Optional tick config for system agent.
 
-    return SystemAgent(
+    Returns:
+        Tuple of (all_agents list, hierarchy dict).
+    """
+    mg1, mg1_devices, mg1_hier = create_microgrid("MG1", num_gen=1, num_ess=1)
+    mg2, mg2_devices, mg2_hier = create_microgrid("MG2", num_gen=2, num_ess=1)
+    mg3, mg3_devices, mg3_hier = create_microgrid("MG3", num_gen=1, num_ess=2)
+
+    system_agent = SystemAgent(
         agent_id="system_agent",
-        subordinates={"MG1": mg1, "MG2": mg2, "MG3": mg3},
         schedule_config=schedule_config,
     )
+
+    all_agents = [system_agent, mg1, mg2, mg3] + mg1_devices + mg2_devices + mg3_devices
+    hierarchy = {
+        "system_agent": ["MG1", "MG2", "MG3"],
+        **mg1_hier,
+        **mg2_hier,
+        **mg3_hier,
+    }
+
+    return all_agents, hierarchy
 
 
 # =============================================================================
@@ -829,18 +846,22 @@ def main():
     )
 
     # Create system with tick config (initializes _simulation_wait_interval correctly)
-    system_agent = create_3mg_system(schedule_config=system_schedule_config)
+    all_agents, hierarchy = create_3mg_system(schedule_config=system_schedule_config)
 
-    total_devices = sum(
-        len(mg.subordinates) for mg in system_agent.subordinates.values()
-    )
+    # Extract agents by type for logging
+    mg_agents = [a for a in all_agents if isinstance(a, PowerGridAgent)]
+    mg_ids = hierarchy["system_agent"]
+
+    # Count devices from hierarchy
+    total_devices = sum(len(hierarchy.get(mg_id, [])) for mg_id in mg_ids)
     print(f"\nSystem Configuration:")
-    print(f"  Microgrids: {len(system_agent.subordinates)}")
+    print(f"  Microgrids: {len(mg_ids)}")
     print(f"  Total devices: {total_devices}")
-    for mg_id, mg in system_agent.subordinates.items():
-        devices = list(mg.subordinates.keys())
+    for mg_id in mg_ids:
+        mg = next(a for a in mg_agents if a.agent_id == mg_id)
+        device_ids = hierarchy.get(mg_id, [])
         has_protocol = mg.protocol is not None
-        print(f"  {mg_id}: {devices}, protocol={has_protocol}")
+        print(f"  {mg_id}: {device_ids}, protocol={has_protocol}")
 
     # Get dataset path
     dataset_path = os.path.join(
@@ -854,7 +875,8 @@ def main():
     print(f"  Dataset: {dataset_path}")
 
     env = HierarchicalMicrogridEnv(
-        system_agent=system_agent,
+        agents=all_agents,
+        hierarchy=hierarchy,
         dataset_path=dataset_path,
         episode_steps=24,
         dt=1.0,
@@ -930,7 +952,7 @@ def main():
     print(f"  [{'PASS' if len(returns) == 30 else 'FAIL'}] Training completed: {len(returns)} episodes")
     print(f"  [{'PASS' if learning_occurred else 'FAIL'}] Learning occurred: initial={initial_return:.1f}, final={final_return:.1f}")
     print(f"  [{'PASS' if events_ran else 'FAIL'}] Event-driven ran: obs={stats['observations']}, actions={stats['action_results']}")
-    print(f"  [{'PASS' if len(system_agent.subordinates) == 3 else 'FAIL'}] All 3 microgrids active")
+    print(f"  [{'PASS' if len(mg_ids) == 3 else 'FAIL'}] All 3 microgrids active")
     print(f"  [{'PASS' if len(coordinator_policies) == 3 else 'FAIL'}] Coordinator policies trained: {len(coordinator_policies)}")
 
     pf_converge_rate = sum(training_logger.pf_converged) / len(training_logger.pf_converged) * 100 if training_logger.pf_converged else 0

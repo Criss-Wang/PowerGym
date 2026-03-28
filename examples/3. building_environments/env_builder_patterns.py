@@ -144,21 +144,21 @@ def main():
     print(f"After 3 steps, rewards: { {k: round(v, 3) for k, v in rewards.items()} }")
 
     # ------------------------------------------------------------------
-    # Pattern 2: Auto-coordinator (no coordinator declared)
+    # Pattern 2: No coordinator (agents directly under system agent)
     # ------------------------------------------------------------------
-    section("Pattern 2: Auto-coordinator")
+    section("Pattern 2: Direct system-agent subordinates")
 
     env2 = (
-        EnvBuilder("auto_coord")
+        EnvBuilder("direct_subs")
         .add_agents("node", SensorAgent, count=3, features=[SensorReading()])
-        # No add_coordinator call -- builder auto-creates one
+        # No add_coordinator call -- agents attach directly to system agent
         .simulation(sensor_simulation)
         .build()
     )
 
     obs2, _ = env2.reset(seed=1)
     print(f"Agents: {list(obs2.keys())}")
-    print(f"All registered (includes auto_coordinator): {list(env2.registered_agents.keys())}")
+    print(f"All registered: {list(env2.registered_agents.keys())}")
 
     # ------------------------------------------------------------------
     # Pattern 3: Single named agent via add_agent
