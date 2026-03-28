@@ -23,7 +23,6 @@ from heron.agents.constants import (
     MSG_SET_STATE,
     MSG_SET_STATE_COMPLETION,
     MSG_SET_TICK_RESULT,
-    INFO_TYPE_OBS,
     INFO_TYPE_GLOBAL_STATE,
     INFO_TYPE_LOCAL_STATE,
     STATE_TYPE_GLOBAL,
@@ -173,18 +172,6 @@ class SystemAgent(Agent):
         for subordinate_id in self.subordinates:
             scheduler.schedule_agent_tick(subordinate_id)
         
-        if self.policy:
-            # Compute & execute self action
-            # Ask proxy for global state to compute local action
-            scheduler.schedule_message_delivery(
-                sender_id=self.agent_id,
-                recipient_id=PROXY_AGENT_ID,
-                message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
-                delay=self._schedule_config.msg_delay,
-            )
-        else:
-            logging.debug(f"{self} doesn't act itself, because there's no action policy")
-        
         # schedule simulation
         scheduler.schedule_simulation(self.agent_id, self._simulation_wait_interval)
 
@@ -211,29 +198,12 @@ class SystemAgent(Agent):
         assert recipient_id == self.agent_id
         message_content = event.payload.get("message", {})
 
-        # 4 cases:
-        # a. getting observation -> computing actions
-        # b. getting global state -> starting simulation
-        # c. getting local state -> compute rewards
-        # d. receiving "state set completion" message from proxy -> schedule reward computation
+        # 3 cases:
+        # a. getting global state -> starting simulation
+        # b. getting local state -> compute rewards
+        # c. receiving "state set completion" message from proxy -> schedule reward computation
         assert isinstance(message_content, dict)
-        if "get_obs_response" in message_content:
-            response_data = message_content["get_obs_response"]
-            body = response_data[MSG_KEY_BODY]
-
-            # Proxy sends both obs and local_state (design principle: agent asks for obs, proxy gives both)
-            obs_dict = body["obs"]
-            local_state = body["local_state"]
-
-            # Deserialize observation dict back to Observation object
-            obs = Observation.from_dict(obs_dict)
-
-            # Sync state first (proxy gives both obs & state)
-            self.sync_state_from_observed(local_state)
-
-            # Compute action - policy decides which parts of observation to use
-            self.compute_action(obs, scheduler)
-        elif "get_global_state_response" in message_content:
+        if "get_global_state_response" in message_content:
             # The response structure is {'get_global_state_response': {'body': {...}}}
             response_data = message_content["get_global_state_response"]
             global_state = response_data[MSG_KEY_BODY] # a dict of {agent_id: state}
