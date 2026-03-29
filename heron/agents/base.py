@@ -22,6 +22,8 @@ from heron.core.action import Action
 from heron.protocols.base import Protocol
 from heron.agents.constants import PROXY_AGENT_ID, FIELD_LEVEL, EMPTY_REWARD
 
+logger = logging.getLogger(__name__)
+
 
 class Agent(ABC):
     # class-level handler function mapping
@@ -408,7 +410,7 @@ class Agent(ABC):
                 self.set_action(self.policy.forward(observation=local_obs))
             else:
                 if self.level == 1:
-                    logging.debug(f"No action built for ({self}) because there's no upstream action and no action policy")
+                    logger.debug(f"No action built for ({self}) because there's no upstream action and no action policy")
 
             self.apply_action()
 
@@ -442,7 +444,7 @@ class Agent(ABC):
             if subordinate_id in actions:
                 subordinate.execute(actions[subordinate_id], proxy)
             else:
-                print(f"{subordinate} not executed in current execution cycle")
+                logger.debug(f"{subordinate} not executed in current execution cycle")
 
     def apply_action(self):
         """Update self.state in agent based on self.action"""
@@ -560,7 +562,7 @@ class Agent(ABC):
         else:
             if self.level == FIELD_LEVEL and not self.upstream_id:
                 raise ValueError(f"Warning: {self} has no policy and no upstream action")
-            logging.debug(f"{self} skipping action: no upstream action received and no local policy (upstream={self.upstream_id})")
+            logger.debug(f"{self} skipping action: no upstream action received and no local policy (upstream={self.upstream_id})")
             return
 
         # Coordinate subordinate actions if needed
@@ -714,7 +716,7 @@ class Agent(ABC):
                 f"Agent {self.agent_id} has no message broker configured."
             )
         if action is None:
-            print(f"Warning: No action to send to subordinate {recipient_id}")
+            logger.warning(f"No action to send to subordinate {recipient_id}")
             return
 
         self.send_action(

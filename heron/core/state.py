@@ -4,6 +4,7 @@ This module provides generic state containers that compose Features
 and support visibility-based observation filtering.
 """
 
+import logging
 from abc import ABC
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -12,6 +13,8 @@ import numpy as np
 
 from heron.core.feature import Feature
 from heron.utils.array_utils import cat_f32
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -129,7 +132,7 @@ class State(ABC):
                 state.features[feature_name] = feature_obj
             except ValueError as e:
                 # Feature not registered - skip with warning
-                print(f"Warning: Skipping unregistered feature '{feature_name}': {e}")
+                logger.warning(f"Skipping unregistered feature '{feature_name}': {e}")
 
         return state
 

@@ -1,5 +1,6 @@
 
 
+import logging
 from abc import abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -34,6 +35,8 @@ from heron.agents.constants import (
 
 
 from heron.core.state import State
+
+logger = logging.getLogger(__name__)
 
 class Proxy(Agent):
 
@@ -128,7 +131,7 @@ class Proxy(Agent):
         agent_id = agent.agent_id
         agent_state = agent.state
         if agent_id == self.agent_id:
-            print("Proxy agent doesn't register itself.")
+            logger.debug("Proxy agent doesn't register itself.")
             return
 
         if agent_id not in self.registered_agents:
@@ -150,7 +153,7 @@ class Proxy(Agent):
         Should be called after all agents are registered and their initial states are set.
         """
         if "agents" not in self.state_cache or not self.state_cache["agents"]:
-            print("Warning: No agent states to compile into global state")
+            logger.warning("No agent states to compile into global state")
             return
 
         # Compile all agent states into global state
