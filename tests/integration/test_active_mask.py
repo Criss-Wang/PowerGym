@@ -14,7 +14,7 @@ from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.agents.system_agent import SystemAgent
 from heron.core.feature import Feature
 from heron.core.action import Action
-from heron.envs.base import HeronEnv
+from heron.envs.base import BaseEnv
 from heron.protocols.vertical import VerticalProtocol
 from heron.scheduling.schedule_config import ScheduleConfig
 from heron.utils.typing import AgentID
@@ -94,7 +94,7 @@ class SimpleCoordinator(CoordinatorAgent):
     pass
 
 
-class SimpleEnv(HeronEnv):
+class SimpleEnv(BaseEnv):
     def run_simulation(self, env_state, *args, **kwargs):
         return env_state
 
@@ -113,7 +113,7 @@ def _build_env(
     fast_tick: float = 1.0,
     slow_tick: float = 3.0,
     use_masked_agent: bool = False,
-) -> HeronEnv:
+) -> BaseEnv:
     """Build a 2-field-agent env with heterogeneous tick intervals."""
     fast_agent_cls = MaskedAgent if use_masked_agent else CountingAgent
     fast_agent = fast_agent_cls(
@@ -314,7 +314,7 @@ class TestBackwardCompatibility:
             actions = {"fast": np.array([0.1 * step]), "slow": np.array([-0.1 * step])}
             obs, rew, term, trunc, info = env.step(actions)
 
-            # HeronEnv returns all agents (including coord/system); field agents must be present
+            # BaseEnv returns all agents (including coord/system); field agents must be present
             assert "fast" in obs
             assert "slow" in obs
             assert "fast" in rew

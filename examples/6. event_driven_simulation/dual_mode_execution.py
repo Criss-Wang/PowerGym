@@ -30,7 +30,7 @@ from heron.agents.system_agent import build_system_agent
 from heron.core.action import Action
 from heron.core.feature import Feature
 from heron.core.policies import Policy, obs_to_vector, vector_to_action
-from heron.envs.simple import SimpleEnv
+from heron.envs.simple import DefaultHeronEnv
 from heron.scheduling import (
     ScheduleConfig,
     JitterType,
@@ -135,7 +135,7 @@ def build_env_step_based():
         agent_id="building",
         subordinates={"room_a": thermo_a, "room_b": thermo_b},
     )
-    return SimpleEnv(
+    return DefaultHeronEnv(
         coordinator_agents=[coordinator],
         simulation_func=thermostat_simulation,
         env_id="thermostat_step",
@@ -203,7 +203,7 @@ def build_env_event_driven():
         schedule_config=coord_tick,
     )
     system_agent = build_system_agent([coordinator], schedule_config=system_tick)
-    return SimpleEnv(
+    return DefaultHeronEnv(
         system_agent=system_agent,
         simulation_func=thermostat_simulation,
         env_id="thermostat_event",

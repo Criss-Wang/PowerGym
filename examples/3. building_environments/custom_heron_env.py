@@ -1,6 +1,6 @@
-"""Custom HeronEnv -- full control over the simulation bridge.
+"""Custom BaseEnv -- full control over the simulation bridge.
 
-When SimpleEnv's auto-bridge isn't enough, subclass HeronEnv directly and
+When DefaultHeronEnv's auto-bridge isn't enough, subclass BaseEnv directly and
 implement three methods:
 
   1. run_simulation(env_state) -> env_state
@@ -35,7 +35,7 @@ from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.core.action import Action
 from heron.core.feature import Feature
-from heron.envs.base import HeronEnv
+from heron.envs.base import BaseEnv
 from heron.agents.constants import FIELD_LEVEL
 
 
@@ -99,10 +99,10 @@ class WaterSystemState:
 
 
 # ---------------------------------------------------------------------------
-# 3. Custom HeronEnv subclass
+# 3. Custom BaseEnv subclass
 # ---------------------------------------------------------------------------
 
-class WaterTankEnv(HeronEnv):
+class WaterTankEnv(BaseEnv):
     """Water tank environment with custom simulation bridge.
 
     Demonstrates the three abstract methods:
@@ -178,7 +178,7 @@ class WaterTankEnv(HeronEnv):
 
 def main():
     print("=" * 60)
-    print("Custom HeronEnv: Water Tank System")
+    print("Custom BaseEnv: Water Tank System")
     print("=" * 60)
 
     # Create agents manually (full control)

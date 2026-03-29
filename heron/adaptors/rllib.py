@@ -1,7 +1,7 @@
 """RLlib adapter for HERON multi-agent environments.
 
 Provides ``RLlibBasedHeronEnv`` — a thin wrapper that converts a HERON
-``HeronEnv`` into an RLlib-compatible ``MultiAgentEnv`` so that
+``BaseEnv`` into an RLlib-compatible ``MultiAgentEnv`` so that
 HERON environments can be plugged directly into RLlib training
 pipelines (PPO / MAPPO / IPPO, QMIX, etc.).
 
@@ -40,11 +40,11 @@ import gymnasium as gym
 from gymnasium.spaces import Box, Dict as DictSpace
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
 
-from heron.envs.base import HeronEnv
+from heron.envs.base import BaseEnv
 from heron.envs.builder import EnvBuilder
 
 
-def _build_heron_env(config: Dict[str, Any]) -> HeronEnv:
+def _build_heron_env(config: Dict[str, Any]) -> BaseEnv:
     """Build a HERON env from a flat config dict.
 
     Reads ``agents``, ``coordinators``, and either ``simulation`` or
@@ -100,7 +100,7 @@ def _build_heron_env(config: Dict[str, Any]) -> HeronEnv:
 
 
 class RLlibBasedHeronEnv(MultiAgentEnv):
-    """Wraps a HERON ``HeronEnv`` for RLlib training.
+    """Wraps a HERON ``BaseEnv`` for RLlib training.
 
     The adapter exposes HERON agents (those whose ``action_space`` is not
     ``None``) as RLlib agents.  HERON ``Observation`` objects are flattened
@@ -120,10 +120,10 @@ class RLlibBasedHeronEnv(MultiAgentEnv):
         Coordinator specs: ``{"coordinator_id", "agent_cls"?, "features"?,
         "protocol"?, "subordinates"?, **kwargs}``.
     simulation : Callable
-        Simulation function for ``SimpleEnv`` auto-bridge.
+        Simulation function for ``DefaultHeronEnv`` auto-bridge.
         Mutually exclusive with *env_class*.
     env_class : type, optional
-        Custom ``HeronEnv`` subclass. Use instead of *simulation* when
+        Custom ``BaseEnv`` subclass. Use instead of *simulation* when
         you need a full custom env (e.g. with ``run_simulation``).
     env_kwargs : dict, optional
         Extra kwargs forwarded to *env_class* constructor.
@@ -144,7 +144,7 @@ class RLlibBasedHeronEnv(MultiAgentEnv):
         self._step_count: int = 0
 
         # ---- build the underlying HERON env ----
-        self.heron_env: HeronEnv = _build_heron_env(config)
+        self.heron_env: BaseEnv = _build_heron_env(config)
 
         # One reset to materialise observation shapes and agent spaces.
         # SystemAgent.reset() returns vectorized np.ndarray observations

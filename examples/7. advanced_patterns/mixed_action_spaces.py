@@ -29,7 +29,7 @@ from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.core.action import Action
 from heron.core.feature import Feature
-from heron.envs.simple import SimpleEnv
+from heron.envs.simple import DefaultHeronEnv
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +360,7 @@ def demo_heterogeneous_agents():
         subordinates={"gen_1": gen, "trafo_1": trafo},
     )
 
-    env = SimpleEnv(
+    env = DefaultHeronEnv(
         coordinator_agents=[coordinator],
         simulation_func=grid_simulation,
         env_id="mixed_action_demo",

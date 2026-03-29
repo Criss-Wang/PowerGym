@@ -16,7 +16,7 @@ from heron.agents.proxy_agent import Proxy
 from heron.agents.constants import SYSTEM_AGENT_ID, PROXY_AGENT_ID
 
 
-class BaseEnv:
+class BaseEnv(ABC):
     def __init__(
         self,
         env_id: Optional[str] = None,
@@ -288,13 +288,7 @@ class BaseEnv:
         if self.message_broker is not None:
             self.message_broker.clear_environment(self.env_id)
 
-    def close_core(self) -> None:
-        """Clean up core resources. [Both Modes]"""
-        if self.message_broker is not None:
-            self.message_broker.close()
-    
-
-class HeronEnv(BaseEnv):
     def close(self) -> None:
         """Clean up environment resources."""
-        self.close_core()
+        if self.message_broker is not None:
+            self.message_broker.close()

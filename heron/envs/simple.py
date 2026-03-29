@@ -1,6 +1,6 @@
 """Simplified environment with automatic state bridge.
 
-``SimpleEnv`` eliminates the need to implement ``env_state_to_global_state()``
+``DefaultHeronEnv`` eliminates the need to implement ``env_state_to_global_state()``
 and ``global_state_to_env_state()`` by auto-generating them from agent
 registrations.
 
@@ -18,7 +18,7 @@ Example::
                 features["BatteryFeature"]["soc"] += 0.01
         return agent_states
 
-    env = SimpleEnv(
+    env = DefaultHeronEnv(
         coordinator_agents=[...],
         simulation_func=my_simulation,
     )
@@ -33,7 +33,7 @@ from heron.agents.constants import (
     COORDINATOR_LEVEL,
     SYSTEM_LEVEL,
 )
-from heron.envs.base import HeronEnv
+from heron.envs.base import BaseEnv
 
 _LEVEL_TO_STATE_TYPE = {
     FIELD_LEVEL: "FieldAgentState",
@@ -42,7 +42,7 @@ _LEVEL_TO_STATE_TYPE = {
 }
 
 
-class SimpleEnv(HeronEnv):
+class DefaultHeronEnv(BaseEnv):
     """Multi-agent environment with automatic state bridge.
 
     Eliminates the ``env_state_to_global_state`` / ``global_state_to_env_state``
@@ -83,7 +83,7 @@ class SimpleEnv(HeronEnv):
 
     def run_simulation(self, env_state: Any, *args: Any, **kwargs: Any) -> Any:
         if self._user_simulation_func is None:
-            raise NotImplementedError("No simulation function provided to SimpleEnv.")
+            raise NotImplementedError("No simulation function provided to DefaultHeronEnv.")
         return self._user_simulation_func(env_state)
 
     def global_state_to_env_state(self, global_state: Dict[str, Any]) -> Dict[str, Dict]:

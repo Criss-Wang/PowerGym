@@ -88,11 +88,11 @@ print(f"Action: {action.c}")
 Create a multi-agent environment:
 
 ```python
-from heron.envs import HeronEnv
+from heron.envs import BaseEnv
 from gymnasium import spaces
 import numpy as np
 
-class SimpleEnv(HeronEnv):
+class MySimpleEnv(BaseEnv):
     metadata = {"name": "simple_env_v0"}
 
     def __init__(self):
@@ -130,7 +130,7 @@ class SimpleEnv(HeronEnv):
         return self.action_spaces[agent]
 
 # Run environment
-env = SimpleEnv()
+env = MySimpleEnv()
 obs, info = env.reset()
 
 for _ in range(10):

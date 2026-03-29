@@ -10,14 +10,14 @@
 | `@obs_to_vector` / `@vector_to_action` | `policy_and_training.py` Part 1 |
 | Manual REINFORCE training | `policy_and_training.py` Part 2-3 |
 | IPPO vs MAPPO comparison | `policy_and_training.py` Part 4 |
-| `RLlibBasedHeronEnv` setup | `rllib_integration.py` Part 1 |
+| `RLlibBasedHeronEnv` adapter | `rllib_integration.py` Part 1 |
 | IPPO / MAPPO RLlib config | `rllib_integration.py` Part 2-3 |
 | `HeronEnvRunner` + event-driven eval | `rllib_integration.py` Part 4 |
 | Live RLlib training loop | `rllib_integration.py` Part 5 |
 
 ## Prerequisites
 
-- **Level 3**: Building Environments (agents, features, SimpleEnv)
+- **Level 3**: Building Environments (agents, features, DefaultHeronEnv)
 - **Level 4**: Protocols & Coordination (for understanding coordinator actions)
 
 For `rllib_integration.py` Part 5 (live training):
@@ -34,7 +34,7 @@ Training Stack:
   ========================       ============================
 
   Policy ABC                     RLlibBasedHeronEnv
-    forward(obs) -> action         wraps HeronEnv as MultiAgentEnv
+    forward(obs) -> action         wraps BaseEnv as MultiAgentEnv
     @obs_to_vector                 flattens Observation -> numpy
     @vector_to_action              exposes action_space to RLlib
 

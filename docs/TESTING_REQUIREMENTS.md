@@ -44,7 +44,7 @@ pytest tests/test_env_builder.py -v
 
 | Test | What It Validates | Passing Criteria |
 |------|-------------------|------------------|
-| `test_builder_callable_returns_env` | `EnvBuilder()` returns a callable that produces a valid `HeronEnv` | `env is not None`; `obs` is a `dict` after `reset()` |
+| `test_builder_callable_returns_env` | `EnvBuilder()` returns a callable that produces a valid `BaseEnv` | `env is not None`; `obs` is a `dict` after `reset()` |
 | `test_builder_callable_with_config_arg` | Callable accepts an optional config dict (RLlib compatibility) | `env is not None`; no errors when passed `{"some_key": 123}` |
 | `test_builder_callable_produces_independent_envs` | Each call creates independent environment instances | `env1 is not env2`; both reset independently without side effects |
 | `test_builder_with_custom_coordinator_no_protocol_conflict` | Builder does not pass `protocol=` when `None`, avoiding `TypeError` on custom coordinators | `env is not None`; resets without `TypeError` |
@@ -253,7 +253,7 @@ All examples are standalone scripts. Each must run without error and produce mea
 |--------|-------------|------------------|
 | `custom_heron_env.py` | `python "examples/3. building_environments/custom_heron_env.py"` | Water tank simulation runs 20 steps; tank levels change based on pump actions; rewards are finite |
 | `env_builder_patterns.py` | `python "examples/3. building_environments/env_builder_patterns.py"` | Batch registration creates correct agent count; coordinator assignment works; auto-coordinator creation works; custom system agent accepted |
-| `simple_env_quickstart.py` | `python "examples/3. building_environments/simple_env_quickstart.py"` | SimpleEnv creates without custom HeronEnv subclass; room temperatures change; 10 steps complete |
+| `simple_env_quickstart.py` | `python "examples/3. building_environments/simple_env_quickstart.py"` | DefaultHeronEnv creates without custom BaseEnv subclass; room temperatures change; 10 steps complete |
 
 ### Level 4: Protocols & Coordination (`examples/4. protocols_and_coordination/`)
 
@@ -275,7 +275,7 @@ All examples are standalone scripts. Each must run without error and produce mea
 | Script | Run Command | Passing Criteria |
 |--------|-------------|------------------|
 | `dual_mode_execution.py` | `python "examples/6. event_driven_simulation/dual_mode_execution.py"` | Step-based: 10 steps complete with deterministic timing; Event-driven: simulation runs for target duration; event count breakdown printed with >0 AGENT_TICK events |
-| `schedule_config_and_scheduling.py` | `python "examples/6. event_driven_simulation/schedule_config_and_scheduling.py"` | Deterministic config: exact intervals; Jittered config: samples show expected mean and std; UNIFORM and GAUSSIAN distributions produce different ranges |
+| `tick_config_and_scheduling.py` | `python "examples/6. event_driven_simulation/tick_config_and_scheduling.py"` | Deterministic config: exact intervals; Jittered config: samples show expected mean and std; UNIFORM and GAUSSIAN distributions produce different ranges |
 
 ### Level 7: Advanced Patterns (`examples/7. advanced_patterns/`)
 
@@ -426,7 +426,7 @@ python "examples/4. protocols_and_coordination/vertical_action_decomposition.py"
 python "examples/5. training_algorithms/policy_and_training.py"
 python "examples/5. training_algorithms/rllib_integration.py"
 python "examples/6. event_driven_simulation/dual_mode_execution.py"
-python "examples/6. event_driven_simulation/schedule_config_and_scheduling.py"
+python "examples/6. event_driven_simulation/tick_config_and_scheduling.py"
 python "examples/7. advanced_patterns/custom_env_and_visibility.py"
 python "examples/7. advanced_patterns/mixed_action_spaces.py"
 ```

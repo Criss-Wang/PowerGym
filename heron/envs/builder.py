@@ -43,9 +43,9 @@ from heron.agents.field_agent import FieldAgent
 from heron.agents.system_agent import SystemAgent
 from heron.core.feature import Feature
 from heron.scheduling.schedule_config import ScheduleConfig
-from heron.envs.base import HeronEnv
+from heron.envs.base import BaseEnv
 from heron.protocols.base import Protocol
-from heron.envs.simple import SimpleEnv
+from heron.envs.simple import DefaultHeronEnv
 
 
 @dataclass
@@ -91,7 +91,7 @@ class EnvBuilder:
         self._coordinator_specs: List[_CoordinatorSpec] = []
         self._system_spec: Optional[_SystemSpec] = None
         self._simulation_func: Optional[Callable] = None
-        self._env_cls: Optional[Type[HeronEnv]] = None
+        self._env_cls: Optional[Type[BaseEnv]] = None
         self._env_kwargs: Dict[str, Any] = {}
 
     # ------------------------------------------------------------------
@@ -204,12 +204,12 @@ class EnvBuilder:
     # ------------------------------------------------------------------
 
     def simulation(self, func: Callable) -> "EnvBuilder":
-        """Set the simulation function (``SimpleEnv`` auto-bridge)."""
+        """Set the simulation function (``DefaultHeronEnv`` auto-bridge)."""
         self._simulation_func = func
         return self
 
-    def env_class(self, cls: Type[HeronEnv], **kwargs: Any) -> "EnvBuilder":
-        """Use a specific ``HeronEnv`` subclass instead of ``SimpleEnv``."""
+    def env_class(self, cls: Type[BaseEnv], **kwargs: Any) -> "EnvBuilder":
+        """Use a specific ``BaseEnv`` subclass instead of ``DefaultHeronEnv``."""
         self._env_cls = cls
         self._env_kwargs = kwargs
         return self
@@ -218,7 +218,7 @@ class EnvBuilder:
     #  Build
     # ------------------------------------------------------------------
 
-    def build(self) -> HeronEnv:
+    def build(self) -> BaseEnv:
         """Construct and return the configured environment."""
         agents = self._instantiate_agents()
         coordinators = self._resolve_coordinators(agents)
@@ -226,7 +226,7 @@ class EnvBuilder:
             return self._build_env(system=system)
         return self._build_env(coordinators=coordinators)
 
-    def __call__(self, config: Any = None) -> HeronEnv:
+    def __call__(self, config: Any = None) -> BaseEnv:
         """Build the environment (callable shorthand for ``build()``).
 
         Kept for backward compatibility with code that uses the builder
@@ -316,7 +316,7 @@ class EnvBuilder:
         self, 
         system: Optional[SystemAgent] = None, 
         coordinators: Optional[List[CoordinatorAgent]] = None
-    ) -> HeronEnv:
+    ) -> BaseEnv:
         if system and coordinators:
             raise ValueError("Cannot build env with both SystemAgent and coordinators (not supported yet).")
         
@@ -329,7 +329,7 @@ class EnvBuilder:
             )
     
         if self._simulation_func is not None:
-            return SimpleEnv(
+            return DefaultHeronEnv(
                 env_id=self._env_id,
                 system_agent=system,
                 coordinator_agents=coordinators,
