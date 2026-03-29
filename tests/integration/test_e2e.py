@@ -100,8 +100,8 @@ class EnvState:
         self.battery_soc = battery_soc
 
 class EnergyManagementEnv(BaseEnv):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, agents, hierarchy, **kwargs):
+        super().__init__(agents=agents, hierarchy=hierarchy, **kwargs)
 
     def run_simulation(self, env_state: EnvState, *args, **kwargs) -> EnvState:
         env_state.battery_soc = np.clip(env_state.battery_soc, 0.0, 1.0)
@@ -410,8 +410,8 @@ battery_agent_2 = BatteryAgent(
     agent_id="battery_2",
     features=[BatteryChargeFeature(soc=0.5, capacity=100.0)]
 )
-zone_coordinator = ZoneCoordinator(agent_id="zone_1", subordinates={"battery_1": battery_agent_1, "battery_2": battery_agent_2})
-grid_system_agent = GridSystemAgent(agent_id="system_agent", subordinates={"zone_1": zone_coordinator})
+zone_coordinator = ZoneCoordinator(agent_id="zone_1")
+grid_system_agent = GridSystemAgent(agent_id="system_agent")
 
 # Configure environment with custom settings
 scheduler_config = {
@@ -427,7 +427,11 @@ message_broker_config = {
 simulation_wait_interval = 0.01  # 10ms wait between simulation steps
 
 env = EnergyManagementEnv(
-    system_agent=grid_system_agent,
+    agents=[grid_system_agent, zone_coordinator, battery_agent_1, battery_agent_2],
+    hierarchy={
+        "system_agent": ["zone_1"],
+        "zone_1": ["battery_1", "battery_2"],
+    },
     scheduler_config=scheduler_config,
     message_broker_config=message_broker_config,
     simulation_wait_interval=simulation_wait_interval,

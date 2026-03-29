@@ -27,6 +27,7 @@ import numpy as np
 
 from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
+from heron.agents.system_agent import SystemAgent
 from heron.core.action import Action
 from heron.core.feature import Feature
 from heron.envs.simple import DefaultHeronEnv
@@ -355,13 +356,15 @@ def demo_heterogeneous_agents():
     gen = Generator(agent_id="gen_1", features=[GeneratorFeature()])
     trafo = Transformer(agent_id="trafo_1", features=[TransformerFeature()], num_taps=11)
 
-    coordinator = CoordinatorAgent(
-        agent_id="grid_op",
-        subordinates={"gen_1": gen, "trafo_1": trafo},
-    )
+    coordinator = CoordinatorAgent(agent_id="grid_op")
+    system = SystemAgent()
 
     env = DefaultHeronEnv(
-        coordinator_agents=[coordinator],
+        agents=[system, coordinator, gen, trafo],
+        hierarchy={
+            "system_agent": ["grid_op"],
+            "grid_op": ["gen_1", "trafo_1"],
+        },
         simulation_func=grid_simulation,
         env_id="mixed_action_demo",
     )

@@ -26,6 +26,7 @@ import numpy as np
 
 from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
+from heron.agents.system_agent import SystemAgent
 from heron.core.action import Action
 from heron.core.feature import Feature
 from heron.envs.simple import DefaultHeronEnv
@@ -162,12 +163,16 @@ def demo_vector_decomposition_env():
 
     coordinator = CoordinatorAgent(
         agent_id="grid_op",
-        subordinates={"gen_a": gen_a, "gen_b": gen_b, "gen_c": gen_c},
         protocol=VerticalProtocol(),  # default: VectorDecomposition
     )
+    system = SystemAgent()
 
     env = DefaultHeronEnv(
-        coordinator_agents=[coordinator],
+        agents=[system, coordinator, gen_a, gen_b, gen_c],
+        hierarchy={
+            "system_agent": ["grid_op"],
+            "grid_op": ["gen_a", "gen_b", "gen_c"],
+        },
         simulation_func=grid_simulation,
         env_id="vector_decomp_demo",
     )
@@ -210,12 +215,16 @@ def demo_broadcast_env():
 
     coordinator = CoordinatorAgent(
         agent_id="grid_op",
-        subordinates={"gen_a": gen_a, "gen_b": gen_b, "gen_c": gen_c},
         protocol=broadcast_protocol,
     )
+    system = SystemAgent()
 
     env = DefaultHeronEnv(
-        coordinator_agents=[coordinator],
+        agents=[system, coordinator, gen_a, gen_b, gen_c],
+        hierarchy={
+            "system_agent": ["grid_op"],
+            "grid_op": ["gen_a", "gen_b", "gen_c"],
+        },
         simulation_func=grid_simulation,
         env_id="broadcast_demo",
     )

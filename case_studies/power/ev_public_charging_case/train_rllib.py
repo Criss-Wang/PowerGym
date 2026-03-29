@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
+from heron.agents.system_agent import SystemAgent
 from heron.core.observation import Observation
 
 from case_studies.power.ev_public_charging_case.agents import ChargingSlot, StationCoordinator
@@ -42,17 +43,30 @@ def create_charging_env(config: Dict[str, Any] = None) -> ChargingEnv:
     dt = config.get("dt", 300.0)
     episode_length = config.get("episode_length", 86400.0)
 
-    coordinators: List[StationCoordinator] = []
+    all_agents = []
+    hierarchy = {}
+    coordinator_ids = []
+
+    system = SystemAgent()
+    all_agents.append(system)
+
     for i in range(num_stations):
         s_id = f"station_{i}"
-        slots = {
-            f"{s_id}_slot_{j}": ChargingSlot(agent_id=f"{s_id}_slot_{j}", p_max_kw=150.0)
+        coordinator_ids.append(s_id)
+        slot_agents = [
+            ChargingSlot(agent_id=f"{s_id}_slot_{j}", p_max_kw=150.0)
             for j in range(num_chargers)
-        }
-        coordinators.append(StationCoordinator(agent_id=s_id, subordinates=slots))
+        ]
+        coordinator = StationCoordinator(agent_id=s_id)
+        all_agents.append(coordinator)
+        all_agents.extend(slot_agents)
+        hierarchy[s_id] = [s.agent_id for s in slot_agents]
+
+    hierarchy["system_agent"] = coordinator_ids
 
     return ChargingEnv(
-        coordinator_agents=coordinators,
+        agents=all_agents,
+        hierarchy=hierarchy,
         arrival_rate=arrival_rate,
         dt=dt,
         episode_length=episode_length,

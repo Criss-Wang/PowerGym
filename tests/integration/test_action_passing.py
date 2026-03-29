@@ -215,8 +215,8 @@ class EnvState:
 class ActionPassingEnv(BaseEnv):
     """Environment for testing action passing through protocols."""
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, agents, hierarchy, **kwargs):
+        super().__init__(agents=agents, hierarchy=hierarchy, **kwargs)
 
     def run_simulation(self, env_state: EnvState, *args, **kwargs) -> EnvState:
         """Physics simulation - clip power values to valid range."""
@@ -590,14 +590,12 @@ from heron.protocols.vertical import VerticalProtocol
 vertical_protocol = VerticalProtocol()
 coordinator = ZoneCoordinator(
     agent_id="coordinator",
-    subordinates={"device_1": device_1, "device_2": device_2},
     schedule_config=coordinator_schedule_config,
     protocol=vertical_protocol,
 )
 
 system = GridSystem(
     agent_id="system_agent",
-    subordinates={"coordinator": coordinator},
     schedule_config=system_schedule_config,
 )
 
@@ -613,7 +611,11 @@ message_broker_config = {
 }
 
 env = ActionPassingEnv(
-    system_agent=system,
+    agents=[system, coordinator, device_1, device_2],
+    hierarchy={
+        "system_agent": ["coordinator"],
+        "coordinator": ["device_1", "device_2"],
+    },
     scheduler_config=scheduler_config,
     message_broker_config=message_broker_config,
     simulation_wait_interval=0.01,

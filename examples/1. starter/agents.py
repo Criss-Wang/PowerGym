@@ -55,7 +55,7 @@ class TransportCoordinator(CoordinatorAgent):
     VerticalProtocol splits this into per-drone 1D actions.
     """
 
-    def __init__(self, agent_id, subordinates, features=None, **kwargs):
+    def __init__(self, agent_id, features=None, subordinates=None, **kwargs):
         default_features = [FleetSafetyFeature()]
         all_features = (features or []) + default_features
 

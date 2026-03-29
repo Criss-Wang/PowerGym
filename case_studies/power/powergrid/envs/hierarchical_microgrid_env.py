@@ -12,7 +12,7 @@ import pandapower as pp
 
 from heron.envs.base import BaseEnv
 from heron.agents.base import AgentID, Agent
-from heron.agents.system_agent import SystemAgent, SYSTEM_AGENT_ID
+from heron.agents.system_agent import SYSTEM_AGENT_ID
 from powergrid.envs.common import EnvState
 from powergrid.agents import (
     PowerGridAgent,
@@ -33,7 +33,8 @@ class HierarchicalMicrogridEnv(BaseEnv):
 
     def __init__(
         self,
-        system_agent: SystemAgent,  # REQUIRED: Always pass pre-initialized system agent
+        agents: list,
+        hierarchy: Dict[str, list],
         dataset_path: str,
         episode_steps: int = 24,
         dt: float = 1.0,
@@ -42,7 +43,8 @@ class HierarchicalMicrogridEnv(BaseEnv):
         """Initialize hierarchical microgrid environment.
 
         Args:
-            system_agent: Pre-initialized SystemAgent with agent hierarchy
+            agents: Flat list of all agents (SystemAgent, coordinators, field agents)
+            hierarchy: Parent->children adjacency dict
             dataset_path: Path to dataset file
             episode_steps: Episode length in time steps (default: 24)
             dt: Time step duration in hours (default: 1.0)
@@ -54,7 +56,10 @@ class HierarchicalMicrogridEnv(BaseEnv):
         """
         self.episode_steps = episode_steps
         self.dt = dt
-        self.num_microgrids = len(system_agent.subordinates)
+        # Count coordinators from hierarchy (children of the system agent root)
+        root_ids = [aid for aid in hierarchy if aid not in
+                    [c for children in hierarchy.values() for c in children]]
+        self.num_microgrids = len(hierarchy.get(root_ids[0], [])) if root_ids else 0
 
         # Load dataset
         self._dataset = load_dataset(dataset_path)
@@ -70,7 +75,8 @@ class HierarchicalMicrogridEnv(BaseEnv):
 
         # Call parent init (registers agents)
         super().__init__(
-            system_agent=system_agent,
+            agents=agents,
+            hierarchy=hierarchy,
             **kwargs,
         )
 

@@ -42,7 +42,7 @@ class PowerGridAgent(CoordinatorAgent):
     def __init__(
         self,
         agent_id: AgentID,
-        subordinates: DictType[AgentID, DeviceAgent],
+        subordinates: Optional[DictType[AgentID, DeviceAgent]] = None,
         features: Optional[List[Feature]] = None,
         upstream_id: Optional[AgentID] = None,
         env_id: Optional[str] = None,
@@ -54,7 +54,7 @@ class PowerGridAgent(CoordinatorAgent):
 
         Args:
             agent_id: Unique identifier
-            subordinates: Pre-initialized device agents (REQUIRED)
+            subordinates: Device agents (optional, wired by BaseEnv hierarchy)
             features: Coordinator-level features
             upstream_id: Parent agent ID
             env_id: Environment ID
@@ -62,11 +62,6 @@ class PowerGridAgent(CoordinatorAgent):
             policy: Coordinator policy
             protocol: Coordination protocol
         """
-        if not subordinates:
-            raise ValueError(
-                "PowerGridAgent requires subordinates. "
-                "Create device agents externally and pass as subordinates dict."
-            )
 
         # For caching cost/safety (can be overridden externally)
         self._cost: Optional[float] = None

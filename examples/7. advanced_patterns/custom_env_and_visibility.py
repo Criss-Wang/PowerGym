@@ -27,6 +27,7 @@ import numpy as np
 
 from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
+from heron.agents.system_agent import SystemAgent
 from heron.core.action import Action
 from heron.core.feature import Feature
 from heron.core.state import FieldAgentState
@@ -268,13 +269,15 @@ class MicrogridEnv(BaseEnv):
 
     def __init__(
         self,
+        agents: list,
+        hierarchy: dict,
         irradiance_profile: Optional[List[float]] = None,
         **kwargs: Any,
     ) -> None:
         self._irradiance_profile = irradiance_profile or [0.8, 0.9, 1.0, 0.7, 0.5]
         self._step_count = 0
         self._current_irradiance = 1.0
-        super().__init__(**kwargs)
+        super().__init__(agents=agents, hierarchy=hierarchy, **kwargs)
 
     def pre_step(self) -> None:
         """Update irradiance from profile before each step.
@@ -382,11 +385,15 @@ def demo_custom_env():
 
     coordinator = CoordinatorAgent(
         agent_id="grid_op",
-        subordinates={"solar_1": solar, "battery_1": battery},
     )
+    system = SystemAgent()
 
     env = MicrogridEnv(
-        coordinator_agents=[coordinator],
+        agents=[system, coordinator, solar, battery],
+        hierarchy={
+            "system_agent": ["grid_op"],
+            "grid_op": ["solar_1", "battery_1"],
+        },
         irradiance_profile=[0.8, 0.9, 1.0, 0.7, 0.5],
         env_id="microgrid_demo",
     )

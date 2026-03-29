@@ -32,7 +32,8 @@ class StationCoordinator(CoordinatorAgent):
     def __init__(
         self,
         agent_id: AgentID,
-        subordinates: Dict[AgentID, ChargingSlot],
+        subordinates: Optional[Dict[AgentID, ChargingSlot]] = None,
+        num_chargers: int = 5,
         features: Optional[List[Feature]] = None,
         upstream_id: Optional[AgentID] = None,
         env_id: Optional[str] = None,
@@ -40,14 +41,11 @@ class StationCoordinator(CoordinatorAgent):
         policy: Optional[Policy] = None,
         protocol: Optional[Protocol] = None,
     ):
-        if not subordinates:
-            raise ValueError(
-                "StationCoordinator requires subordinates (ChargingSlot agents). "
-                "Create slots externally and pass as subordinates dict."
-            )
+        # Determine charger count from subordinates if provided, else from num_chargers
+        n_chargers = len(subordinates) if subordinates else num_chargers
 
         default_features = [
-            ChargingStationFeature(max_chargers=len(subordinates), open_chargers=len(subordinates)),
+            ChargingStationFeature(max_chargers=n_chargers, open_chargers=n_chargers),
             MarketFeature(),
             RegulationFeature()
         ]

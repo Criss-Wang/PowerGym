@@ -26,7 +26,7 @@ import numpy as np
 
 from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
-from heron.agents.system_agent import build_system_agent
+from heron.agents.system_agent import SystemAgent
 from heron.core.action import Action
 from heron.core.feature import Feature
 from heron.core.policies import Policy, obs_to_vector, vector_to_action
@@ -131,12 +131,14 @@ def build_env_step_based():
     """Build env for step-based mode (no tick config needed)."""
     thermo_a = Thermostat(agent_id="room_a", features=[RoomTempFeature()])
     thermo_b = Thermostat(agent_id="room_b", features=[RoomTempFeature()])
-    coordinator = CoordinatorAgent(
-        agent_id="building",
-        subordinates={"room_a": thermo_a, "room_b": thermo_b},
-    )
+    coordinator = CoordinatorAgent(agent_id="building")
+    system = SystemAgent()
     return DefaultHeronEnv(
-        coordinator_agents=[coordinator],
+        agents=[system, coordinator, thermo_a, thermo_b],
+        hierarchy={
+            "system_agent": ["building"],
+            "building": ["room_a", "room_b"],
+        },
         simulation_func=thermostat_simulation,
         env_id="thermostat_step",
     )
@@ -199,12 +201,15 @@ def build_env_event_driven():
     )
     coordinator = CoordinatorAgent(
         agent_id="building",
-        subordinates={"room_a": thermo_a, "room_b": thermo_b},
         schedule_config=coord_tick,
     )
-    system_agent = build_system_agent([coordinator], schedule_config=system_tick)
+    system_agent = SystemAgent(schedule_config=system_tick)
     return DefaultHeronEnv(
-        system_agent=system_agent,
+        agents=[system_agent, coordinator, thermo_a, thermo_b],
+        hierarchy={
+            "system_agent": ["building"],
+            "building": ["room_a", "room_b"],
+        },
         simulation_func=thermostat_simulation,
         env_id="thermostat_event",
     )
