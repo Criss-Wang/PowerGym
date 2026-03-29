@@ -37,7 +37,7 @@ class Feature(metaclass=FeatureMeta):
             value: float = 0.0
     """
 
-    visibility: ClassVar[Sequence[str]]
+    visibility: ClassVar[Sequence[str]] = ("owner",)
     _class_feature_name: ClassVar[str]  # Class-level default name
     _instance_feature_name: str = None  # Instance-level override (set via set_feature_name)
 
