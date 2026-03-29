@@ -11,21 +11,15 @@ This module provides pub/sub messaging:
 from heron.messaging.messages import (
     Message,
     MessageType,
-    MessageTypeRegistry,
 )
 from heron.messaging.broker_base import MessageBroker
-from heron.messaging.channels import (
-    ChannelRegistry,
-    ChannelManager,
-)
+from heron.messaging.channels import ChannelManager
 from heron.messaging.in_memory_broker import InMemoryBroker
 
 __all__ = [
     "Message",
     "MessageType",
-    "MessageTypeRegistry",
     "MessageBroker",
     "InMemoryBroker",
-    "ChannelRegistry",
     "ChannelManager",
 ]

@@ -1,45 +1,10 @@
 """Channel management for agent communication.
 
-This module provides channel naming conventions and registry for organizing
+This module provides channel naming conventions for organizing
 message-based communication between agents.
 """
 
 from typing import Dict, List, Optional
-
-
-class ChannelRegistry:
-    """Registry for domain-specific channel types.
-
-    Allows domains to document their custom channel types.
-
-    Example:
-        # In domain initialization
-        ChannelRegistry.register("simulation", "Simulation results from environment")
-
-        # When creating a channel
-        channel = ChannelManager.custom_channel("simulation", env_id, agent_id)
-    """
-    _registered_types: Dict[str, str] = {}
-
-    @classmethod
-    def register(cls, channel_type: str, description: str = "") -> None:
-        """Register a domain-specific channel type.
-
-        Args:
-            channel_type: Unique identifier for the channel type
-            description: Description of the channel's purpose
-        """
-        cls._registered_types[channel_type] = description
-
-    @classmethod
-    def is_registered(cls, channel_type: str) -> bool:
-        """Check if a channel type is registered."""
-        return channel_type in cls._registered_types
-
-    @classmethod
-    def get_all(cls) -> Dict[str, str]:
-        """Get all registered channel types."""
-        return cls._registered_types.copy()
 
 
 class ChannelManager:
@@ -150,7 +115,11 @@ class ChannelManager:
         """Generate a custom channel for domain-specific communication.
 
         This is a generic method for domains to create their own channel types.
-        The channel_type should be registered via ChannelRegistry for documentation.
+
+        .. note::
+            TODO: When domains start using custom channels in practice,
+            re-introduce ChannelRegistry to catalog and validate channel types,
+            with optional enforcement via an ``is_registered()`` check here.
 
         Args:
             channel_type: Domain-specific channel type identifier
