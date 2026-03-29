@@ -71,10 +71,10 @@ class Proxy(Agent):
     # managing the proxy's functionality (e.g. state cache, visibility rules, etc.)
     # ============================================
     def init_state(self, features: List[Feature] = []) -> None:
-        pass
+        return None
 
     def init_action(self, features: List[Feature] = []) -> None:
-        pass
+        return None
 
     def set_state(self, *args, **kwargs) -> None:
         pass
