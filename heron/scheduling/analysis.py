@@ -4,6 +4,7 @@ This module provides tools for analyzing events during simulation and
 collecting episode-level statistics, with focus on state and action tracking.
 """
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -13,6 +14,8 @@ from heron.agents.constants import (
     MSG_GET_LOCAL_STATE_RESPONSE,
 )
 from heron.scheduling.event import Event, EventType
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -154,9 +157,9 @@ class EpisodeAnalyzer:
         )
 
         if self.verbose and message_type:
-            print(f"[EpisodeAnalyzer] {analysis}")
+            logger.info(f"{analysis}")
             if data_summary:
-                print(f"  Data: {data_summary}")
+                logger.info(f"  Data: {data_summary}")
 
         return analysis
 

@@ -1,3 +1,4 @@
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
@@ -14,6 +15,8 @@ from heron.scheduling import EventScheduler, Event, EpisodeAnalyzer, EpisodeStat
 from heron.agents.system_agent import SystemAgent
 from heron.agents.proxy_agent import Proxy
 from heron.agents.constants import SYSTEM_AGENT_ID, PROXY_AGENT_ID
+
+logger = logging.getLogger(__name__)
 
 
 class BaseEnv(ABC):
@@ -69,7 +72,7 @@ class BaseEnv(ABC):
         if system_agent:
             self._system_agent = system_agent
         else:
-            print("No system agent provided, using default system agent")
+            logger.info("No system agent provided, using default system agent")
             self._system_agent = SystemAgent(
                 agent_id=SYSTEM_AGENT_ID,
                 subordinates={agent.agent_id: agent for agent in coordinator_agents},
