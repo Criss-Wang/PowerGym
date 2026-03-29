@@ -100,7 +100,7 @@ class Agent(ABC):
         return subordinates
 
     @abstractmethod
-    def init_state(self, features: List[Feature] = []) -> State:
+    def init_state(self, features: List[Feature] = []) -> Optional[State]:
         """Initialize the agent's State object from the given features.
 
         Args:
@@ -109,7 +109,7 @@ class Agent(ABC):
         pass
 
     @abstractmethod
-    def init_action(self, features: List[Feature] = []) -> Action:
+    def init_action(self, features: List[Feature] = []) -> Optional[Action]:
         """Initialize the agent's Action object.
 
         Args:
