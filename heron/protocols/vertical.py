@@ -4,6 +4,7 @@ Vertical protocols handle Parent -> Subordinate coordination.
 Each agent owns its own vertical protocol to coordinate its subordinates.
 """
 
+import copy
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -78,7 +79,7 @@ class VectorDecompositionActionProtocol(ActionProtocol):
         # Use stored action dimensions (registered at setup time)
         if not self._subordinate_action_dims:
             # No dimension info - distribute same action to all
-            return {sub_id: coordinator_action for sub_id in info_for_subordinates}
+            return {sub_id: copy.copy(coordinator_action) for sub_id in info_for_subordinates}
 
         # Extract action vector
         if hasattr(coordinator_action, 'as_array'):
@@ -136,7 +137,7 @@ class BroadcastActionProtocol(ActionProtocol):
     ) -> Dict[AgentID, Any]:
         if coordinator_action is None or info_for_subordinates is None:
             return {sub_id: None for sub_id in (info_for_subordinates or {})}
-        return {sub_id: coordinator_action for sub_id in info_for_subordinates}
+        return {sub_id: copy.copy(coordinator_action) for sub_id in info_for_subordinates}
 
 
 class VerticalProtocol(Protocol):
