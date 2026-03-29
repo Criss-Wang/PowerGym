@@ -36,8 +36,8 @@ from heron.agents.system_agent import SystemAgent
 from heron.agents.proxy_agent import Proxy
 
 # Environments
-from heron.envs.base import BaseEnv, HeronEnv
-from heron.envs.simple import SimpleEnv
+from heron.envs.base import BaseEnv
+from heron.envs.simple import DefaultHeronEnv
 from heron.envs.builder import EnvBuilder
 
 # Protocols
@@ -77,8 +77,7 @@ __all__ = [
     "Proxy",
     # Environments
     "BaseEnv",
-    "HeronEnv",
-    "SimpleEnv",
+    "DefaultHeronEnv",
     "EnvBuilder",
     # Protocols
     "Protocol",

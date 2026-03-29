@@ -23,7 +23,7 @@ from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.agents.system_agent import SystemAgent
 from heron.core.feature import Feature
 from heron.core.action import Action
-from heron.envs.base import HeronEnv
+from heron.envs.base import BaseEnv
 from heron.protocols.vertical import VerticalProtocol
 from heron.adaptors.rllib import RLlibBasedHeronEnv
 
@@ -101,7 +101,7 @@ class EnvState:
         self.device_powers = device_powers or {"device_1": 0.0, "device_2": 0.0}
 
 
-class ActionPassingEnv(HeronEnv):
+class ActionPassingEnv(BaseEnv):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 

@@ -1,14 +1,14 @@
-"""Custom HeronEnv and Feature Visibility.
+"""Custom BaseEnv and Feature Visibility.
 
 HERON supports:
   - Feature visibility: "public", "owner", "system", "upper_level"
-  - Custom HeronEnv subclasses with domain-specific simulation logic
+  - Custom BaseEnv subclasses with domain-specific simulation logic
   - State.observed_by() for visibility-filtered observation
 
 This script demonstrates:
 1. Visibility modes -- what each level can see
 2. State.observed_by() -- automatic filtering
-3. Custom HeronEnv -- subclassing with abstract method overrides
+3. Custom BaseEnv -- subclassing with abstract method overrides
 4. pre_step() hook -- per-step environment setup
 5. End-to-end run -- custom env with visibility in action
 
@@ -30,7 +30,7 @@ from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.core.action import Action
 from heron.core.feature import Feature
 from heron.core.state import FieldAgentState
-from heron.envs.base import HeronEnv
+from heron.envs.base import BaseEnv
 from heron.agents.constants import FIELD_LEVEL, COORDINATOR_LEVEL, SYSTEM_LEVEL
 
 
@@ -172,7 +172,7 @@ def demo_observed_by():
 
 
 # ---------------------------------------------------------------------------
-# 3. Custom HeronEnv subclass
+# 3. Custom BaseEnv subclass
 # ---------------------------------------------------------------------------
 
 @dataclass(slots=True)
@@ -255,10 +255,10 @@ class BatteryAgent(FieldAgent):
         return -abs(soc - 0.5)  # keep SoC near 50%
 
 
-class MicrogridEnv(HeronEnv):
-    """Custom HeronEnv for a microgrid with irradiance profiles.
+class MicrogridEnv(BaseEnv):
+    """Custom BaseEnv for a microgrid with irradiance profiles.
 
-    Demonstrates the three abstract methods every HeronEnv must implement:
+    Demonstrates the three abstract methods every BaseEnv must implement:
       - run_simulation(env_state)
       - global_state_to_env_state(global_state)
       - env_state_to_global_state(env_state)
@@ -360,10 +360,10 @@ class MicrogridEnv(HeronEnv):
 def demo_custom_env():
     """Build and run the custom MicrogridEnv."""
     print("\n" + "=" * 60)
-    print("Part 3: Custom HeronEnv Subclass")
+    print("Part 3: Custom BaseEnv Subclass")
     print("=" * 60)
     print("""
-  HeronEnv requires three abstract methods:
+  BaseEnv requires three abstract methods:
     run_simulation(env_state)          -- domain physics
     global_state_to_env_state(gs)      -- HERON state -> your format
     env_state_to_global_state(es)      -- your format -> HERON state
@@ -501,9 +501,9 @@ def main():
     "upper_level"  visible to agents one level above the owner
     Combined:      ["owner", "upper_level"] -- visible to owner + supervisor
 
-  Custom HeronEnv:
+  Custom BaseEnv:
 
-    class MyEnv(HeronEnv):
+    class MyEnv(BaseEnv):
         def run_simulation(self, env_state):         # domain physics
         def global_state_to_env_state(self, gs):     # HERON -> your format
         def env_state_to_global_state(self, es):     # your format -> HERON

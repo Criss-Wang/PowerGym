@@ -60,8 +60,8 @@ SystemAgent (L3)
 
 #### Environment
 
-**`ChargingEnv`** (HeronEnv)
-- Extends HERON's `HeronEnv` base class
+**`ChargingEnv`** (BaseEnv)
+- Extends HERON's `BaseEnv` base class
 - Manages multi-station simulation with shared state
 - **Responsibilities:**
   - EV arrivals: Poisson process at configurable rate
@@ -283,7 +283,7 @@ ev_public_charging_case/
 │
 ├── envs/
 │   ├── __init__.py
-│   ├── charging_env.py          # Main HERON HeronEnv implementation
+│   ├── charging_env.py          # Main HERON BaseEnv implementation
 │   ├── common.py                # SlotState, EnvState dataclasses
 │   ├── market_scenario.py       # Market price simulation (LMP)
 │   └── regulation_scenario.py   # Frequency regulation signals

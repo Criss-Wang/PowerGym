@@ -33,7 +33,7 @@ def create_charging_env(config: Dict[str, Any] = None) -> ChargingEnv:
         config: Dict with keys: num_stations, num_chargers, arrival_rate, dt, episode_length
 
     Returns:
-        Fully initialized ChargingEnv (HERON HeronEnv)
+        Fully initialized ChargingEnv (HERON BaseEnv)
     """
     config = config or {}
     num_stations = config.get("num_stations", 2)
@@ -185,7 +185,7 @@ def train_simple(
 def train_rllib(num_iterations: int = 50):
     """Train with Ray RLlib PPO via the HERON RLlibBasedHeronEnv.
 
-    The RLlibBasedHeronEnv wraps the HERON HeronEnv and handles:
+    The RLlibBasedHeronEnv wraps the HERON BaseEnv and handles:
     - Observation vectorization (Observation -> np.ndarray)
     - __all__ injection in terminated/truncated
     - max_steps truncation

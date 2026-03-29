@@ -7,7 +7,7 @@ Mixed action spaces, custom environments, and feature visibility.
 | File | Topics |
 |------|--------|
 | `mixed_action_spaces.py` | Continuous, discrete, and hybrid actions; gym space conversion; scale/unscale; heterogeneous agents |
-| `custom_env_and_visibility.py` | Feature visibility modes; `State.observed_by()` filtering; custom `HeronEnv` subclass; `pre_step()` hook |
+| `custom_env_and_visibility.py` | Feature visibility modes; `State.observed_by()` filtering; custom `BaseEnv` subclass; `pre_step()` hook |
 
 ## Key Concepts
 
@@ -31,10 +31,10 @@ Mixed        set_specs(dim_c=2, dim_d=1, ncats=[3]) -> Dict(c=Box, d=Discrete)
 
 Modes combine: `["owner", "upper_level"]` means owner + supervisor.
 
-### Custom HeronEnv
+### Custom BaseEnv
 
 ```python
-class MyEnv(HeronEnv):
+class MyEnv(BaseEnv):
     def run_simulation(self, env_state):         # domain physics
     def global_state_to_env_state(self, gs):     # HERON internal -> your format
     def env_state_to_global_state(self, es):     # your format -> HERON internal

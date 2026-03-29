@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 import pandapower as pp
 
-from heron.envs.base import HeronEnv
+from heron.envs.base import BaseEnv
 from heron.agents.base import AgentID, Agent
 from heron.agents.system_agent import SystemAgent, SYSTEM_AGENT_ID
 from powergrid.envs.common import EnvState
@@ -23,7 +23,7 @@ from powergrid.agents import (
 from powergrid.utils.loader import load_dataset
 
 
-class HierarchicalMicrogridEnv(HeronEnv):
+class HierarchicalMicrogridEnv(BaseEnv):
     """Hierarchical multi-agent environment for networked microgrids.
 
     This environment supports CTDE (Centralized Training with Decentralized Execution):
@@ -46,7 +46,7 @@ class HierarchicalMicrogridEnv(HeronEnv):
             dataset_path: Path to dataset file
             episode_steps: Episode length in time steps (default: 24)
             dt: Time step duration in hours (default: 1.0)
-            **kwargs: Additional arguments for HeronEnv
+            **kwargs: Additional arguments for BaseEnv
 
         Note:
             Rewards are computed by individual agents via compute_local_reward().

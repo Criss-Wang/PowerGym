@@ -6,9 +6,9 @@ Pick the one that matches your complexity:
 
 | Approach | When to use | Boilerplate |
 |----------|-------------|-------------|
-| **SimpleEnv** | Your simulation is a `dict -> dict` function | Minimal |
+| **DefaultHeronEnv** | Your simulation is a `dict -> dict` function | Minimal |
 | **EnvBuilder** | You want batch agent creation, coordinator assignment, auto-coordinators | Low |
-| **Custom HeronEnv** | You need a custom state object or non-trivial state bridge | Full control |
+| **Custom BaseEnv** | You need a custom state object or non-trivial state bridge | Full control |
 
 ## Quick Start
 
@@ -24,9 +24,9 @@ python custom_heron_env.py         # ~5 sec
 
 ```
 3. building_environments/
-├── simple_env_quickstart.py   # SimpleEnv with a simulation function
+├── simple_env_quickstart.py   # DefaultHeronEnv with a simulation function
 ├── env_builder_patterns.py    # EnvBuilder fluent API patterns
-├── custom_heron_env.py        # HeronEnv subclass with custom state bridge
+├── custom_heron_env.py        # BaseEnv subclass with custom state bridge
 └── README.md
 ```
 
@@ -36,12 +36,12 @@ python custom_heron_env.py         # ~5 sec
 
 | Concept | What's shown |
 |---------|-------------|
-| `SimpleEnv` | Zero-boilerplate environment from agents + simulation function |
+| `DefaultHeronEnv` | Zero-boilerplate environment from agents + simulation function |
 | Simulation function | `(agent_states: dict) -> dict` with flat `{aid: {feature: {field: val}}}` |
-| Manual agent wiring | Create agents, group under `CoordinatorAgent`, pass to `SimpleEnv` |
+| Manual agent wiring | Create agents, group under `CoordinatorAgent`, pass to `DefaultHeronEnv` |
 | `env.reset()` / `env.step()` | Standard Gymnasium-style interaction loop |
 
-**Key takeaway**: `SimpleEnv` auto-bridges between HERON's internal state and a flat dict your simulation can read/write. You never touch `env_state_to_global_state`.
+**Key takeaway**: `DefaultHeronEnv` auto-bridges between HERON's internal state and a flat dict your simulation can read/write. You never touch `env_state_to_global_state`.
 
 ### env_builder_patterns.py
 
@@ -59,7 +59,7 @@ python custom_heron_env.py         # ~5 sec
 
 | Concept | What's shown |
 |---------|-------------|
-| `HeronEnv` subclass | Full control over the simulation bridge |
+| `BaseEnv` subclass | Full control over the simulation bridge |
 | `global_state_to_env_state()` | Convert HERON's internal dict to your domain object (`WaterSystemState`) |
 | `run_simulation()` | Your physics/domain logic operating on the custom state |
 | `env_state_to_global_state()` | Pack simulation results back into HERON's `{agent_states: ...}` format |
@@ -80,8 +80,8 @@ python custom_heron_env.py         # ~5 sec
                   ┌─────────────┴─────────────┐
                   │                           │
             ┌─────▼─────┐             ┌───────▼──────┐
-            │ SimpleEnv  │             │ Custom       │
-            │ (or        │             │ HeronEnv     │
+            │DefaultHeron│             │ Custom       │
+            │ Env (or    │             │ BaseEnv      │
             │  EnvBuilder│             │ subclass     │
             │  .simulation())          │              │
             └───────────┘             └──────────────┘
@@ -110,7 +110,7 @@ SystemAgent.execute()
 => returns (obs, rewards, terminated, truncated, infos)
 ```
 
-With `SimpleEnv`, steps 2 and 4 are auto-generated. With a custom `HeronEnv` subclass, you implement them yourself.
+With `DefaultHeronEnv`, steps 2 and 4 are auto-generated. With a custom `BaseEnv` subclass, you implement them yourself.
 
 ## Next Steps
 

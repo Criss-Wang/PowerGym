@@ -29,7 +29,7 @@ from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.core.action import Action
 from heron.core.feature import Feature
-from heron.envs.simple import SimpleEnv
+from heron.envs.simple import DefaultHeronEnv
 from heron.protocols.base import (
     Protocol,
     CommunicationProtocol,
@@ -309,7 +309,7 @@ def demo_through_env():
         protocol=protocol,
     )
 
-    env = SimpleEnv(
+    env = DefaultHeronEnv(
         coordinator_agents=[coordinator],
         simulation_func=water_simulation,
         env_id="water_dispatch_demo",

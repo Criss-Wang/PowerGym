@@ -200,9 +200,9 @@ The `MessageBroker` interface can be extended for production systems (Kafka, Red
 HERON environments implement a standard multi-agent environment interface:
 
 ```python
-from heron.envs import HeronEnv
+from heron.envs import BaseEnv
 
-class MyEnv(HeronEnv):
+class MyEnv(BaseEnv):
     def reset(self, seed=None, options=None):
         # Returns (observations, infos)
         pass

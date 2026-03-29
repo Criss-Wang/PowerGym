@@ -1,6 +1,6 @@
-"""SimpleEnv Quickstart -- the fastest way to build a HERON environment.
+"""DefaultHeronEnv Quickstart -- the fastest way to build a HERON environment.
 
-SimpleEnv eliminates boilerplate by auto-bridging between HERON's internal
+DefaultHeronEnv eliminates boilerplate by auto-bridging between HERON's internal
 state format and a flat dict that your simulation function can read/write:
 
     {agent_id: {feature_name: {field: value, ...}, ...}, ...}
@@ -10,7 +10,7 @@ You provide:
   2. A simulation function  (dict -> dict)
   3. A coordinator to group agents
 
-SimpleEnv handles the rest: state serialization, proxy wiring, scheduling.
+DefaultHeronEnv handles the rest: state serialization, proxy wiring, scheduling.
 
 Domain: Two thermostats controlling room temperature.
   - Each thermostat adjusts heating power [-1, 1].
@@ -30,7 +30,7 @@ from heron.agents.field_agent import FieldAgent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.core.action import Action
 from heron.core.feature import Feature
-from heron.envs.simple import SimpleEnv
+from heron.envs.simple import DefaultHeronEnv
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +121,7 @@ def thermostat_simulation(agent_states: dict) -> dict:
 
 def main():
     print("=" * 60)
-    print("SimpleEnv Quickstart: Two-Room Thermostat Control")
+    print("DefaultHeronEnv Quickstart: Two-Room Thermostat Control")
     print("=" * 60)
 
     # Create agents
@@ -142,8 +142,8 @@ def main():
         subordinates={"room_a": thermo_a, "room_b": thermo_b},
     )
 
-    # Build the environment -- no custom HeronEnv subclass needed
-    env = SimpleEnv(
+    # Build the environment -- no custom BaseEnv subclass needed
+    env = DefaultHeronEnv(
         coordinator_agents=[coordinator],
         simulation_func=thermostat_simulation,
         env_id="thermostat_demo",

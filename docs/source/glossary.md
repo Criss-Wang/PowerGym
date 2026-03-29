@@ -175,18 +175,17 @@ Named topic for message routing. Types:
 
 ## Environment
 
-### HeronBaseEnv
-Mixin providing HERON functionality to any environment. Handles:
+### BaseEnv
+Multi-agent environment base class providing HERON functionality. Handles:
 - Agent registration and management
 - Event-driven scheduling
 - Message broker integration
 
-### BaseEnv
-Single-agent Gymnasium-compatible environment.
-
-### HeronEnv
-Multi-agent environment base class. Adapters available for:
+Adapters available for:
 - RLlib (`RLlibMultiAgentEnv`)
+
+### DefaultHeronEnv
+Convenience subclass of `BaseEnv` with sensible defaults for quick prototyping.
 
 ## Event-Driven Scheduling
 

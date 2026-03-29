@@ -32,7 +32,7 @@ from heron.core.action import Action
 from heron.core.feature import Feature
 from heron.core.policies import Policy, obs_to_vector, vector_to_action
 from heron.core.observation import Observation
-from heron.envs.simple import SimpleEnv
+from heron.envs.simple import DefaultHeronEnv
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +176,7 @@ def build_env():
         agent_id="building",
         subordinates={"room_a": thermo_a, "room_b": thermo_b},
     )
-    return SimpleEnv(
+    return DefaultHeronEnv(
         coordinator_agents=[coordinator],
         simulation_func=thermostat_simulation,
         env_id="thermostat_training",

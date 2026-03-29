@@ -144,9 +144,9 @@ broker.publish("control_signals", {"setpoint": 1.0})
 HERON environments implement a standard multi-agent environment interface:
 
 ```python
-from heron.envs import HeronEnv
+from heron.envs import BaseEnv
 
-class MyEnv(HeronEnv):
+class MyEnv(BaseEnv):
     def reset(self, seed=None, options=None):
         # Return (observations, infos)
         pass

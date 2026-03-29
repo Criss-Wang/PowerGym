@@ -19,7 +19,7 @@
 
 ## Prerequisites
 
-- **Level 3**: Building Environments (agents, features, SimpleEnv)
+- **Level 3**: Building Environments (agents, features, DefaultHeronEnv)
 - **Level 5**: Training Algorithms (Policy ABC, decorators)
 
 ## Architecture
