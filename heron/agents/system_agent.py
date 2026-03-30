@@ -173,7 +173,7 @@ class SystemAgent(Agent):
         # Schedule subordinate ticks
         for subordinate_id in self.subordinates:
             scheduler.schedule_agent_tick(subordinate_id)
-        
+
         # schedule simulation
         scheduler.schedule_simulation(self.agent_id, self._simulation_wait_interval)
 
