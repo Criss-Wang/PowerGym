@@ -149,7 +149,7 @@ class SystemAgent(Agent):
         Action phase - equivalent to `self.act`
         - Initiate tick for subordinates
         - Initiate self
-        - Schedule for simulation
+        - Schedule for the next simulation
 
         Note on entire event-driven flow:
         - Schedule Actions
