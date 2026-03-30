@@ -367,6 +367,123 @@ class TestInactiveAgentReward:
         assert rew["slow"] == pytest.approx(-0.09)
 
 
+class TestThreeFieldAgentHeterogeneousTicks:
+    """3 field agents with distinct tick rates under the same coordinator.
+
+    Tick rates: a=2, b=3, c=5.  Over 30 steps the active pattern is:
+        a: 2,4,6,8,10,12,14,16,18,20,22,24,26,28,30
+        b: 3,6,9,12,15,18,21,24,27,30
+        c: 5,10,15,20,25,30
+    Overlap at step 30 (LCM); partial overlaps at 6,10,12,15,18,20,24.
+    """
+
+    @staticmethod
+    def _build_3agent_env(seed=0):
+        agent_a = CountingAgent(
+            agent_id="a",
+            features=[CounterFeature()],
+            schedule_config=ScheduleConfig.deterministic(tick_interval=2.0),
+        )
+        agent_b = CountingAgent(
+            agent_id="b",
+            features=[CounterFeature()],
+            schedule_config=ScheduleConfig.deterministic(tick_interval=3.0),
+        )
+        agent_c = CountingAgent(
+            agent_id="c",
+            features=[CounterFeature()],
+            schedule_config=ScheduleConfig.deterministic(tick_interval=5.0),
+        )
+        coord = SimpleCoordinator(
+            agent_id="coord",
+            subordinates={"a": agent_a, "b": agent_b, "c": agent_c},
+            protocol=VerticalProtocol(),
+        )
+        system = SystemAgent(subordinates={"coord": coord})
+        env = SimpleEnv(system_agent=system)
+        env.reset(seed=seed)
+        return env
+
+    def test_exclusive_active_steps(self):
+        """Steps where exactly one field agent is active."""
+        env = self._build_3agent_env()
+        actions = {"a": np.array([0.2]), "b": np.array([0.3]), "c": np.array([0.5])}
+
+        # Step 2: only a is active
+        env.step(actions)  # step 1: nobody active
+        _, rew, _, _, _ = env.step(actions)  # step 2
+        assert "a" in rew and "b" not in rew and "c" not in rew
+
+        # Step 3: only b is active
+        _, rew, _, _, _ = env.step(actions)  # step 3
+        assert "a" not in rew and "b" in rew and "c" not in rew
+
+    def test_pairwise_overlap_steps(self):
+        """Steps where exactly two field agents are active."""
+        env = self._build_3agent_env()
+        actions = {"a": np.array([0.2]), "b": np.array([0.3]), "c": np.array([0.5])}
+
+        # Run to step 10: a (tick=2) and c (tick=5) both active, b (tick=3) inactive
+        for _ in range(10):
+            _, rew, _, _, _ = env.step(actions)
+
+        # Step 10: a active (10%2==0), c active (10%5==0), b inactive (10%3!=0)
+        assert "a" in rew and "c" in rew and "b" not in rew
+
+    def test_all_active_at_lcm(self):
+        """At step 30 (LCM of 2,3,5), all three field agents are active."""
+        env = self._build_3agent_env()
+        actions = {"a": np.array([0.2]), "b": np.array([0.3]), "c": np.array([0.5])}
+
+        for _ in range(30):
+            _, rew, _, _, _ = env.step(actions)
+
+        # Step 30: all active
+        assert "a" in rew and "b" in rew and "c" in rew
+        assert rew["a"] == pytest.approx(-(0.2 ** 2))
+        assert rew["b"] == pytest.approx(-(0.3 ** 2))
+        assert rew["c"] == pytest.approx(-(0.5 ** 2))
+
+    def test_no_field_agent_active(self):
+        """Step 1: no field agent is active (2,3,5 all > 1)."""
+        env = self._build_3agent_env()
+        actions = {"a": np.array([0.2]), "b": np.array([0.3]), "c": np.array([0.5])}
+
+        _, rew, _, _, _ = env.step(actions)  # step 1
+        assert "a" not in rew and "b" not in rew and "c" not in rew
+
+    def test_full_30_step_reward_pattern(self):
+        """Validate the complete active/reward pattern over 30 steps."""
+        env = self._build_3agent_env()
+        actions = {"a": np.array([0.2]), "b": np.array([0.3]), "c": np.array([0.5])}
+
+        for step in range(1, 31):
+            _, rew, _, _, _ = env.step(actions)
+
+            expect_a = (step % 2 == 0)
+            expect_b = (step % 3 == 0)
+            expect_c = (step % 5 == 0)
+
+            assert ("a" in rew) == expect_a, f"step {step}: a expected {'in' if expect_a else 'not in'} rew"
+            assert ("b" in rew) == expect_b, f"step {step}: b expected {'in' if expect_b else 'not in'} rew"
+            assert ("c" in rew) == expect_c, f"step {step}: c expected {'in' if expect_c else 'not in'} rew"
+
+    def test_apply_action_counts_match_activity(self):
+        """After 30 steps, apply_action counts should match number of active steps."""
+        env = self._build_3agent_env()
+        actions = {"a": np.array([0.2]), "b": np.array([0.3]), "c": np.array([0.5])}
+
+        for _ in range(30):
+            env.step(actions)
+
+        # a: active at 2,4,...,30 → 15 times
+        assert env.registered_agents["a"].state.features["CounterFeature"].apply_count == 15.0
+        # b: active at 3,6,...,30 → 10 times
+        assert env.registered_agents["b"].state.features["CounterFeature"].apply_count == 10.0
+        # c: active at 5,10,...,30 → 6 times
+        assert env.registered_agents["c"].state.features["CounterFeature"].apply_count == 6.0
+
+
 class TestBackwardCompatibility:
     """Ensure homogeneous tick rates produce identical behavior to before."""
 
