@@ -9,6 +9,7 @@ from heron.utils.typing import AgentID
 from heron.scheduling.schedule_config import ScheduleConfig
 from heron.agents.constants import SYSTEM_AGENT_ID
 
+_DEFAULT_SIMULATION_DELAY = 0.0
 
 class EventScheduler:
     def __init__(self, start_time: float = 0.0):
@@ -169,6 +170,9 @@ class EventScheduler:
         delay: Optional[float] = None,
     ):
         # TODO: enable lower-hierarchy agents to schedule simulation-level events (e.g. for environment dynamics) without exposing full scheduler API - may require additional checks or new event types to prevent abuse
+        if delay is None:
+            delay = _DEFAULT_SIMULATION_DELAY
+
         self.schedule(
             Event(
                 timestamp=self.current_time + delay,
