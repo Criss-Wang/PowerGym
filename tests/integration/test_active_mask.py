@@ -303,6 +303,70 @@ class TestActionMask:
         assert "action_mask" not in info.get("slow", {})
 
 
+class TestInactiveAgentReward:
+    """Test that inactive agents are excluded from the rewards dict entirely."""
+
+    def test_inactive_agent_excluded_from_rewards(self):
+        """Inactive agent should not appear in the rewards dict at all."""
+        env = _build_and_reset(fast_tick=1.0, slow_tick=3.0)
+
+        # Step 1: fast acts with value 0.5, slow is inactive
+        actions = {"fast": np.array([0.5]), "slow": np.array([-0.3])}
+        _, rew, _, _, _ = env.step(actions)
+
+        # fast is active and set value=0.5 → reward = -(0.5)^2 = -0.25
+        assert rew["fast"] == pytest.approx(-0.25)
+        # slow is inactive → not in rewards dict
+        assert "slow" not in rew
+
+    def test_active_agent_reward_is_computed(self):
+        """When slow becomes active at step 3, its reward should be computed."""
+        env = _build_and_reset(fast_tick=1.0, slow_tick=3.0)
+
+        # Steps 1-2: slow inactive
+        for _ in range(2):
+            env.step({"fast": np.array([0.1]), "slow": np.array([0.4])})
+
+        # Step 3: both active, slow applies action 0.4
+        _, rew, _, _, _ = env.step({"fast": np.array([0.1]), "slow": np.array([0.4])})
+
+        # slow is active at step 3, applied value=0.4 → reward = -(0.4)^2 = -0.16
+        assert "slow" in rew
+        assert rew["slow"] == pytest.approx(-0.16)
+        # fast reward also computed normally
+        assert rew["fast"] == pytest.approx(-0.01)
+
+    def test_reward_presence_over_multiple_steps(self):
+        """Verify inactive steps exclude agent, active steps include it."""
+        env = _build_and_reset(fast_tick=1.0, slow_tick=3.0)
+
+        slow_present = []
+        slow_rewards = []
+        for step in range(1, 7):
+            _, rew, _, _, _ = env.step({"fast": np.array([0.1]), "slow": np.array([0.2])})
+            slow_present.append("slow" in rew)
+            slow_rewards.append(rew.get("slow"))
+
+        # slow active at steps 3, 6 (period=3, 1-indexed, step % 3 == 0)
+        assert slow_present == [False, False, True, False, False, True]
+        assert slow_rewards[0] is None  # step 1: absent
+        assert slow_rewards[1] is None  # step 2: absent
+        assert slow_rewards[2] == pytest.approx(-0.04)  # step 3
+        assert slow_rewards[3] is None  # step 4: absent
+        assert slow_rewards[4] is None  # step 5: absent
+        assert slow_rewards[5] == pytest.approx(-0.04)  # step 6
+
+    def test_homogeneous_rewards_unchanged(self):
+        """When all agents have same tick, rewards should always be computed."""
+        env = _build_and_reset(fast_tick=1.0, slow_tick=1.0)
+
+        actions = {"fast": np.array([0.5]), "slow": np.array([0.3])}
+        _, rew, _, _, _ = env.step(actions)
+
+        assert rew["fast"] == pytest.approx(-0.25)
+        assert rew["slow"] == pytest.approx(-0.09)
+
+
 class TestBackwardCompatibility:
     """Ensure homogeneous tick rates produce identical behavior to before."""
 

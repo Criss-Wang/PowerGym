@@ -212,25 +212,34 @@ class Agent(ABC):
         """Compute rewards for this agent and all subordinates.
 
         Retrieves local state from proxy and delegates to compute_local_reward().
+        Inactive agents (determined by ``is_active_at``) are excluded from the
+        returned dict entirely — no reward is computed or attributed because
+        they did not act at this timestep.
+
+        Subordinate traversal always proceeds regardless of this agent's
+        activity, because an inactive parent (e.g. a slow-ticking coordinator)
+        may have active children (e.g. fast-ticking field agents).
 
         Args:
             proxy: Proxy for state retrieval
 
         Returns:
-            Dict mapping agent IDs to scalar rewards
+            Dict mapping active agent IDs to scalar rewards
         """
         if not proxy:
             raise ValueError("Agent requires a proxy agent to compute rewards")
 
-        # Local Reward computation steps:
-        # 1. get local states from proxy
-        # 2. collect reward params (e.g. safety, cost)
-        # 3. calculate reward
-        local_state = proxy.get_local_state(self.agent_id, self.protocol)
-        local_reward = self.compute_local_reward(local_state)
-        rewards = {
-            self.agent_id: local_reward,
-        }
+        rewards: Dict[AgentID, float] = {}
+
+        # Only compute reward for this agent if it was active this timestep.
+        # Mirrors the is_active_at gate in handle_self_action — agents that
+        # did not act are not credited for state transitions they did not
+        # influence.
+        if self.is_active_at(int(self._timestep)):
+            local_state = proxy.get_local_state(self.agent_id, self.protocol)
+            rewards[self.agent_id] = self.compute_local_reward(local_state)
+
+        # Always recurse — subordinates may have a different tick rate.
         for subordinate in self.subordinates.values():
             rewards.update(subordinate.compute_rewards(proxy))
         return rewards
