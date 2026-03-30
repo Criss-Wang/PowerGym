@@ -44,6 +44,9 @@ class CounterFeature(Feature):
 class CountingAgent(FieldAgent):
     """Field agent that counts apply_action calls for testing."""
 
+    def set_state(self, *args, **kwargs) -> None:
+        pass
+
     def init_action(self, features: List[Feature] = []):
         action = Action()
         action.set_specs(dim_c=1, range=(np.array([-1.0]), np.array([1.0])))

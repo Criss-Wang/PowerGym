@@ -37,6 +37,9 @@ class DummyAgent(FieldAgent):
         if isinstance(action, np.ndarray):
             self.action.set_values(c=action.flatten()[:1])
 
+    def set_state(self, *args, **kwargs) -> None:
+        self.state.update_features(**kwargs)
+
     def apply_action(self) -> None:
         pass
 

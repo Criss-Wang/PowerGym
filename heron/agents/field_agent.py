@@ -1,5 +1,6 @@
 
 
+from abc import abstractmethod
 from typing import Any, Dict, Optional, List
 
 import numpy as np
@@ -100,30 +101,30 @@ class FieldAgent(Agent):
         """Initialize an empty Action (override to define custom action structure)."""
         return Action()
 
+    @abstractmethod
     def set_state(self, *args, **kwargs) -> None:
-        raise NotImplementedError(
-            "No implementation of set_state found, you need to define how to update state for this agent"
-        )
+        """Define how to update state for this agent."""
+        ...
 
+    @abstractmethod
     def set_action(self, action: Any, *args, **kwargs) -> None:
-        raise NotImplementedError(
-            "No implementation of set_action found, you need to define how to set action for this agent"
-        )
+        """Define how to set action for this agent."""
+        ...
 
     def post_proxy_attach(self, proxy: "Proxy") -> None:
         """Hook for any additional setup after proxy attachment and global state initialization."""
         self.action_space = self.get_action_space()
         self.observation_space = self.get_observation_space(proxy)
 
+    @abstractmethod
     def compute_local_reward(self, local_state: dict) -> float:
-        raise NotImplementedError(
-            "No implementation of compute_local_reward found, you need to define reward computation mechanism for this agent"
-        )
+        """Define reward computation mechanism for this agent."""
+        ...
 
+    @abstractmethod
     def apply_action(self):
-        raise NotImplementedError(
-            "No implementation of apply_action found, you need to define action effect mechanism for this agent"
-        )
+        """Define action effect mechanism for this agent."""
+        ...
 
     def get_action_space(self) -> Space:
         """Get action space based on agent action. [Both Modes]
