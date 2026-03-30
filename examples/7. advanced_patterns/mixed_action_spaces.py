@@ -269,6 +269,9 @@ class TransformerFeature(Feature):
 class Generator(FieldAgent):
     """Generator with mixed action: continuous power + discrete on/off."""
 
+    def set_state(self, *args, **kwargs) -> None:
+        self.state.update_features(**kwargs)
+
     def init_action(self, features: List[Feature] = []) -> Action:
         action = Action()
         action.set_specs(
@@ -306,6 +309,9 @@ class Transformer(FieldAgent):
         action = Action()
         action.set_specs(dim_d=1, ncats=[self._num_taps])  # tap positions 0-10
         return action
+
+    def set_state(self, *args, **kwargs) -> None:
+        self.state.update_features(**kwargs)
 
     def set_action(self, action: Any, *args, **kwargs) -> None:
         self.action.set_values(action)

@@ -201,6 +201,9 @@ class BatteryFeature(Feature):
 class SolarAgent(FieldAgent):
     """Solar farm with mixed-visibility features."""
 
+    def set_state(self, *args, **kwargs) -> None:
+        self.state.update_features(**kwargs)
+
     def init_action(self, features: List[Feature] = []) -> Action:
         action = Action()
         action.set_specs(
@@ -228,6 +231,9 @@ class SolarAgent(FieldAgent):
 
 class BatteryAgent(FieldAgent):
     """Battery with charge/discharge control."""
+
+    def set_state(self, *args, **kwargs) -> None:
+        self.state.update_features(**kwargs)
 
     def init_action(self, features: List[Feature] = []) -> Action:
         action = Action()
