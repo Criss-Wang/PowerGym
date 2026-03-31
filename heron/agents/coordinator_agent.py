@@ -158,7 +158,10 @@ class CoordinatorAgent(Agent):
             self.sync_state_from_observed(local_state)
             self.compute_action(obs, scheduler)
 
-            # R7: cache (obs, action) for deferred reward at physics boundary
+            # R7: cache (obs, action) for deferred reward at physics boundary.
+            # Safe to cache here (unlike FieldAgent) because the coordinator's
+            # action effect is coordination — already dispatched synchronously
+            # in compute_action() above.
             self._cache_obs_action(obs, self.action)
 
             # R3: schedule reactive subordinate ticks after action coordination

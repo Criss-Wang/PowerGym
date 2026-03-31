@@ -210,6 +210,12 @@ class FieldAgent(Agent):
     @Agent.handler("action_effect")
     def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
         self.apply_action()
+
+        # R7: cache (obs, action) only after action has landed on state.
+        if self._pending_obs_queue:
+            obs = self._pending_obs_queue.popleft()
+            self._cache_obs_action(obs, self.action)
+
         scheduler.schedule_message_delivery(
             sender_id=self.agent_id,
             recipient_id=PROXY_AGENT_ID,
@@ -241,8 +247,11 @@ class FieldAgent(Agent):
             self.sync_state_from_observed(local_state)
             self.compute_action(obs, scheduler)
 
-            # R7: cache (obs, action) for deferred reward at physics boundary
-            self._cache_obs_action(obs, self.action)
+            # R7: queue obs for caching at action_effect time (not here).
+            # Caching here would create fake rewards if physics runs before
+            # the action_effect lands.
+            if self.action:
+                self._pending_obs_queue.append(obs)
 
         elif MSG_SET_STATE_COMPLETION in message_content:
             # No-op: proxy acknowledges local state update from action_effect.

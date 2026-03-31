@@ -2,6 +2,7 @@
 
 import logging
 from abc import ABC, abstractmethod
+from collections import deque
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Callable
 
 import gymnasium as gym
@@ -82,6 +83,7 @@ class Agent(ABC):
 
         # Event-driven reward caching (R7: reward only at physics boundaries)
         self._obs_action_cache: list = []  # [(obs, action), ...]
+        self._pending_obs_queue: deque = deque()  # obs waiting for action_effect to land
         self._prev_post_physics_state: Optional[dict] = None
 
         # Message broker reference (set by environment in distributed mode)
@@ -266,6 +268,7 @@ class Agent(ABC):
     def reset(self, *, seed: Optional[int] = None, proxy: Optional["Proxy"] = None, **kwargs) -> Any:
         self._timestep = 0.0
         self._obs_action_cache = []
+        self._pending_obs_queue.clear()
         self._prev_post_physics_state = None
         self.action.reset(**kwargs)  # Reset action to initial values, with optional overrides
         self.state.reset(**kwargs)  # Reset state to initial values, with optional overrides
