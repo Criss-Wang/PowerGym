@@ -163,7 +163,7 @@ class HeronEnvRunner(MultiAgentEnvRunner):
 
             # 4. Store HERON-specific metrics
             total_reward = sum(
-                sum(r for _, r in rewards)
+                sum(entry[1] for entry in rewards)
                 for rewards in reward_history.values()
                 if rewards
             )

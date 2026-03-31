@@ -78,6 +78,11 @@ class Agent(ABC):
 
         # Execution state
         self._timestep: float = 0.0
+        self.is_periodic: bool = False  # Set by SystemAgent._resolve_periodic_agents()
+
+        # Event-driven reward caching (R7: reward only at physics boundaries)
+        self._obs_action_cache: list = []  # [(obs, action), ...]
+        self._prev_post_physics_state: Optional[dict] = None
 
         # Message broker reference (set by environment in distributed mode)
         self._message_broker: Optional[MessageBroker] = None
@@ -132,6 +137,127 @@ class Agent(ABC):
         pass
 
     # ============================================
+    # Periodic / Reactive Scheduling (Event-Driven Mode)
+    # ============================================
+    def resolve_periodic_children(self) -> List[AgentID]:
+        """Resolve which direct children are periodic vs reactive.
+
+        Applies these rules to ``self.subordinates``, iterating until stable
+        (no-op agents may be skipped and their children promoted, requiring
+        re-evaluation):
+
+        - If a child has a meaningful protocol (not ``no_op``), it is periodic
+          and all its subordinates (recursively) are reactive (R3).
+        - If a child has a ``no_op`` protocol and has children of its own,
+          it is skipped: its children are re-parented to this agent (moved
+          into ``self.subordinates``) and re-evaluated in the next pass (R4).
+          A warning is emitted.
+        - A leaf child (no subordinates, no meaningful protocol) becomes
+          periodic.
+
+        Returns:
+            Flat list of periodic agent IDs found in the subtree.
+        """
+        import warnings
+        periodic: List[AgentID] = []
+        resolved: set = set()
+
+        changed = True
+        while changed:
+            changed = False
+            to_skip: List[AgentID] = []
+            to_adopt: Dict[AgentID, "Agent"] = {}
+
+            for child_id, child in list(self.subordinates.items()):
+                if child_id in resolved:
+                    continue
+
+                has_meaningful_protocol = (
+                    hasattr(child, "protocol")
+                    and child.protocol is not None
+                    and not child.protocol.no_op()
+                )
+
+                if has_meaningful_protocol:
+                    # R3: child with protocol → periodic; all its descendants → reactive.
+                    child.is_periodic = True
+                    periodic.append(child_id)
+                    self._mark_subtree_reactive(child.subordinates)
+                    resolved.add(child_id)
+
+                elif child.subordinates:
+                    # R4: no-op protocol with children → skip, re-parent children.
+                    warnings.warn(
+                        f"Agent '{child_id}' has no-op protocol (or no protocol). "
+                        f"Its subordinates are re-parented to '{self.agent_id}'. "
+                        f"'{child_id}' is skipped in event-driven scheduling.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    child.is_periodic = False
+                    to_skip.append(child_id)
+                    resolved.add(child_id)
+                    for grandchild_id, grandchild in child.subordinates.items():
+                        grandchild.upstream_id = self.agent_id
+                        to_adopt[grandchild_id] = grandchild
+                    changed = True  # adopted children need evaluation in next pass
+
+                else:
+                    # Leaf with no protocol → periodic.
+                    child.is_periodic = True
+                    periodic.append(child_id)
+                    resolved.add(child_id)
+
+            # Apply re-parenting: remove skipped agents, adopt their children
+            for skip_id in to_skip:
+                del self.subordinates[skip_id]
+            self.subordinates.update(to_adopt)
+
+        return periodic
+
+    @staticmethod
+    def _mark_subtree_reactive(subordinates: Dict[AgentID, "Agent"]) -> None:
+        """Recursively mark all agents in a subtree as reactive.
+
+        Warns if a no-op agent with children is found within a reactive
+        subtree — it serves no coordination purpose.
+        """
+        import warnings
+        for agent in subordinates.values():
+            agent.is_periodic = False
+            if agent.subordinates:
+                has_protocol = (
+                    hasattr(agent, "protocol")
+                    and agent.protocol is not None
+                    and not agent.protocol.no_op()
+                )
+                if not has_protocol:
+                    warnings.warn(
+                        f"Reactive agent '{agent.agent_id}' has no-op protocol "
+                        f"but has subordinates. It serves no coordination purpose "
+                        f"in the hierarchy.",
+                        UserWarning,
+                        stacklevel=3,
+                    )
+                Agent._mark_subtree_reactive(agent.subordinates)
+
+    def _self_reschedule(self, scheduler: "EventScheduler") -> None:
+        """Schedule next tick. Only for periodic agents. Called in tick()."""
+        if self.is_periodic:
+            scheduler.schedule_agent_tick(self.agent_id)
+
+    def _cache_obs_action(self, obs: Any, action: Any) -> None:
+        """Cache an (obs, action) pair for deferred reward computation at physics boundary."""
+        self._obs_action_cache.append((obs, action))
+
+    def _flush_obs_action_cache(self) -> list:
+        """Return and clear the cached (obs, action) pairs."""
+        cache = self._obs_action_cache.copy()
+        self._obs_action_cache.clear()
+        return cache
+
+
+    # ============================================
     # Core Lifecycle Methods (Both Modes)
     # - reset: resetting fields and states, potentially returning current states
     # - execute: Synchronous Execution (for Training phase)
@@ -139,6 +265,8 @@ class Agent(ABC):
     # ============================================
     def reset(self, *, seed: Optional[int] = None, proxy: Optional["Proxy"] = None, **kwargs) -> Any:
         self._timestep = 0.0
+        self._obs_action_cache = []
+        self._prev_post_physics_state = None
         self.action.reset(**kwargs)  # Reset action to initial values, with optional overrides
         self.state.reset(**kwargs)  # Reset state to initial values, with optional overrides
 
@@ -235,8 +363,14 @@ class Agent(ABC):
             rewards.update(subordinate.compute_rewards(proxy))
         return rewards
     
-    def compute_local_reward(self, local_state: dict) -> float:
-        # Default implementation returns empty reward. Override in subclasses for custom reward logic.
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state: Optional[dict] = None) -> float:
+        """Compute reward for this agent.
+
+        Args:
+            local_state: Current post-physics local state.
+            prev_post_physics_state: Previous post-physics local state
+                (event-driven mode). None on first call or in step-based mode.
+        """
         return EMPTY_REWARD
 
     # ============================================

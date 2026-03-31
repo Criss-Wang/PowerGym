@@ -66,7 +66,7 @@ class SensorAgent(FieldAgent):
         new_offset = feat.offset + self.action.c[0] * 0.1
         feat.set_values(offset=float(np.clip(new_offset, -1.0, 1.0)))
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         if "SensorReading" not in local_state:
             return 0.0
         vec = local_state["SensorReading"]

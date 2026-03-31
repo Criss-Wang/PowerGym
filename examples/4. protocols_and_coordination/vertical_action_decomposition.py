@@ -69,7 +69,7 @@ class Generator(FieldAgent):
         power = (self.action.c[0] + 1.0) / 2.0 * feat.capacity
         feat.set_values(power=float(np.clip(power, 0.0, feat.capacity)))
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         if "GeneratorFeature" not in local_state:
             return 0.0
         vec = local_state["GeneratorFeature"]

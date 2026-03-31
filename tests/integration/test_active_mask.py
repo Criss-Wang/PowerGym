@@ -64,7 +64,7 @@ class CountingAgent(FieldAgent):
             apply_count=feat.apply_count + 1.0,
         )
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         if "CounterFeature" in local_state:
             return -float(local_state["CounterFeature"][0]) ** 2
         return 0.0
