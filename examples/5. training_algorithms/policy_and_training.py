@@ -111,19 +111,29 @@ class ThermostatPolicy(Policy):
     """
     observation_mode = "local"
 
-    def __init__(self, obs_dim: int, action_dim: int = 1, seed: int = 0):
+    def __init__(self, obs_dim: int, action_dim: int = 1, hidden: int = 16, seed: int = 0):
         self.obs_dim = obs_dim
         self.action_dim = action_dim
         self.action_range = (-1.0, 1.0)
 
-        # Simple linear actor + critic (no hidden layers for this toy domain)
+        # 1-hidden-layer MLP actor + critic
         rng = np.random.default_rng(seed)
-        self.actor_w = rng.normal(0, 0.1, (obs_dim, action_dim))
-        self.actor_b = np.zeros(action_dim)
-        self.critic_w = rng.normal(0, 0.1, (obs_dim, 1))
-        self.critic_b = np.zeros(1)
+        self.actor_w1 = rng.normal(0, 0.1, (obs_dim, hidden))
+        self.actor_b1 = np.zeros(hidden)
+        self.actor_w2 = rng.normal(0, 0.1, (hidden, action_dim))
+        self.actor_b2 = np.zeros(action_dim)
+        self.critic_w1 = rng.normal(0, 0.1, (obs_dim, hidden))
+        self.critic_b1 = np.zeros(hidden)
+        self.critic_w2 = rng.normal(0, 0.1, (hidden, 1))
+        self.critic_b2 = np.zeros(1)
 
         self.noise_scale = 0.3
+        self._rng = np.random.default_rng(seed + 1000)
+
+    def _forward_actor(self, obs_vec: np.ndarray) -> np.ndarray:
+        """Forward pass through actor network."""
+        h = np.tanh(obs_vec @ self.actor_w1 + self.actor_b1)
+        return np.tanh(h @ self.actor_w2 + self.actor_b2)
 
     @obs_to_vector
     @vector_to_action
@@ -133,35 +143,50 @@ class ThermostatPolicy(Policy):
         Thanks to @obs_to_vector, this receives a numpy vector (not Observation).
         Thanks to @vector_to_action, the returned numpy is wrapped as Action.
         """
-        action_mean = np.tanh(obs_vec @ self.actor_w + self.actor_b)
-        noise = np.random.normal(0, self.noise_scale, self.action_dim)
+        action_mean = self._forward_actor(obs_vec)
+        noise = self._rng.normal(0, self.noise_scale, self.action_dim)
         return np.clip(action_mean + noise, -1.0, 1.0)
 
     @obs_to_vector
     @vector_to_action
     def forward_deterministic(self, obs_vec: np.ndarray) -> np.ndarray:
         """Compute action without noise (used in event-driven evaluation mode)."""
-        return np.tanh(obs_vec @ self.actor_w + self.actor_b)
+        return self._forward_actor(obs_vec)
 
     def get_value(self, obs_vec: np.ndarray) -> float:
         """Estimate state value (critic)."""
-        return float((obs_vec @ self.critic_w + self.critic_b)[0])
+        h = np.tanh(obs_vec @ self.critic_w1 + self.critic_b1)
+        return float((h @ self.critic_w2 + self.critic_b2)[0])
 
     def update(self, obs: np.ndarray, action: np.ndarray,
                advantage: float, lr: float = 0.01) -> None:
         """Policy gradient update (REINFORCE with baseline)."""
         advantage = np.clip(advantage, -5.0, 5.0)
-        current = np.tanh(obs @ self.actor_w + self.actor_b)
-        grad = (current - action) * (1 - current ** 2)
-        self.actor_w -= lr * np.outer(obs, grad * advantage)
-        self.actor_b -= lr * (grad * advantage).flatten()
+        # Forward pass
+        h = np.tanh(obs @ self.actor_w1 + self.actor_b1)
+        out = np.tanh(h @ self.actor_w2 + self.actor_b2)
+        # Backprop through output layer
+        d_out = (1 - out ** 2)
+        delta_out = (out - action) * d_out
+        self.actor_w2 -= lr * np.outer(h, delta_out * advantage)
+        self.actor_b2 -= lr * (delta_out * advantage).flatten()
+        # Backprop through hidden layer
+        d_h = (delta_out * advantage) @ self.actor_w2.T * (1 - h ** 2)
+        self.actor_w1 -= lr * np.outer(obs, d_h)
+        self.actor_b1 -= lr * d_h.flatten()
 
     def update_critic(self, obs: np.ndarray, target: float, lr: float = 0.01) -> None:
         """Critic update: minimize (V(s) - target)^2."""
-        pred = float((obs @ self.critic_w + self.critic_b)[0])
+        h = np.tanh(obs @ self.critic_w1 + self.critic_b1)
+        pred = float((h @ self.critic_w2 + self.critic_b2)[0])
         error = np.clip(pred - target, -10.0, 10.0)
-        self.critic_w -= lr * obs.reshape(-1, 1) * error
-        self.critic_b -= lr * error
+        # Backprop through output
+        self.critic_w2 -= lr * h.reshape(-1, 1) * error
+        self.critic_b2 -= lr * error
+        # Backprop through hidden
+        d_h = error * self.critic_w2.flatten() * (1 - h ** 2)
+        self.critic_w1 -= lr * np.outer(obs, d_h)
+        self.critic_b1 -= lr * d_h.flatten()
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +355,7 @@ def main():
         "room_a": ThermostatPolicy(obs_dim=2, seed=10),
         "room_b": ThermostatPolicy(obs_dim=2, seed=20),
     }
-    ippo_returns = train(ippo_policies, "IPPO", num_episodes=200, lr=0.005)
+    ippo_returns = train(ippo_policies, "IPPO", num_episodes=200, lr=0.001)
 
     # ------------------------------------------------------------------
     # MAPPO: shared policy
@@ -343,7 +368,7 @@ def main():
     mappo_policies = {
         "shared": ThermostatPolicy(obs_dim=2, seed=30),
     }
-    mappo_returns = train(mappo_policies, "MAPPO", num_episodes=200, lr=0.005)
+    mappo_returns = train(mappo_policies, "MAPPO", num_episodes=300, lr=0.0005)
 
     # ------------------------------------------------------------------
     # Comparison

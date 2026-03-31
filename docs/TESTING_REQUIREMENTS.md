@@ -429,9 +429,9 @@ jupyter nbconvert --to notebook --execute examples/notebooks/ctde_event_driven_t
 | Criteria | How to Verify |
 |----------|---------------|
 | All cells execute | No errors |
-| Hierarchy | 3 coordinators with heterogeneous obs_dims (e.g., 7, 9, 12) |
+| Hierarchy | 3 coordinators with heterogeneous obs_dims (values depend on device count per microgrid) |
 | Training | 30 episodes; returns improve over training |
-| Event-driven eval | 300s simulation; ~70 events processed, ~12 agent ticks |
+| Event-driven eval | 300s simulation; ~2600+ events processed, ~560+ agent ticks |
 | Action decomposition | Joint actions correctly split to per-device via VerticalProtocol |
 
 ### 7.5 `case_studies/power/tutorials/05_event_driven_testing.ipynb`
