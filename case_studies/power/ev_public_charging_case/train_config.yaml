@@ -1,0 +1,34 @@
+paths:
+  output_dir: "/Users/yulinzeng/PycharmProjects/PowerGym/case_studies/power/ev_public_charging_case/output"
+  auto_run_name: true
+  # Optional: fixed custom folder name under output_dir. If omitted, a name is generated from config.
+  run_name: null
+
+env_specs:
+  num_stations: 3
+  num_chargers: 5
+  arrival_rate: 50.0
+  dt: 300.0
+  episode_length: 86400.0
+
+nondeterminism:
+  default_config:
+    tick_interval: 300.0
+    obs_delay: 0.0
+    act_delay: 0.0
+    msg_delay: 0.0
+    jitter_type: "GAUSSIAN"
+    jitter_ratio: 0.1
+  
+  station_specific:
+    station_0:
+      jitter_ratio: 0.3
+    station_1:
+      jitter_ratio: 0.2
+    station_2:
+      jitter_ratio: 0.1
+
+training:
+  num_iterations: 50
+  checkpoint_freq: 10
+  seed: 42

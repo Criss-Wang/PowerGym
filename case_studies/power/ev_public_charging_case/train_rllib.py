@@ -98,7 +98,7 @@ def train_simple(
     logger.info(f"Station agents: {station_ids}")
 
     policies = {
-        sid: PricingPolicy(obs_dim=8, action_dim=1, hidden_dim=32, seed=seed + i)
+        sid: PricingPolicy(obs_dim=5, action_dim=1, hidden_dim=32, seed=seed + i)
         for i, sid in enumerate(station_ids)
     }
 
@@ -123,15 +123,7 @@ def train_simple(
                 action = policies[sid].forward(observation)
                 actions[sid] = action
 
-                obs_vec = policies[sid].extract_obs_vector(observation, 8)
-                reg_signal = float(obs_vec[5])
-                headroom_up = float(obs_vec[6])
-                headroom_down = float(obs_vec[7])
-                if episode == 0 and step % 20 == 0:
-                    logger.info(
-                        f"[{sid}] t_step={step:03d} reg={reg_signal:+.3f} "
-                        f"headroom_up={headroom_up:.3f} headroom_down={headroom_down:.3f}"
-                    )
+                obs_vec = policies[sid].extract_obs_vector(observation, 5)
                 trajectories[sid]["obs"].append(obs_vec)
                 trajectories[sid]["actions"].append(action.c.copy())
 
@@ -292,16 +284,16 @@ def train_rllib(num_iterations: int = 50):
         ray.shutdown()
 
 
-# ============================================================================
-# Entry Point
-# ============================================================================
-if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) > 1 and sys.argv[1] == "--rllib":
-        train_rllib(num_iterations=50)
-    elif len(sys.argv) > 1 and sys.argv[1] == "--event-driven":
-        from case_studies.power.ev_public_charging_case.run_event_driven import main as run_ed
-        run_ed()
-    else:
-        train_simple(num_episodes=50)
+# # ============================================================================
+# # Entry Point
+# # ============================================================================
+# if __name__ == "__main__":
+#     import sys
+#
+#     if len(sys.argv) > 1 and sys.argv[1] == "--rllib":
+#         train_rllib(num_iterations=50)
+#     elif len(sys.argv) > 1 and sys.argv[1] == "--event-driven":
+#         from case_studies.power.ev_public_charging_case.run_event_driven import main as run_ed
+#         run_ed()
+#     else:
+#         train_simple(num_episodes=50)

@@ -17,7 +17,6 @@ from heron.utils.typing import AgentID, MultiAgentDict
 
 from case_studies.power.ev_public_charging_case.envs.common import EnvState, SlotState
 from case_studies.power.ev_public_charging_case.envs.market_scenario import MarketScenario
-from case_studies.power.ev_public_charging_case.envs.regulation_scenario import RegulationScenario
 
 
 class ChargingEnv(BaseEnv):
@@ -30,9 +29,6 @@ class ChargingEnv(BaseEnv):
         dt: float = 300.0,
         episode_length: float = 86400.0,
         env_id: str = "ev_charging_env",
-        # Regulation scenario params (Route A: metrics only)
-        reg_freq: float = 4.0,
-        reg_alpha: float = 0.2,
         seed: Optional[int] = None,
         **kwargs,
     ):
@@ -47,7 +43,6 @@ class ChargingEnv(BaseEnv):
 
         # External scenarios
         self.scenario = MarketScenario(self._arrival_rate, 3600.0)
-        self.reg_scenario = RegulationScenario(reg_freq=reg_freq, alpha=reg_alpha, seed=seed or 0)
 
         # Build slot → station mapping from coordinator subordinates
         self._slot_to_station: Dict[str, str] = {}
@@ -69,12 +64,6 @@ class ChargingEnv(BaseEnv):
         """Reset environment state for a new episode."""
 
         self.scenario = MarketScenario(self._arrival_rate, 3600.0)
-        # reset regulation scenario clock too
-        self.reg_scenario = RegulationScenario(
-            reg_freq=self.reg_scenario.reg_freq,
-            alpha=self.reg_scenario.alpha,
-            seed=(seed or 0),
-        )
 
         self._time_s = 0.0
         return super().reset(seed=seed, **kwargs)
@@ -95,11 +84,8 @@ class ChargingEnv(BaseEnv):
         time_up = self._time_s >= self.episode_length
         truncated["__all__"] = time_up
 
-        # Route A: attach regulation metrics to system info (if present)
-        # We store them under infos["__all__"] as a convenient place.
         if "__all__" not in infos:
             infos["__all__"] = {}
-        infos["__all__"].update(getattr(self, "_latest_reg_metrics", {}))
 
         return obs, rewards, terminated, truncated, infos
 
@@ -156,9 +142,6 @@ class ChargingEnv(BaseEnv):
         env_state.time_s = float(scenario_data["t"])
         env_state.new_arrivals = int(scenario_data["arrivals"])
 
-        # 1b) Advance regulation scenario (Route A: metrics only)
-        reg_data = self.reg_scenario.step(self.dt)
-        env_state.reg_signal = float(reg_data["reg_signal"])
 
         # 2) EV arrivals — assign to random empty slots
         empty_slots = [
@@ -227,35 +210,6 @@ class ChargingEnv(BaseEnv):
         env_state.station_power = station_power
         env_state.station_capacity = station_capacity
 
-        # 6) Route A metrics: compute target/error/violation at station level
-        # Target: request a fraction of open capacity
-        alpha = float(self.reg_scenario.alpha)
-        errors = []
-        violation_seconds = 0.0
-        max_abs_error = 0.0
-
-        for st, cap in station_capacity.items():
-            p_act = station_power.get(st, 0.0)
-            # regulation target around 0 baseline (metrics-only)
-            p_tgt = alpha * env_state.reg_signal * cap
-
-            err = p_act - p_tgt
-            errors.append(err)
-            max_abs_error = max(max_abs_error, abs(err))
-
-            # violation: requesting nonzero when cap is zero, or request exceeds cap (rare here)
-            if cap <= 1e-9 and abs(p_tgt) > 1e-6:
-                violation_seconds += self.dt
-
-        rmse = float(np.sqrt(np.mean(np.square(errors)))) if errors else 0.0
-
-        self._latest_reg_metrics = {
-            "reg_signal": float(env_state.reg_signal),
-            "reg_rmse": rmse,
-            "reg_max_abs_error": float(max_abs_error),
-            "reg_violation_seconds": float(violation_seconds),
-        }
-
         return env_state
 
     def env_state_to_global_state(self, env_state: EnvState) -> Dict[str, Any]:
@@ -294,16 +248,6 @@ class ChargingEnv(BaseEnv):
                 if sid in env_state.slot_states and env_state.slot_states[sid].occupied == 0 and env_state.slot_states[sid].open_or_not == 1
             )
 
-            # RegulationFeature write-back (so StationCoordinator obs last 3 dims are non-zero)
-            cap = float(env_state.station_capacity.get(station_id, 0.0))
-            p_act = float(env_state.station_power.get(station_id, 0.0))
-            if cap > 1e-9:
-                headroom_up = (cap - p_act) / cap
-                headroom_down = p_act / cap
-            else:
-                headroom_up = 0.0
-                headroom_down = 0.0
-
             agent_states[station_id] = {
                 "_owner_id": station_id,
                 "_owner_level": 2,
@@ -316,12 +260,7 @@ class ChargingEnv(BaseEnv):
                     "MarketFeature": {
                         "lmp": float(env_state.lmp),
                         "t_day_s": float(env_state.time_s),
-                    },
-                    "RegulationFeature": {
-                        "reg_signal": float(env_state.reg_signal),
-                        "headroom_up": float(headroom_up),
-                        "headroom_down": float(headroom_down),
-                    },
+                    }
                 },
             }
 

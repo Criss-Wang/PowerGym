@@ -3,7 +3,7 @@
 Follows the NeuralPolicy pattern from tests/integration/test_e2e.py.
 Uses actor-critic architecture with policy gradient updates.
 
-Observation: 8D local (ChargingStationFeature 2D + MarketFeature 3D + RegulationFeature 3D)
+Observation: 8D local (ChargingStationFeature 2D + MarketFeature 3D)
 Action: 1D pricing in [0.0, 0.8] $/kWh
 """
 
@@ -97,7 +97,7 @@ class PricingPolicy(Policy):
 
     observation_mode = "local"
 
-    def __init__(self, obs_dim: int = 8, action_dim: int = 1, hidden_dim: int = 32, seed: int = 42):
+    def __init__(self, obs_dim: int = 5, action_dim: int = 1, hidden_dim: int = 32, seed: int = 42):
         self.obs_dim = obs_dim
         self.action_dim = action_dim
         self.action_range = (0.0, 0.8)
