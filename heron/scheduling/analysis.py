@@ -61,7 +61,7 @@ class EpisodeAnalyzer:
 
     Example:
         analyzer = EpisodeAnalyzer()
-        result = env.run_event_driven(analyzer, t_end=100.0)
+        result = env.run_event_driven(t_end=100.0, episode_analyzer=analyzer)
         print(f"Observations: {result.observation_count}")
         print(f"State updates: {result.state_update_count}")
     """
