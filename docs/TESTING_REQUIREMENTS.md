@@ -26,8 +26,8 @@ This document defines the complete set of files to run and their passing criteri
 | Integration tests | 6 files (manual + pytest) | See [Section 2](#2-integration-tests-pytest) |
 | Event-driven timing tests | 41 tests in 1 file | `pytest tests/integration/test_event_driven_timing.py -v` |
 | Case study tests | 1 file | `pytest case_studies/power/tests/test_hierarchical_env.py -v` |
-| Case study scripts | 3 scripts | `python -m case_studies.power.ev_public_charging_case.*` |
-| Framework examples | 20 scripts | `python examples/<N>.*/<script>.py` |
+| Case study scripts | 4 scripts | See [Section 4](#4-case-study-run-scripts) |
+| Framework examples | 17 scripts | `python examples/<N>.*/<script>.py` |
 | Framework notebooks | 2 notebooks | `examples/notebooks/` |
 | Power grid notebooks | 6 notebooks | `case_studies/power/tutorials/` |
 | **Total** | **61 runnable items** | |
@@ -56,7 +56,27 @@ pytest tests/test_env_builder.py -v
 
 ## 2. Integration Tests (pytest)
 
-### 2.1 `tests/integration/test_action_passing.py`
+### 2.1 `tests/integration/test_active_mask.py`
+
+**Run command:**
+```bash
+pytest tests/integration/test_active_mask.py -v
+```
+
+**What it tests:** Heterogeneous tick rates, `is_active` flags, action masking, and backward compatibility with homogeneous tick rates. Uses a 2-agent environment with configurable fast/slow tick intervals.
+
+| Test Class | Tests | What It Validates |
+|------------|-------|-------------------|
+| `TestIsActive` | 6 | Homogeneous all-active; heterogeneous step1 slow inactive; step3 both active; inactive apply_action not called; active apply_action called; `is_active_at()` method |
+| `TestIsActiveFlags` | 3 | Activity flags at step 1/3; homogeneous always active |
+| `TestActionMask` | 2 | `action_mask` in info for masked agent; no mask for unmasked agent |
+| `TestBackwardCompatibility` | 3 | Same obs/reward structure; agent timestep tracking; reset clears timestep |
+
+**Pass = All 14 tests green.**
+
+---
+
+### 2.2 `tests/integration/test_action_passing.py`
 
 **Run command:**
 ```bash
@@ -75,7 +95,7 @@ python tests/integration/test_action_passing.py
 
 ---
 
-### 2.2 `tests/integration/test_e2e.py`
+### 2.3 `tests/integration/test_e2e.py`
 
 **Run command:**
 ```bash
@@ -93,7 +113,7 @@ python tests/integration/test_e2e.py
 
 ---
 
-### 2.3 `tests/integration/test_maddpg_action_passing.py`
+### 2.4 `tests/integration/test_maddpg_action_passing.py`
 
 **Run command:**
 ```bash
@@ -111,7 +131,7 @@ python tests/integration/test_maddpg_action_passing.py
 
 ---
 
-### 2.4 `tests/integration/test_qmix_action_passing.py`
+### 2.5 `tests/integration/test_qmix_action_passing.py`
 
 **Run command:**
 ```bash
@@ -130,7 +150,7 @@ python tests/integration/test_qmix_action_passing.py
 
 ---
 
-### 2.5 `tests/integration/test_rllib_action_passing.py`
+### 2.6 `tests/integration/test_rllib_action_passing.py`
 
 **Run command:**
 ```bash
@@ -258,6 +278,24 @@ python -m case_studies.power.ev_public_charging_case.run_event_driven
 | Event-driven completes | `"Event-driven simulation complete"` printed |
 | Event statistics logged | Event counts, duration, message type breakdown shown |
 | Per-agent rewards present | Per-agent total reward and step counts reported |
+
+---
+
+### 4.4 `case_studies/power/powergrid/train_rllib.py`
+
+**Run command:**
+```bash
+python -m case_studies.power.powergrid.train_rllib
+```
+
+**What it does:** Full RLlib MAPPO training on a 3-microgrid hierarchical power grid with event-driven evaluation. Uses `HeronEnvRunner` for async eval and `RLlibModuleBridge` for policy deployment.
+
+| Criteria | How to Verify |
+|----------|---------------|
+| Training completes | 20 iterations logged with reward values |
+| Reward improves | `Last 2 avg > First 2 avg` |
+| Event-driven eval runs | Event-driven reward, events count, and duration logged |
+| Ray initializes/shuts down | No Ray errors; `"Done."` printed |
 
 ---
 
@@ -442,6 +480,7 @@ source .venv/bin/activate
 python -m case_studies.power.ev_public_charging_case.run_single_station_rollout
 python -m case_studies.power.ev_public_charging_case.train_rllib
 python -m case_studies.power.ev_public_charging_case.run_event_driven
+python -m case_studies.power.powergrid.train_rllib
 ```
 
 ### All example scripts
@@ -494,16 +533,16 @@ When time is limited, run tests in this order:
 6. `python case_studies/power/tests/test_hierarchical_env.py`
 
 ### Tier 2 - Should Pass (algorithm coverage)
-6. `python tests/integration/test_maddpg_action_passing.py`
-7. `python tests/integration/test_qmix_action_passing.py`
-8. `python "examples/5. training_algorithms/policy_and_training.py"`
-9. `python "examples/5. training_algorithms/rllib_integration.py"`
+7. `python tests/integration/test_maddpg_action_passing.py`
+8. `python tests/integration/test_qmix_action_passing.py`
+9. `python "examples/5. training_algorithms/policy_and_training.py"`
+10. `python "examples/5. training_algorithms/rllib_integration.py"`
 
 ### Tier 3 - Should Pass (API surface)
-10. All Level 2-4 example scripts (core abstractions, environments, protocols)
-11. All Level 6-7 example scripts (event-driven, advanced patterns)
+11. All Level 2-4 example scripts (core abstractions, environments, protocols)
+12. All Level 6-7 example scripts (event-driven, advanced patterns)
 
-### Tier 4 - Nice to Have (tutorials & demos)
-12. Case study run scripts
-13. Starter examples
-14. All Jupyter notebooks
+### Tier 4 - Should Pass (end-to-end & tutorials)
+13. Case study run scripts (including `powergrid/train_rllib.py`)
+14. Starter examples
+15. All Jupyter notebooks

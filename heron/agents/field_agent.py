@@ -190,11 +190,14 @@ class FieldAgent(Agent):
         """
         super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
 
-        # Request obs from proxy for state sync + action computation.
+        # Always request obs from proxy first for state sync.
+        # Upstream action (if any) will be applied after sync in get_obs_response handler.
+        # Uses obs_delay (not msg_delay) to model sensor/telemetry latency.
         scheduler.schedule_message_delivery(
             sender_id=self.agent_id,
             recipient_id=PROXY_AGENT_ID,
             message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
+            delay=scheduler.get_obs_delay(self.agent_id),
         )
 
         # R5: periodic agents self-reschedule immediately in tick()
