@@ -104,11 +104,13 @@ class CoordinatorAgent(Agent):
             scheduler.schedule_agent_tick(subordinate_id)
         
         # Always request obs from proxy first for state sync.
-        # Upstream action (if any) will be applied after sync in get_obs_response handler
+        # Upstream action (if any) will be applied after sync in get_obs_response handler.
+        # Uses obs_delay (not msg_delay) to model sensor/telemetry latency.
         scheduler.schedule_message_delivery(
             sender_id=self.agent_id,
             recipient_id=PROXY_AGENT_ID,
             message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
+            delay=scheduler.get_obs_delay(self.agent_id),
         )
 
     # ============================================
