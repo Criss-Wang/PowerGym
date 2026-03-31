@@ -182,6 +182,13 @@ class CoordinatorAgent(Agent):
                     recipient_id=sub_id,
                     message={MSG_PHYSICS_COMPLETED: "success"},
                 )
+            # TODO(timing): This is an unconditional overwrite. If a second
+            #   MSG_PHYSICS_COMPLETED arrives before all subs finish reward
+            #   from the first (i.e. sys_tick_interval < ~6×msg_delay), the
+            #   coordinator silently loses the first physics cycle's reward.
+            #   Fix: queue pending-reward sets (e.g. deque of sets) so each
+            #   physics cycle's cascade completes independently.
+            #   See test_t13_rapid_physics_coordinator_reward_count for repro.
             self._pending_sub_rewards = reactive_subs
             if not self._pending_sub_rewards:
                 # No reactive subordinates — compute own reward immediately

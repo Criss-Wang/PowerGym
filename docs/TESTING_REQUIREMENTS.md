@@ -24,7 +24,7 @@ This document defines the complete set of files to run and their passing criteri
 |----------|-------|---------|
 | Unit tests | 4 tests in 1 file | `pytest tests/test_env_builder.py -v` |
 | Integration tests | 6 files (manual + pytest) | See [Section 2](#2-integration-tests-pytest) |
-| Event-driven timing tests | 23 tests in 1 file | `pytest tests/integration/test_event_driven_timing.py -v` |
+| Event-driven timing tests | 41 tests in 1 file | `pytest tests/integration/test_event_driven_timing.py -v` |
 | Case study tests | 1 file | `pytest case_studies/power/tests/test_hierarchical_env.py -v` |
 | Case study scripts | 3 scripts | `python -m case_studies.power.ev_public_charging_case.*` |
 | Framework examples | 20 scripts | `python examples/<N>.*/<script>.py` |
@@ -170,8 +170,15 @@ pytest tests/integration/test_event_driven_timing.py -v
 | T9 (5 tests) | Jitter robustness (Gaussian + Uniform × 4 seeds) | Non-deterministic delays don't break invariants; queue never negative | Completes without error; `pending >= 0` |
 | T10 (2 tests) | Reset isolation | Cache/queue/prev cleared after reset; deterministic replay across episodes | All timing state zeroed; identical event sequences |
 | T11 (2 tests) | Long simulation stress (100s) | No accumulation errors; rewards non-decreasing (counter domain) | `> 100 events`; `reward[i] >= reward[i-1]` |
+| T12 (2 tests) | Reactive agent physics-before-action_effect | Reactive sub reward has 0 pairs when physics fires first; simulation precedes reactive action_effect | `len(pairs) == 0`; `sim_time < ae_time` |
+| T13 (2 tests) | Rapid physics — coordinator pending_sub_rewards stress | Coordinator produces rewards under fast physics; no crash or deadlock | `>=1 reward`; completes without error |
+| T14 (2 tests) | Large system msg_delay — delayed physics notification | Delayed notification doesn't lose pairs; accumulated pairs >= baseline | `len(pairs) >= 1`; `delayed >= baseline` |
+| T15 (3 tests) | Mixed periodic + reactive hierarchy | All agent types produce rewards; queue invariants hold across hierarchy | All agents have rewards; `pending >= 0` |
+| T16 (2 tests) | Agent re-ticks before action lands (tick < round-trip) | State evolves non-decreasingly; second obs reflects pre-action1 state | `state[i] >= state[i-1]`; `obs[0] == obs[1]` |
+| T17 (3 tests) | Full 3-level reactive cascade with interleaved physics | Bottom-up ordering; reactive pairs empty when physics interleaves; coordinator caches at compute time | `sub_t <= coord_t`; `len(pairs) == 0` for subs |
+| T18 (4 tests) | Extreme config boundary conditions | Zero delays, near-zero, extreme ratios all complete without crash | `pending >= 0`; no crash |
 
-**Pass = All 23 tests green.**
+**Pass = All 41 tests green.**
 
 ---
 
