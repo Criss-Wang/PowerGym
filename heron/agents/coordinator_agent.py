@@ -226,6 +226,14 @@ class CoordinatorAgent(Agent):
                 message={MSG_SET_TICK_RESULT: INFO_TYPE_LOCAL_STATE, MSG_KEY_BODY: tick_result},
             )
 
+            # Reactive coordinators: notify upstream that reward is done
+            if not self.is_periodic and self.upstream_id:
+                scheduler.schedule_message_delivery(
+                    sender_id=self.agent_id,
+                    recipient_id=self.upstream_id,
+                    message={"sub_reward_complete": self.agent_id},
+                )
+
         else:
             raise NotImplementedError(f"CoordinatorAgent received unknown message: {list(message_content.keys())}")
 
