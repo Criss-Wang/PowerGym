@@ -149,7 +149,7 @@ class HeronEnvRunner(MultiAgentEnvRunner):
             ep_seed = seed + ep_idx
             heron_env.reset(seed=ep_seed, jitter_seed=ep_seed)
             analyzer = EpisodeAnalyzer(verbose=False, track_data=True)
-            episode_stats = heron_env.run_event_driven(analyzer, t_end=t_end)
+            episode_stats = heron_env.run_event_driven(t_end=t_end, episode_analyzer=analyzer)
 
             # 3. Build MultiAgentEpisode from reward history
             reward_history = analyzer.get_reward_history()

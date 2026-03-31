@@ -174,20 +174,23 @@ class BaseEnv(ABC):
     
     def run_event_driven(
         self,
-        episode_analyzer: EpisodeAnalyzer,
         t_end: float,
+        episode_analyzer: Optional[EpisodeAnalyzer] = None,
         max_events: Optional[int] = None,
     ) -> EpisodeStats:
         """Run event-driven simulation until time limit.
 
         Args:
-            episode_analyzer: EpisodeAnalyzer to parse events during simulation
             t_end: Stop when simulation time exceeds this
+            episode_analyzer: EpisodeAnalyzer to parse events during simulation.
+                If None, a default EpisodeAnalyzer() is used.
             max_events: Optional maximum number of events to process
 
         Returns:
             EpisodeStats containing all event analyses from the simulation
         """
+        if episode_analyzer is None:
+            episode_analyzer = EpisodeAnalyzer()
         result = EpisodeStats()
         for event in self.scheduler.run_until(t_end=t_end, max_events=max_events):
             result.add_event_analysis(episode_analyzer.parse_event(event))
