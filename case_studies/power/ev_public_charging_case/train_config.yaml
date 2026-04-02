@@ -8,11 +8,15 @@ env_specs:
   num_stations: 2
   num_chargers: 3
   charger_p_max_kw: 150.0
+#  arrival_rate: 100.0
   arrival_rate: 10.0
   dt: 300.0
   episode_length: 172800.0
+#  hourly_overhead_cost: 0.3
+#  operational_cost_per_kwh: 0.03
+#  charging_efficiency: 0.95
   hourly_overhead_cost: 0.0
-  operational_cost_per_kwh: 0.03
+  operational_cost_per_kwh: 0.00
   charging_efficiency: 0.95
 
 nondeterminism:

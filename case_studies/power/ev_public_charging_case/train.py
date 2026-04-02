@@ -89,6 +89,25 @@ def _get_loss_means(result: Dict[str, Any]) -> Dict[str, float | None]:
     }
 
 
+def _debug_result_structure(result: Dict[str, Any]) -> str:
+    """Generate a debug string showing RLlib result structure and key metrics."""
+    debug_lines = []
+    debug_lines.append("RLlib Result Structure (first iteration debug):")
+    debug_lines.append(f"  Top-level keys: {sorted(result.keys())}")
+    
+    for key in ["env_runners", "info", "learner"]:
+        if key in result:
+            debug_lines.append(f"  {key}: {type(result[key]).__name__}")
+            if isinstance(result[key], dict):
+                debug_lines.append(f"    - subkeys: {sorted(result[key].keys())[:5]}...")
+    
+    debug_lines.append(f"  timesteps_total: {result.get('timesteps_total')}")
+    debug_lines.append(f"  num_steps_sampled: {result.get('num_steps_sampled')}")
+    debug_lines.append(f"  num_env_steps_sampled: {result.get('num_env_steps_sampled')}")
+    
+    return "\n".join(debug_lines)
+
+
 def _plot_training_metrics(train_rows: List[Dict[str, Any]], output_dir: Path) -> Dict[str, str]:
     if not train_rows:
         return {}
@@ -178,37 +197,50 @@ def _save_event_reward_artifacts(
     rows: List[Dict[str, Any]] = []
     reward_totals: Dict[str, float] = {}
     mean_rewards: Dict[str, float] = {}
+    min_rewards: Dict[str, float] = {}
+    max_rewards: Dict[str, float] = {}
+    std_rewards: Dict[str, float] = {}
     cumulative_history: Dict[str, List[tuple[float, float]]] = {}
     for agent_id, rewards in station_history.items():
         total = 0.0
         trajectory: List[tuple[float, float]] = []
-        for timestamp, reward in rewards:
+        reward_values = []
+        for i, (timestamp, reward) in enumerate(rewards):
             ts = float(timestamp)
             r = float(reward)
             total += r
+            reward_values.append(r)
             trajectory.append((ts, total))
             rows.append(
                 {
                     "agent_id": agent_id,
                     "timestamp": ts,
-                    "reward_used_for_rl": r,
-                    "cumulative_reward_used_for_rl": total,
+                    "reward_index": i,
+                    "reward_event": r,
+                    "cumulative_reward": total,
+                    "num_events": len(rewards),
                 }
             )
         reward_totals[agent_id] = total
         mean_rewards[agent_id] = total / max(1, len(rewards))
+        min_rewards[agent_id] = min(reward_values) if reward_values else 0.0
+        max_rewards[agent_id] = max(reward_values) if reward_values else 0.0
+        std_rewards[agent_id] = float(np.std(reward_values)) if len(reward_values) > 1 else 0.0
         cumulative_history[agent_id] = trajectory
 
     csv_path = metrics_dir / "event_reward_timeseries.csv"
     _write_csv(
         csv_path,
         rows=rows,
-        fieldnames=["agent_id", "timestamp", "reward_used_for_rl", "cumulative_reward_used_for_rl"],
+        fieldnames=["agent_id", "timestamp", "reward_index", "reward_event", "cumulative_reward", "num_events"],
     )
 
     artifacts: Dict[str, Any] = {
         "reward_totals": reward_totals,
         "mean_reward_used_for_rl": mean_rewards,
+        "min_reward_used_for_rl": min_rewards,
+        "max_reward_used_for_rl": max_rewards,
+        "std_reward_used_for_rl": std_rewards,
         "event_reward_timeseries_csv": str(csv_path),
     }
 
@@ -617,25 +649,47 @@ def train_rllib_ppo(config: Dict[str, Any]) -> Dict[str, Any]:
 
     for iteration in range(1, train_params.get("num_iterations", 50) + 1):
         result = algo.train()
+        
+        # Debug first iteration
+        if iteration == 1:
+            logger.info(_debug_result_structure(result))
+        
         reward_mean = _get_mean_reward(result)
         episode_len_mean = _get_episode_len_mean(result)
         loss_means = _get_loss_means(result)
         timesteps_total = result.get("timesteps_total")
 
+        env_runners = result.get("env_runners", {})
+        agent_returns = env_runners.get("agent_episode_returns_mean", {})
+
         train_history.append(
             {
                 "iteration": iteration,
-                "reward_mean": reward_mean if reward_mean == reward_mean else None,
-                "idp_profit_mean": reward_mean if reward_mean == reward_mean else None,
-                "episode_len_mean": episode_len_mean,
-                "timesteps_total": timesteps_total,
+
+                # reward summary
+                "episode_return_mean": _to_optional_float(env_runners.get("episode_return_mean")),
+                "episode_return_min": _to_optional_float(env_runners.get("episode_return_min")),
+                "episode_return_max": _to_optional_float(env_runners.get("episode_return_max")),
+                "station_0_return_mean": _to_optional_float(agent_returns.get("station_0")),
+                "station_1_return_mean": _to_optional_float(agent_returns.get("station_1")),
+
+                # episode summary
+                "episode_len_mean": _to_optional_float(env_runners.get("episode_len_mean")),
+                "episode_duration_sec_mean": _to_optional_float(env_runners.get("episode_duration_sec_mean")),
+                "num_episodes": _to_optional_float(env_runners.get("num_episodes")),
+
+                # sampling summary
+                "num_env_steps_sampled": _to_optional_float(env_runners.get("num_env_steps_sampled")),
+                "num_env_steps_sampled_lifetime": _to_optional_float(env_runners.get("num_env_steps_sampled_lifetime")),
+
+                # losses
                 "policy_loss": loss_means["policy_loss"],
                 "vf_loss": loss_means["vf_loss"],
             }
         )
 
         reward_txt = f"{reward_mean:.3f}" if reward_mean == reward_mean else "n/a"
-        logger.info(f"Iter {iteration}: idp_profit_mean = {reward_txt}")
+        logger.info(f"Iter {iteration}: idp_profit_mean={reward_txt}, steps={timesteps_total}, policy_loss={loss_means['policy_loss']:.4f}, vf_loss={loss_means['vf_loss']:.4f}")
 
         if not math.isnan(reward_mean) and reward_mean > best_reward:
             best_reward = reward_mean
@@ -665,7 +719,29 @@ def train_rllib_ppo(config: Dict[str, Any]) -> Dict[str, Any]:
     _write_csv(
         train_csv,
         rows=train_history,
-        fieldnames=["iteration", "reward_mean", "idp_profit_mean", "episode_len_mean", "timesteps_total", "policy_loss", "vf_loss"],
+        fieldnames=[
+            "iteration",
+
+            # reward summary
+            "episode_return_mean",
+            "episode_return_min",
+            "episode_return_max",
+            "station_0_return_mean",
+            "station_1_return_mean",
+
+            # episode info
+            "episode_len_mean",
+            "episode_duration_sec_mean",
+            "num_episodes",
+
+            # sampling
+            "num_env_steps_sampled",
+            "num_env_steps_sampled_lifetime",
+
+            # training
+            "policy_loss",
+            "vf_loss",
+        ]
     )
     plots = _plot_training_metrics(train_history, output_dir)
     _write_json(
@@ -843,19 +919,53 @@ def run_event_driven_sim(config: Dict[str, Any], checkpoint_path: str | None = N
         reward_history = episode_analyzer.get_reward_history()
         reward_artifacts = _save_event_reward_artifacts(reward_history, output_dir)
         reward_totals = reward_artifacts.get("reward_totals", {})
+        reward_means = reward_artifacts.get("mean_reward_used_for_rl", {})
+        reward_mins = reward_artifacts.get("min_reward_used_for_rl", {})
+        reward_maxs = reward_artifacts.get("max_reward_used_for_rl", {})
+        reward_stds = reward_artifacts.get("std_reward_used_for_rl", {})
 
         summary = episode.summary()
+        
+        # Compute additional event-driven statistics
+        event_stats = {}
+        for agent_id, rewards in reward_history.items():
+            if "station" in agent_id and "_charger_" not in agent_id:
+                event_stats[agent_id] = {
+                    "total_events": len(rewards),
+                    "total_reward": float(reward_totals.get(agent_id, 0.0)),
+                    "mean_reward_per_event": float(reward_means.get(agent_id, 0.0)),
+                    "min_reward": float(reward_mins.get(agent_id, 0.0)),
+                    "max_reward": float(reward_maxs.get(agent_id, 0.0)),
+                    "std_reward": float(reward_stds.get(agent_id, 0.0)),
+                    "first_event_time": float(rewards[0][0]) if rewards else 0.0,
+                    "last_event_time": float(rewards[-1][0]) if rewards else 0.0,
+                }
+        
         payload = {
             "summary": summary,
             "reward_totals": reward_totals,
+            "reward_statistics": {
+                "means": reward_means,
+                "mins": reward_mins,
+                "maxs": reward_maxs,
+                "stds": reward_stds,
+            },
+            "event_driven_statistics": event_stats,
             "station_jitters": nondeterm.get("station_specific", {}),
             "checkpoint_path": resolved_checkpoint,
             "artifacts": reward_artifacts,
-            "timestamp": _utc_now()
+            "timestamp": _utc_now(),
+            "episode_specs": {
+                "episode_length_s": float(env_specs.get("episode_length", 0.0)),
+                "dt_s": float(env_specs.get("dt", 0.0)),
+                "num_stations": env_specs.get("num_stations", 0),
+                "num_chargers": env_specs.get("num_chargers", 0),
+            }
         }
         _write_json(output_dir / "event_driven_summary.json", payload)
 
         logger.info(f"Final Rewards: {reward_totals}")
+        logger.info(f"Event-Driven Statistics:\n{json.dumps(event_stats, indent=2)}")
     finally:
         _cleanup_event_driven_inference(env)
         env.close()

@@ -13,11 +13,6 @@ class ChargerState:
     last_received_price: float = 0.25
     p_kw: float = 0.0
     step_energy_delivered_kwh: float = 0.0
-    step_revenue: float = 0.0
-    step_energy_cost: float = 0.0
-    step_profit: float = 0.0
-    cumulative_revenue: float = 0.0
-    cumulative_profit: float = 0.0
 
 @dataclass
 class EnvState:
@@ -34,9 +29,3 @@ class EnvState:
     # Station aggregated metrics
     station_power: Dict[str, float] = field(default_factory=dict)  # Current power output per station (kW)
     station_capacity: Dict[str, float] = field(default_factory=dict)  # Total capacity per station (kW)
-    station_step_revenue: Dict[str, float] = field(default_factory=dict)
-    station_step_energy_cost: Dict[str, float] = field(default_factory=dict)
-    station_step_overhead_cost: Dict[str, float] = field(default_factory=dict)
-    station_step_profit: Dict[str, float] = field(default_factory=dict)
-    station_cumulative_revenue: Dict[str, float] = field(default_factory=dict)
-    station_cumulative_profit: Dict[str, float] = field(default_factory=dict)

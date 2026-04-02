@@ -37,6 +37,7 @@ class ChargerAgent(FieldAgent):
         protocol: Optional[Protocol] = None,
     ):
         self._p_max_kw = p_max_kw
+        self.current_price = 0.25
 
         features: List[Feature] = [ChargerFeature(p_max_kw=p_max_kw)]
 
@@ -49,6 +50,10 @@ class ChargerAgent(FieldAgent):
             policy=policy,
             protocol=protocol,
         )
+
+    def reset(self, *, seed: Optional[int] = None, proxy=None, **kwargs):
+        self.current_price = 0.25
+        return super().reset(seed=seed, proxy=proxy, **kwargs)
 
     def init_action(self, features: Optional[List[Feature]] = None) -> Action:
         action = Action()
@@ -68,22 +73,12 @@ class ChargerAgent(FieldAgent):
         self.action.set_values(c=np.array([price], dtype=np.float32))
 
     def set_state(self, **kwargs) -> None:
-        if 'charging_price' in kwargs:
-            self.state.update_feature("ChargerFeature", charging_price=kwargs['charging_price'])
         if 'p_kw' in kwargs:
             self.state.update_feature("ChargerFeature", p_kw=kwargs['p_kw'])
         if 'occupied_or_not' in kwargs:
             self.state.update_feature("ChargerFeature", occupied_or_not=kwargs['occupied_or_not'])
-        for key in (
-            'step_energy_delivered_kwh',
-            'step_revenue',
-            'step_energy_cost',
-            'step_profit',
-            'cumulative_revenue',
-            'cumulative_profit',
-        ):
-            if key in kwargs:
-                self.state.update_feature("ChargerFeature", **{key: kwargs[key]})
+        if 'step_energy_delivered_kwh' in kwargs:
+            self.state.update_feature("ChargerFeature", step_energy_delivered_kwh=kwargs['step_energy_delivered_kwh'])
 
     def apply_action(self) -> None:
         """Apply agent action: broadcast pricing decision to environment.
@@ -92,7 +87,7 @@ class ChargerAgent(FieldAgent):
         The environment uses this price in charging physics decisions.
         """
         received_price = float(self.action.c[0])
-        self.state.update_feature("ChargerFeature", charging_price=received_price)
+        self.current_price = received_price
 
     def compute_power_delivery(self, local_state: dict, ev_soc: float, ev_battery_capacity: float, 
                               ev_demand_remaining: float, p_max_kw: float) -> float:
@@ -119,23 +114,6 @@ class ChargerAgent(FieldAgent):
         # In a more sophisticated agent, this could be optimized based on price/utility
         return p_max_kw
 
-    def compute_revenue(self, price_charged: float, lmp: float, energy_kwh: float) -> float:
-        """AGENT ECONOMICS: Compute revenue from charging transaction.
-        
-        Revenue = (price - lmp) * energy_delivered
-        This represents the profit margin.
-        
-        Args:
-            price_charged: Price charged to EV ($/kWh)
-            lmp: Locational marginal price ($/kWh)
-            energy_kwh: Energy delivered (kWh)
-        
-        Returns:
-            Revenue in dollars
-        """
-        return (price_charged - lmp) * energy_kwh
-
-
     @Agent.handler("action_effect")
     def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
         from heron.agents.proxy_agent import PROXY_AGENT_ID, MSG_SET_STATE, STATE_TYPE_LOCAL
@@ -148,48 +126,29 @@ class ChargerAgent(FieldAgent):
         )
 
     def compute_local_reward(self, local_state: dict) -> float:
-        """
-        Reward = current step profit from environment simulation.
-
-        The feature vector is kept at 4D, but the last element is now the
-        per-step profit signal rather than cumulative revenue.
-        """
-        charger_vec = local_state.get("ChargerFeature")
-        if isinstance(charger_vec, np.ndarray) and len(charger_vec) >= 4:
-            return float(charger_vec[3])
-
-        charger_feature = self.state.features.get("ChargerFeature")
-        if charger_feature is not None:
-            return float(getattr(charger_feature, "step_profit", 0.0))
-
+        """Charger agents do not receive economic reward."""
         return 0.0
 
     def get_local_info(self, local_state: dict) -> dict:
         info = super().get_local_info(local_state)
         charger_vec = local_state.get("ChargerFeature")
         if isinstance(charger_vec, np.ndarray) and len(charger_vec) >= 4:
-            p_norm, occupied_or_not, price, step_profit = [float(x) for x in charger_vec[:4]]
+            p_norm, occupied_or_not, p_max_kw, energy_delivered = [float(x) for x in charger_vec[:4]]
             feature = self.state.features.get("ChargerFeature")
-            p_max_kw = float(getattr(feature, "p_max_kw", 150.0)) if feature is not None else 150.0
             info.update({
-                "charging_price": price,
-                "step_profit": step_profit,
                 "open_or_occupied": int(occupied_or_not),
                 "p_kw": p_norm * p_max_kw,
+                "p_max_kw": p_max_kw,
+                "step_energy_delivered_kwh": energy_delivered,
             })
         else:
             feature = self.state.features.get("ChargerFeature")
             if feature is not None:
                 info.update({
-                    "charging_price": float(feature.charging_price),
                     "step_energy_delivered_kwh": float(feature.step_energy_delivered_kwh),
-                    "step_revenue": float(feature.step_revenue),
-                    "step_energy_cost": float(feature.step_energy_cost),
-                    "step_profit": float(feature.step_profit),
-                    "cumulative_revenue": float(feature.cumulative_revenue),
-                    "cumulative_profit": float(feature.cumulative_profit),
                     "open_or_occupied": int(feature.occupied_or_not),
                     "p_kw": float(feature.p_kw),
+                    "p_max_kw": float(feature.p_max_kw),
                 })
         return info
 
@@ -202,13 +161,9 @@ class ChargerAgent(FieldAgent):
         info = self.get_local_info({})
         if isinstance(feature, dict):
             info.update({
-                "charging_price": float(feature.get("charging_price", info.get("charging_price", 0.0))),
                 "step_energy_delivered_kwh": float(feature.get("step_energy_delivered_kwh", 0.0)),
-                "step_revenue": float(feature.get("step_revenue", 0.0)),
-                "step_energy_cost": float(feature.get("step_energy_cost", 0.0)),
-                "step_profit": float(feature.get("step_profit", 0.0)),
-                "cumulative_revenue": float(feature.get("cumulative_revenue", 0.0)),
-                "cumulative_profit": float(feature.get("cumulative_profit", 0.0)),
-                "reward_used_for_rl": float(feature.get("step_profit", 0.0)),
+                "p_kw": float(feature.get("p_kw", info.get("p_kw", 0.0))),
+                "p_max_kw": float(feature.get("p_max_kw", info.get("p_max_kw", 150.0))),
+                "open_or_occupied": int(feature.get("occupied_or_not", info.get("open_or_occupied", 0))),
             })
         return info
