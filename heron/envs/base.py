@@ -65,7 +65,7 @@ class BaseEnv(ABC):
         """Validate, wire, configure, and register all agents."""
         agent_map = {a.agent_id: a for a in agents}
         root_id = self._validate_hierarchy(agent_map, hierarchy)
-        self._wire_hierarchy(agent_map, hierarchy)
+        self._wire_hierarchy(agent_map, hierarchy, root_id)
         self._system_agent = agent_map[root_id]
         self._configure_simulation(self._system_agent)
         self._register_agent(self._system_agent)
@@ -110,12 +110,21 @@ class BaseEnv(ABC):
     def _wire_hierarchy(
         agent_map: Dict[AgentID, Agent],
         hierarchy: Dict[AgentID, List[AgentID]],
+        root_id: AgentID,
     ) -> None:
-        """Set subordinates on each parent according to the hierarchy."""
+        """Set subordinates on each parent according to the hierarchy.
+
+        After all subordinates are wired, re-resolves periodic children on
+        the root SystemAgent (which caches the result internally).
+        """
         for parent_id, child_ids in hierarchy.items():
             parent = agent_map[parent_id]
             subs = {cid: agent_map[cid] for cid in child_ids}
             parent.subordinates = parent.build_subordinates(subs)
+
+        # Re-resolve periodic children now that hierarchy is fully wired
+        # (resolve_periodic_children runs in __init__ when subordinates may be empty)
+        agent_map[root_id].refresh_periodic_agents()
 
     def _configure_simulation(self, system_agent: SystemAgent) -> None:
         """Bind env simulation callables to the system agent."""

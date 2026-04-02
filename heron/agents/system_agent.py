@@ -60,9 +60,15 @@ class SystemAgent(Agent):
         )
         self._simulation_configured: bool = False
         self._subordinates_kicked_off: bool = False
+        self._last_post_physics_state: Optional[Dict] = None
 
         # Resolve which agents are periodic vs reactive (R2-R4)
-        self._periodic_agents: List[AgentID] = self.resolve_periodic_children()
+        self._periodic_agents: List[AgentID] = []
+        self.refresh_periodic_agents()
+
+    def refresh_periodic_agents(self) -> None:
+        """Re-resolve periodic children and cache the result."""
+        self._periodic_agents = self.resolve_periodic_children()
 
     def init_state(self, features: List[Feature] = []) -> State:
         """Initialize a SystemAgentState from the provided features."""
@@ -196,6 +202,18 @@ class SystemAgent(Agent):
     def agent_tick_handler(self, event: Event, scheduler: EventScheduler) -> None:
         self.tick(scheduler, event.timestamp)
 
+    @Agent.handler("condition_trigger")
+    def condition_trigger_handler(self, event: Event, scheduler: EventScheduler) -> None:
+        """No-op: SystemAgent is an orchestrator and does not react to conditions.
+
+        Condition monitors should target field or coordinator agents instead.
+        """
+        logger.warning(
+            "SystemAgent received CONDITION_TRIGGER (monitor_id=%s). "
+            "Conditions should target field/coordinator agents.",
+            event.payload.get("monitor_id"),
+        )
+
     @Agent.handler("action_effect")
     def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
         """No-op: SystemAgent does not apply actions (R1)."""
@@ -220,6 +238,8 @@ class SystemAgent(Agent):
             response_data = message_content[MSG_GET_GLOBAL_STATE_RESPONSE]
             global_state = response_data[MSG_KEY_BODY]
             updated_global_state = self.simulate(global_state)
+            # Cache for condition evaluation after proxy confirms write
+            self._last_post_physics_state = updated_global_state
             scheduler.schedule_message_delivery(
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
@@ -229,6 +249,13 @@ class SystemAgent(Agent):
         elif MSG_SET_STATE_COMPLETION in message_content:
             if message_content[MSG_SET_STATE_COMPLETION] != "success":
                 raise ValueError("State update failed in proxy, cannot proceed")
+
+            # Evaluate condition monitors against post-physics state (Class 3).
+            # Triggered CONDITION_TRIGGER events are enqueued on the scheduler
+            # and processed after the current event completes.
+            if self._last_post_physics_state is not None:
+                scheduler.evaluate_conditions(self._last_post_physics_state)
+                self._last_post_physics_state = None
 
             # Physics is done. Broadcast MSG_PHYSICS_COMPLETED to all periodic agents
             # so they compute reward from post-physics state (R7).

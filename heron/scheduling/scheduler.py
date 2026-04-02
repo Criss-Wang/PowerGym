@@ -260,7 +260,7 @@ class EventScheduler:
             # Condition fired — schedule CONDITION_TRIGGER
             event = Event(
                 timestamp=self.current_time,
-                event_type=EventType.CUSTOM,  # Renamed to CONDITION_TRIGGER in Phase 2
+                event_type=EventType.CONDITION_TRIGGER,
                 agent_id=monitor.agent_id,
                 priority=2,
                 payload={

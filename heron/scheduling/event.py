@@ -18,7 +18,7 @@ class EventType(Enum):
     MESSAGE_DELIVERY: Delayed message arriving at recipient
     OBSERVATION_READY: Delayed observation becoming available
     ENV_UPDATE: Environment state update
-    CUSTOM: Domain-specific events
+    CONDITION_TRIGGER: Condition-triggered agent wakeup (Class 3)
     """
     AGENT_TICK = "agent_tick"
     ACTION_EFFECT = "action_effect"
@@ -26,7 +26,7 @@ class EventType(Enum):
     OBSERVATION_READY = "observation_ready"
     ENV_UPDATE = "env_update"
     SIMULATION = "simulation"
-    CUSTOM = "custom"
+    CONDITION_TRIGGER = "condition_trigger"
 
 
 @dataclass(order=True)

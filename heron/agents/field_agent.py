@@ -210,6 +210,16 @@ class FieldAgent(Agent):
     def agent_tick_handler(self, event: Event, scheduler: EventScheduler) -> None:
         self.tick(scheduler, event.timestamp)
 
+    @Agent.handler("condition_trigger")
+    def condition_trigger_handler(self, event: Event, scheduler: EventScheduler) -> None:
+        """Handle a condition-triggered wakeup (e.g., voltage alarm).
+
+        Default: same as agent_tick — request obs, run policy,
+        schedule action effect. Override for custom reactive logic.
+        Payload contains monitor_id identifying which condition fired.
+        """
+        self.agent_tick_handler(event, scheduler)
+
     @Agent.handler("action_effect")
     def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
         self.apply_action()
