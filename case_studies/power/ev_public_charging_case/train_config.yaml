@@ -11,6 +11,9 @@ env_specs:
   arrival_rate: 10.0
   dt: 300.0
   episode_length: 172800.0
+  hourly_overhead_cost: 0.0
+  operational_cost_per_kwh: 0.03
+  charging_efficiency: 0.95
 
 nondeterminism:
   default_config:
@@ -45,6 +48,6 @@ nondeterminism:
 #      jitter_ratio: 0.1
 
 training:
-  num_iterations: 50
+  num_iterations: 20
   checkpoint_freq: 10
   seed: 42

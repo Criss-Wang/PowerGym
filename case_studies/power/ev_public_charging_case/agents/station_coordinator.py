@@ -32,9 +32,9 @@ from case_studies.power.ev_public_charging_case.agents.charger_field_agent impor
 class StationCoordinator(CoordinatorAgent):
     """站点协调员：管理固定数量的充电桩代理，并做出定价决策。
 
-    观测空间: ChargingStationFeature (2D) + MarketFeature (3D) = 5D 观测
+    观测空间: ChargingStationFeature (4D) + MarketFeature (3D) = 7D 观测
     动作空间: [0, 0.8] $/kWh 的 1D 连续定价决策
-    奖励机制: 聚合所有下属充电桩代理（ChargerAgent）的奖励
+    奖励机制: 站点 step profit / charger 数
     
     AGENT ECONOMICS:
     - Computes optimal demand for arriving EVs based on price
@@ -81,9 +81,15 @@ class StationCoordinator(CoordinatorAgent):
         )
 
         # 观测空间定义
-        # ChargingStationFeature.vector(): [open_norm, price_norm] (2)
+        # ChargingStationFeature.vector(): [open_norm, price_norm, step_profit, utilization] (4)
         # MarketFeature.vector(): [lmp, sin(theta), cos(theta)] (3)
-        self.observation_space = Box(-np.inf, np.inf, (5,), np.float32)
+        self.observation_space = Box(-np.inf, np.inf, (7,), np.float32)
+        expected_obs_dim = sum(feature.vector().shape[0] for feature in all_features)
+        if expected_obs_dim != self.observation_space.shape[0]:
+            raise ValueError(
+                f"StationCoordinator observation_space mismatch: expected {expected_obs_dim}, "
+                f"declared {self.observation_space.shape[0]}"
+            )
 
         # 动作空间：定价范围 [0, 0.8] $/kWh
         self.action_space = Box(0.0, 0.8, (1,), np.float32)
@@ -145,50 +151,122 @@ class StationCoordinator(CoordinatorAgent):
         return float(price)
 
     def compute_rewards(self, proxy) -> Dict[AgentID, float]:
-        """聚合协调员及其所有下属充电桩代理的奖励。
+        """Return station reward plus subordinate rewards.
 
-        此方法在事件驱动模式下至关重要。它会轮询每个 ChargerAgent，
-        获取它们基于实际接收到的价格（受通信延迟影响）计算出的奖励。
+        Coordinator reward is computed from the station's current step profit,
+        normalized by charger count. Subordinates keep their own per-step profit.
         """
-        # 1. 首先计算所有下属充电桩代理的奖励
+        local_state = proxy.get_local_state(self.agent_id, self.protocol)
+        global_state = proxy.get_global_states(self.agent_id, self.protocol, for_simulation=True)
+        state_dict = global_state.get(self.agent_id, {}) if isinstance(global_state, dict) else {}
+        features = state_dict.get("features", {}) if isinstance(state_dict, dict) else {}
+        station_feature = features.get("ChargingStationFeature", {}) if isinstance(features, dict) else {}
+
+        num_chargers = max(1, len(self.subordinates))
+        raw_step_profit = float(station_feature.get("station_step_profit", 0.0)) if isinstance(station_feature, dict) else 0.0
+        coordinator_reward = raw_step_profit / float(num_chargers)
+
+        # Sanity check: local decoded reward should match raw state reward.
+        local_reward = self.compute_local_reward(local_state)
+        if np.isfinite(local_reward):
+            assert np.isclose(local_reward, coordinator_reward, rtol=1e-5, atol=1e-6), (
+                "Coordinator reward mismatch: local observation-derived reward differs from raw station_step_profit"
+            )
+
         sub_rewards: Dict[AgentID, float] = {}
         for subordinate in self.subordinates.values():
-            # 这里会调用 ChargerAgent.compute_local_reward
             sub_rewards.update(subordinate.compute_rewards(proxy))
-
-        # 2. 协调员奖励 = 所有下属充电桩代理奖励之和（即站点总收益）
-        coordinator_reward = sum(sub_rewards.values())
 
         rewards = {self.agent_id: coordinator_reward}
         rewards.update(sub_rewards)
         return rewards
 
     def compute_local_reward(self, local_state: dict) -> float:
-        """基于自身特征计算站点本地奖励（通常作为辅助参考）。
-
-        奖励公式 = 占用比例 * 利润边际 (价格 - 实时电价 LMP)。
-        """
-        # 获取站点特征
+        """Station reward = current step profit / number of chargers."""
         csf = local_state.get("ChargingStationFeature")
-        if csf is None:
-            return 0.0
-
-        # open_norm 是空闲比例，则占用比例为 1 - open_norm
-        open_norm = float(csf[0])
-        occupied_fraction = 1.0 - open_norm
-
-        # 获取当前设置的价格
-        price_norm = float(csf[1])
-        price = price_norm * 0.8
-
-        # 获取市场特征（LMP）
-        mf = local_state.get("MarketFeature")
-        if mf is not None:
-            lmp = float(mf[0])
+        if isinstance(csf, np.ndarray) and len(csf) >= 3:
+            step_profit = ChargingStationFeature.obs_to_profit(float(csf[2]))
         else:
-            lmp = 0.2
+            feature = self.state.features.get("ChargingStationFeature")
+            if feature is None:
+                return 0.0
+            step_profit = float(getattr(feature, "station_step_profit", 0.0))
 
-        # 计算边际利润，最低为 0
-        margin = max(0.0, price - lmp)
-        return occupied_fraction * margin
+        num_chargers = max(1, len(self.subordinates))
+        reward = step_profit / float(num_chargers)
+        return float(reward)
+
+    def get_local_info(self, local_state: dict) -> dict:
+        info = super().get_local_info(local_state)
+        csf = local_state.get("ChargingStationFeature")
+        mf = local_state.get("MarketFeature")
+        num_chargers = max(1, len(self.subordinates))
+
+        if isinstance(csf, np.ndarray) and len(csf) >= 4:
+            open_norm, price_norm, step_profit_obs, utilization = [float(x) for x in csf[:4]]
+            step_profit = ChargingStationFeature.obs_to_profit(step_profit_obs)
+            info.update({
+                "charging_price": price_norm * 0.8,
+                "open_chargers": int(round(open_norm * num_chargers)),
+                "num_chargers": num_chargers,
+                "utilization": utilization,
+                "step_profit": step_profit,
+            })
+        else:
+            feature = self.state.features.get("ChargingStationFeature")
+            if feature is not None:
+                utilization = 0.0
+                if feature.station_capacity > 0:
+                    utilization = float(feature.station_power / feature.station_capacity)
+                info.update({
+                    "charging_price": float(feature.charging_price),
+                    "open_chargers": int(feature.open_chargers),
+                    "num_chargers": num_chargers,
+                    "utilization": utilization,
+                    "step_revenue": float(feature.station_step_revenue),
+                    "step_energy_cost": float(feature.station_step_energy_cost),
+                    "step_overhead_cost": float(feature.station_step_overhead_cost),
+                    "step_profit": float(feature.station_step_profit),
+                    "cumulative_revenue": float(feature.station_cumulative_revenue),
+                    "cumulative_profit": float(feature.station_cumulative_profit),
+                })
+
+        if isinstance(mf, np.ndarray) and len(mf) >= 1:
+            info["lmp"] = float(mf[0])
+        else:
+            market = self.state.features.get("MarketFeature")
+            if market is not None:
+                info.update({
+                    "lmp": float(market.lmp),
+                    "time_s": float(market.t_day_s),
+                })
+        return info
+
+    def get_info(self, proxy) -> dict:
+        global_state = proxy.get_global_states(self.agent_id, self.protocol, for_simulation=True)
+        state_dict = global_state.get(self.agent_id, {})
+        features = state_dict.get("features", {}) if isinstance(state_dict, dict) else {}
+        station_feature = features.get("ChargingStationFeature", {}) if isinstance(features, dict) else {}
+        market_feature = features.get("MarketFeature", {}) if isinstance(features, dict) else {}
+
+        info = self.get_local_info({})
+        if isinstance(station_feature, dict):
+            info.update({
+                "charging_price": float(station_feature.get("charging_price", info.get("charging_price", 0.0))),
+                "open_chargers": int(station_feature.get("open_chargers", info.get("open_chargers", 0))),
+                "num_chargers": max(1, len(self.subordinates)),
+                "step_revenue": float(station_feature.get("station_step_revenue", 0.0)),
+                "step_energy_cost": float(station_feature.get("station_step_energy_cost", 0.0)),
+                "step_overhead_cost": float(station_feature.get("station_step_overhead_cost", 0.0)),
+                "step_profit": float(station_feature.get("station_step_profit", 0.0)),
+                "cumulative_revenue": float(station_feature.get("station_cumulative_revenue", 0.0)),
+                "cumulative_profit": float(station_feature.get("station_cumulative_profit", 0.0)),
+                "reward_used_for_rl": float(station_feature.get("station_step_profit", 0.0)) / max(1, len(self.subordinates)),
+            })
+        if isinstance(market_feature, dict):
+            info.update({
+                "lmp": float(market_feature.get("lmp", 0.0)),
+                "time_s": float(market_feature.get("t_day_s", 0.0)),
+            })
+        return info
 

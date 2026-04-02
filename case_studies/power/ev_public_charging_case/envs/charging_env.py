@@ -7,6 +7,7 @@ Follows the same pattern as powergrid/envs/hierarchical_microgrid_env.py:
 - CTDE training via system_agent.execute() → layer_actions → act → simulate
 """
 
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -29,6 +30,9 @@ class ChargingEnv(BaseEnv):
         arrival_rate: float = 10.0,
         dt: float = 300.0,
         episode_length: float = 86400.0,
+        hourly_overhead_cost: float = 3.0,
+        operational_cost_per_kwh: float = 0.03,
+        charging_efficiency: float = 0.95,
         env_id: str = "ev_charging_env",
         seed: Optional[int] = None,
         **kwargs,
@@ -36,6 +40,11 @@ class ChargingEnv(BaseEnv):
         self.dt = float(dt)
         self.episode_length = float(episode_length)
         self._arrival_rate = float(arrival_rate)
+        self.hourly_overhead_cost = float(hourly_overhead_cost)
+        self.operational_cost_per_kwh = float(operational_cost_per_kwh)
+        self.charging_efficiency = float(charging_efficiency)
+        if self.charging_efficiency <= 0.0:
+            raise ValueError("charging_efficiency must be positive")
 
         self._time_s = 0.0
         self._max_wait_time_s = 3600.0
@@ -50,12 +59,18 @@ class ChargingEnv(BaseEnv):
         self._charger_agent_to_station: Dict[str, str] = {}
         # Keep EV objects across steps; global_state only carries scalar features.
         self._charger_agent_evs: Dict[str, EV] = {}
-        # Keep charger revenue history across steps
-        self._charger_agent_revenue: Dict[str, float] = {}
+        # Keep cumulative metrics across steps for logging / diagnostics.
+        self._charger_agent_cumulative_revenue: Dict[str, float] = {}
+        self._charger_agent_cumulative_profit: Dict[str, float] = {}
+        self._station_cumulative_revenue: Dict[str, float] = {}
+        self._station_cumulative_profit: Dict[str, float] = {}
         for coord in coordinator_agents:
+            self._station_cumulative_revenue[str(coord.agent_id)] = 0.0
+            self._station_cumulative_profit[str(coord.agent_id)] = 0.0
             for charger_agent_id in coord.subordinates:
                 self._charger_agent_to_station[str(charger_agent_id)] = str(coord.agent_id)
-                self._charger_agent_revenue[str(charger_agent_id)] = 0.0
+                self._charger_agent_cumulative_revenue[str(charger_agent_id)] = 0.0
+                self._charger_agent_cumulative_profit[str(charger_agent_id)] = 0.0
 
         super().__init__(
             coordinator_agents=coordinator_agents,
@@ -74,9 +89,12 @@ class ChargingEnv(BaseEnv):
 
         self._time_s = 0.0
         self._charger_agent_evs.clear()
-        # Reset charger revenue history
-        for charger_id in self._charger_agent_revenue:
-            self._charger_agent_revenue[charger_id] = 0.0
+        for charger_id in self._charger_agent_cumulative_revenue:
+            self._charger_agent_cumulative_revenue[charger_id] = 0.0
+            self._charger_agent_cumulative_profit[charger_id] = 0.0
+        for station_id in self._station_cumulative_revenue:
+            self._station_cumulative_revenue[station_id] = 0.0
+            self._station_cumulative_profit[station_id] = 0.0
         return super().reset(seed=seed, **kwargs)
 
     def step(self, actions: Dict[AgentID, Any]) -> Tuple[
@@ -135,15 +153,18 @@ class ChargingEnv(BaseEnv):
                 charger_agent_id = str(agent_id)
                 station_id = env_state.charger_agent_to_station.get(charger_agent_id)
                 default_price = env_state.station_prices.get(station_id, 0.25)
-                # Restore revenue from history to maintain continuity across steps
-                prev_revenue = self._charger_agent_revenue.get(charger_agent_id, 0.0)
                 env_state.charger_states[charger_agent_id] = ChargerState(
                     p_kw=float(cf.get("p_kw", 0.0)),
                     p_max_kw=float(cf.get("p_max_kw", 150.0)),
                     occupied_or_not=int(cf.get("occupied_or_not", 0)),
                     last_received_price=float(cf.get("charging_price", default_price)),
                     ev=self._charger_agent_evs.get(charger_agent_id),
-                    revenue=prev_revenue,  # Restore previous revenue
+                    step_energy_delivered_kwh=0.0,
+                    step_revenue=0.0,
+                    step_energy_cost=0.0,
+                    step_profit=0.0,
+                    cumulative_revenue=self._charger_agent_cumulative_revenue.get(charger_agent_id, 0.0),
+                    cumulative_profit=self._charger_agent_cumulative_profit.get(charger_agent_id, 0.0),
                 )
 
         return env_state
@@ -226,9 +247,14 @@ class ChargingEnv(BaseEnv):
 
 
         # 3) DYNAMICS: Charging physics — power delivery and energy transfer with precise time tracking
-        # Track charger revenue from actual payments, with accurate time-based accounting
+        # Track per-step revenue/cost/profit from actual payments, with accurate time-based accounting
         for charger_agent_id, cs in env_state.charger_states.items():
             
+            cs.step_energy_delivered_kwh = 0.0
+            cs.step_revenue = 0.0
+            cs.step_energy_cost = 0.0
+            cs.step_profit = 0.0
+
             if cs.ev is None or cs.occupied_or_not == 0:
                 cs.p_kw = 0.0
                 continue
@@ -246,9 +272,30 @@ class ChargingEnv(BaseEnv):
                 # EV has demand and charger is at max power.
                 # Execute physics of charging with precise time tracking.
                 energy_kwh, payment = ev.charge_and_accumulate_revenue(cs.p_kw, env_state.time_s, self.dt)
-                cs.revenue += payment  # Accumulate revenue for this charger
+                step_energy_cost = 0.0
+                if energy_kwh > 0.0:
+                    step_energy_cost = (
+                        (env_state.lmp + self.operational_cost_per_kwh)
+                        * float(energy_kwh)
+                        / self.charging_efficiency
+                    )
+
+                cs.step_energy_delivered_kwh = float(energy_kwh)
+                cs.step_revenue = float(payment)
+                cs.step_energy_cost = float(step_energy_cost)
+                cs.step_profit = float(payment - step_energy_cost)
+
+                cs.cumulative_revenue += cs.step_revenue
+                cs.cumulative_profit += cs.step_profit
+
+                if cs.step_energy_delivered_kwh <= 0.0:
+                    assert cs.step_energy_cost == 0.0, "energy cost must be zero when no energy is delivered"
             else:
                 cs.p_kw = 0.0
+
+        # Step accounting sanity check: no step metric should be carried across a fresh step.
+        for cs in env_state.charger_states.values():
+            assert cs.step_profit == cs.step_revenue - cs.step_energy_cost
 
         # 4) DYNAMICS: EV departures — physical constraints only (demand met or max wait time)
         for charger_agent_id, cs in env_state.charger_states.items():
@@ -265,11 +312,17 @@ class ChargingEnv(BaseEnv):
                 cs.occupied_or_not = 0  # Mark charger as available again
                 self._charger_agent_evs.pop(charger_agent_id, None)
 
-        # 5) DYNAMICS: Aggregate station power/capacity/revenue
-        # For each station: sum all charger revenues (each charger tracks its cumulative revenue)
+        # 5) DYNAMICS: Aggregate station power/capacity/profit
+        # For each station: sum current step metrics and update cumulative totals.
         station_power: Dict[str, float] = {}
         station_capacity: Dict[str, float] = {}
-        station_revenue: Dict[str, float] = {}
+        station_step_revenue: Dict[str, float] = {}
+        station_step_energy_cost: Dict[str, float] = {}
+        station_step_overhead_cost: Dict[str, float] = {}
+        station_step_profit: Dict[str, float] = {}
+        station_cumulative_revenue: Dict[str, float] = {}
+        station_cumulative_profit: Dict[str, float] = {}
+        step_overhead_cost = self.hourly_overhead_cost * (self.dt / 3600.0)
         for charger_agent_id, cs in env_state.charger_states.items():
             st = env_state.charger_agent_to_station.get(charger_agent_id)
             if st is None:
@@ -279,7 +332,12 @@ class ChargingEnv(BaseEnv):
             if st not in station_power:
                 station_power[st] = 0.0
                 station_capacity[st] = 0.0
-                station_revenue[st] = 0.0
+                station_step_revenue[st] = 0.0
+                station_step_energy_cost[st] = 0.0
+                station_step_overhead_cost[st] = step_overhead_cost
+                station_step_profit[st] = 0.0
+                station_cumulative_revenue[st] = self._station_cumulative_revenue.get(st, 0.0)
+                station_cumulative_profit[st] = self._station_cumulative_profit.get(st, 0.0)
             
             # Add charger capacity (always available for aggregation)
             station_capacity[st] += float(cs.p_max_kw)
@@ -288,16 +346,34 @@ class ChargingEnv(BaseEnv):
             if cs.occupied_or_not == 1:
                 station_power[st] += float(cs.p_kw)
             
-            # Station revenue = sum of all charger cumulative revenues at this station
-            station_revenue[st] += float(cs.revenue)
+            station_step_revenue[st] += float(cs.step_revenue)
+            station_step_energy_cost[st] += float(cs.step_energy_cost)
+
+        for st in station_step_revenue:
+            station_step_profit[st] = station_step_revenue[st] - station_step_energy_cost[st] - station_step_overhead_cost[st]
+            station_cumulative_revenue[st] = station_cumulative_revenue.get(st, 0.0) + station_step_revenue[st]
+            station_cumulative_profit[st] = station_cumulative_profit.get(st, 0.0) + station_step_profit[st]
+
+            expected_profit = station_step_revenue[st] - station_step_energy_cost[st] - station_step_overhead_cost[st]
+            assert math.isclose(station_step_profit[st], expected_profit, rel_tol=1e-9, abs_tol=1e-9)
 
         env_state.station_power = station_power
         env_state.station_capacity = station_capacity
-        env_state.station_revenue = station_revenue
+        env_state.station_step_revenue = station_step_revenue
+        env_state.station_step_energy_cost = station_step_energy_cost
+        env_state.station_step_overhead_cost = station_step_overhead_cost
+        env_state.station_step_profit = station_step_profit
+        env_state.station_cumulative_revenue = station_cumulative_revenue
+        env_state.station_cumulative_profit = station_cumulative_profit
 
-        # Save charger revenue history for next step
+        # Save cumulative history for next step
         for charger_agent_id, cs in env_state.charger_states.items():
-            self._charger_agent_revenue[charger_agent_id] = cs.revenue
+            self._charger_agent_cumulative_revenue[charger_agent_id] = cs.cumulative_revenue
+            self._charger_agent_cumulative_profit[charger_agent_id] = cs.cumulative_profit
+
+        for station_id in station_cumulative_revenue:
+            self._station_cumulative_revenue[station_id] = station_cumulative_revenue[station_id]
+            self._station_cumulative_profit[station_id] = station_cumulative_profit[station_id]
 
         return env_state
 
@@ -321,7 +397,12 @@ class ChargingEnv(BaseEnv):
                         "p_max_kw": cs.p_max_kw,
                         "occupied_or_not": cs.occupied_or_not,
                         "charging_price": float(cs.last_received_price),
-                        "revenue": float(cs.revenue),
+                        "step_energy_delivered_kwh": float(cs.step_energy_delivered_kwh),
+                        "step_revenue": float(cs.step_revenue),
+                        "step_energy_cost": float(cs.step_energy_cost),
+                        "step_profit": float(cs.step_profit),
+                        "cumulative_revenue": float(cs.cumulative_revenue),
+                        "cumulative_profit": float(cs.cumulative_profit),
                         # NOTE: cs.ev is NOT serialized (env-internal reference)
                     },
                 },
@@ -338,7 +419,12 @@ class ChargingEnv(BaseEnv):
                 and env_state.charger_states[aid].occupied_or_not == 0
             )
             
-            station_rev = env_state.station_revenue.get(station_id, 0.0)
+            station_step_revenue = env_state.station_step_revenue.get(station_id, 0.0)
+            station_step_energy_cost = env_state.station_step_energy_cost.get(station_id, 0.0)
+            station_step_overhead_cost = env_state.station_step_overhead_cost.get(station_id, 0.0)
+            station_step_profit = env_state.station_step_profit.get(station_id, 0.0)
+            station_cum_rev = env_state.station_cumulative_revenue.get(station_id, 0.0)
+            station_cum_profit = env_state.station_cumulative_profit.get(station_id, 0.0)
             station_pw = env_state.station_power.get(station_id, 0.0)
             station_cap = env_state.station_capacity.get(station_id, 0.0)
 
@@ -351,7 +437,12 @@ class ChargingEnv(BaseEnv):
                         "charging_price": float(price),
                         "open_chargers": int(open_count),
                         "max_chargers": int(len(station_charger_agents)),
-                        "station_revenue": float(station_rev),
+                        "station_step_revenue": float(station_step_revenue),
+                        "station_step_energy_cost": float(station_step_energy_cost),
+                        "station_step_overhead_cost": float(station_step_overhead_cost),
+                        "station_step_profit": float(station_step_profit),
+                        "station_cumulative_revenue": float(station_cum_rev),
+                        "station_cumulative_profit": float(station_cum_profit),
                         "station_power": float(station_pw),
                         "station_capacity": float(station_cap),
                     },

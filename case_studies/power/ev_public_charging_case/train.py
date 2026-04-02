@@ -102,20 +102,22 @@ def _plot_training_metrics(train_rows: List[Dict[str, Any]], output_dir: Path) -
     plots_dir = output_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    reward_points = [
-        (int(r["iteration"]), float(r["reward_mean"]))
-        for r in train_rows
-        if _to_optional_float(r.get("reward_mean")) is not None
-    ]
+    reward_points = []
+    for r in train_rows:
+        metric = _to_optional_float(r.get("idp_profit_mean"))
+        if metric is None:
+            metric = _to_optional_float(r.get("reward_mean"))
+        if metric is not None:
+            reward_points.append((int(r["iteration"]), float(metric)))
     outputs: Dict[str, str] = {}
     if reward_points:
         xs = [x for x, _ in reward_points]
         ys = [y for _, y in reward_points]
         plt.figure(figsize=(8, 4))
         plt.plot(xs, ys, marker="o", linewidth=1.5)
-        plt.title("Training Reward Mean vs Iteration")
+        plt.title("Training IDP Profit Mean vs Iteration")
         plt.xlabel("Iteration")
-        plt.ylabel("Episode Reward Mean")
+        plt.ylabel("Episode IDP Profit Mean")
         plt.grid(alpha=0.3)
         plt.tight_layout()
         reward_fig = plots_dir / "training_reward_curve.png"
@@ -175,6 +177,7 @@ def _save_event_reward_artifacts(
 
     rows: List[Dict[str, Any]] = []
     reward_totals: Dict[str, float] = {}
+    mean_rewards: Dict[str, float] = {}
     cumulative_history: Dict[str, List[tuple[float, float]]] = {}
     for agent_id, rewards in station_history.items():
         total = 0.0
@@ -188,22 +191,24 @@ def _save_event_reward_artifacts(
                 {
                     "agent_id": agent_id,
                     "timestamp": ts,
-                    "reward": r,
-                    "cumulative_reward": total,
+                    "reward_used_for_rl": r,
+                    "cumulative_reward_used_for_rl": total,
                 }
             )
         reward_totals[agent_id] = total
+        mean_rewards[agent_id] = total / max(1, len(rewards))
         cumulative_history[agent_id] = trajectory
 
     csv_path = metrics_dir / "event_reward_timeseries.csv"
     _write_csv(
         csv_path,
         rows=rows,
-        fieldnames=["agent_id", "timestamp", "reward", "cumulative_reward"],
+        fieldnames=["agent_id", "timestamp", "reward_used_for_rl", "cumulative_reward_used_for_rl"],
     )
 
     artifacts: Dict[str, Any] = {
         "reward_totals": reward_totals,
+        "mean_reward_used_for_rl": mean_rewards,
         "event_reward_timeseries_csv": str(csv_path),
     }
 
@@ -215,9 +220,9 @@ def _save_event_reward_artifacts(
             xs = [x for x, _ in series]
             ys = [y for _, y in series]
             plt.plot(xs, ys, linewidth=1.5, label=agent_id)
-        plt.title("Event-Driven Cumulative Reward by Station")
+        plt.title("Event-Driven Cumulative IDP Reward by Station")
         plt.xlabel("Simulation Time (s)")
-        plt.ylabel("Cumulative Reward")
+        plt.ylabel("Cumulative IDP Reward")
         plt.grid(alpha=0.3)
         plt.legend()
         plt.tight_layout()
@@ -230,9 +235,9 @@ def _save_event_reward_artifacts(
         vals = [reward_totals[name] for name in names]
         plt.figure(figsize=(8, 4.5))
         plt.bar(names, vals)
-        plt.title("Event-Driven Total Reward by Station")
+        plt.title("Event-Driven Total IDP Reward by Station")
         plt.xlabel("Station")
-        plt.ylabel("Total Reward")
+        plt.ylabel("Total IDP Reward")
         plt.grid(axis="y", alpha=0.3)
         plt.xticks(rotation=20)
         plt.tight_layout()
@@ -400,7 +405,11 @@ def _validate_env_specs_strict(env_specs: Dict[str, Any]) -> None:
         "dt",
         "episode_length",
     }
-    allowed_keys = set(required_keys)
+    allowed_keys = set(required_keys) | {
+        "hourly_overhead_cost",
+        "operational_cost_per_kwh",
+        "charging_efficiency",
+    }
 
     present_keys = set(env_specs.keys())
     missing = sorted(required_keys - present_keys)
@@ -431,6 +440,9 @@ def create_charging_env(env_specs: Dict[str, Any]) -> ChargingEnv:
         arrival_rate=float(env_specs["arrival_rate"]),
         dt=float(env_specs["dt"]),
         episode_length=float(env_specs["episode_length"]),
+        hourly_overhead_cost=float(env_specs.get("hourly_overhead_cost", 3.0)),
+        operational_cost_per_kwh=float(env_specs.get("operational_cost_per_kwh", 0.03)),
+        charging_efficiency=float(env_specs.get("charging_efficiency", 0.95)),
     )
 
 
@@ -492,6 +504,9 @@ def build_rllib_env_config(env_specs: Dict[str, Any], nondeterminism: Dict[str, 
             "arrival_rate": float(env_specs["arrival_rate"]),
             "dt": float(env_specs["dt"]),
             "episode_length": float(env_specs["episode_length"]),
+            "hourly_overhead_cost": float(env_specs.get("hourly_overhead_cost", 3.0)),
+            "operational_cost_per_kwh": float(env_specs.get("operational_cost_per_kwh", 0.03)),
+            "charging_efficiency": float(env_specs.get("charging_efficiency", 0.95)),
         },
         "agents": agents,
         "coordinators": coordinators,
@@ -611,6 +626,7 @@ def train_rllib_ppo(config: Dict[str, Any]) -> Dict[str, Any]:
             {
                 "iteration": iteration,
                 "reward_mean": reward_mean if reward_mean == reward_mean else None,
+                "idp_profit_mean": reward_mean if reward_mean == reward_mean else None,
                 "episode_len_mean": episode_len_mean,
                 "timesteps_total": timesteps_total,
                 "policy_loss": loss_means["policy_loss"],
@@ -619,7 +635,7 @@ def train_rllib_ppo(config: Dict[str, Any]) -> Dict[str, Any]:
         )
 
         reward_txt = f"{reward_mean:.3f}" if reward_mean == reward_mean else "n/a"
-        logger.info(f"Iter {iteration}: reward_mean = {reward_txt}")
+        logger.info(f"Iter {iteration}: idp_profit_mean = {reward_txt}")
 
         if not math.isnan(reward_mean) and reward_mean > best_reward:
             best_reward = reward_mean
@@ -649,7 +665,7 @@ def train_rllib_ppo(config: Dict[str, Any]) -> Dict[str, Any]:
     _write_csv(
         train_csv,
         rows=train_history,
-        fieldnames=["iteration", "reward_mean", "episode_len_mean", "timesteps_total", "policy_loss", "vf_loss"],
+        fieldnames=["iteration", "reward_mean", "idp_profit_mean", "episode_len_mean", "timesteps_total", "policy_loss", "vf_loss"],
     )
     plots = _plot_training_metrics(train_history, output_dir)
     _write_json(
