@@ -1,9 +1,9 @@
 """Agent implementations for EV charging case study."""
 
-from .charging_slot import ChargingSlot
+from .charger_field_agent import ChargerAgent
 from .station_coordinator import StationCoordinator
 
 __all__ = [
-    'ChargingSlot',
+    'ChargerAgent',
     'StationCoordinator',
 ]

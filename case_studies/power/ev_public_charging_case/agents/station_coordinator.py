@@ -1,7 +1,13 @@
 """Station coordinator agent.
 
-Manages a fixed pool of ChargingSlot subordinates and makes pricing decisions.
+Manages a fixed pool of ChargerAgent subordinates and makes pricing decisions.
 Follows the same pattern as powergrid's PowerGridAgent(CoordinatorAgent).
+
+AGENT ECONOMICS:
+- Optimizes pricing based on market conditions (LMP) and demand
+- Computes EV demand/utility based on price
+- Determines optimal power delivery
+- Aggregates subordinate charger revenue
 """
 
 from typing import Dict, List, Optional
@@ -17,22 +23,30 @@ from heron.protocols.vertical import BroadcastActionProtocol, VerticalProtocol
 from heron.scheduling.schedule_config import ScheduleConfig
 from heron.utils.typing import AgentID
 
+# 引用定义的特征类
 from case_studies.power.ev_public_charging_case.features import ChargingStationFeature, MarketFeature
-from .charging_slot import ChargingSlot
+# 引用子代理类
+from case_studies.power.ev_public_charging_case.agents.charger_field_agent import ChargerAgent
 
 
 class StationCoordinator(CoordinatorAgent):
-    """Coordinator for a single charging station with fixed charger slots.
+    """站点协调员：管理固定数量的充电桩代理，并做出定价决策。
 
-    Observes: ChargingStationFeature (2D) + MarketFeature (3D) = 5D observation
-    Action: 1D continuous pricing decision in [0, 0.8] $/kWh
-    Reward: aggregate subordinate slot rewards
+    观测空间: ChargingStationFeature (2D) + MarketFeature (3D) = 5D 观测
+    动作空间: [0, 0.8] $/kWh 的 1D 连续定价决策
+    奖励机制: 聚合所有下属充电桩代理（ChargerAgent）的奖励
+    
+    AGENT ECONOMICS:
+    - Computes optimal demand for arriving EVs based on price
+    - Determines utility function for EV station choice
+    - Optimizes pricing strategy to maximize revenue
+    - Tracks and aggregates charger revenues
     """
 
     def __init__(
         self,
         agent_id: AgentID,
-        subordinates: Dict[AgentID, ChargingSlot],
+        subordinates: Dict[AgentID, ChargerAgent],
         features: Optional[List[Feature]] = None,
         upstream_id: Optional[AgentID] = None,
         env_id: Optional[str] = None,
@@ -42,8 +56,8 @@ class StationCoordinator(CoordinatorAgent):
     ):
         if not subordinates:
             raise ValueError(
-                "StationCoordinator requires subordinates (ChargingSlot agents). "
-                "Create slots externally and pass as subordinates dict."
+                "StationCoordinator requires subordinates (ChargerAgent agents). "
+                "Create charger agents externally and pass as subordinates dict."
             )
 
         default_features = [
@@ -60,35 +74,89 @@ class StationCoordinator(CoordinatorAgent):
             env_id=env_id,
             schedule_config=schedule_config,
             policy=policy,
+            # 默认使用垂直广播协议，将价格下发给所有充电桩代理
             protocol=protocol or VerticalProtocol(
                 action_protocol=BroadcastActionProtocol(),
             ),
         )
 
-        # Observation: ChargingStationFeature(2) + MarketFeature(3) = 8
+        # 观测空间定义
+        # ChargingStationFeature.vector(): [open_norm, price_norm] (2)
+        # MarketFeature.vector(): [lmp, sin(theta), cos(theta)] (3)
         self.observation_space = Box(-np.inf, np.inf, (5,), np.float32)
-        # Action: pricing in [0, 0.8] $/kWh
+
+        # 动作空间：定价范围 [0, 0.8] $/kWh
         self.action_space = Box(0.0, 0.8, (1,), np.float32)
 
     @property
-    def charging_slots(self) -> Dict[AgentID, ChargingSlot]:
-        """Alias for subordinates."""
+    def charger_agents(self) -> Dict[AgentID, ChargerAgent]:
+        """subordinates 的别名，方便调用。"""
         return self.subordinates
 
-    def compute_rewards(self, proxy) -> Dict[AgentID, float]:
-        """Compute rewards for coordinator and all subordinate slots.
-
-        Overrides base class to aggregate subordinate rewards into the
-        coordinator reward. This works in both training mode (synchronous
-        execute()) and event-driven mode, unlike the _tick_results approach
-        which only works in event-driven mode.
+    def compute_ev_demand_utility(self, ev_battery_capacity: float, ev_soc: float, 
+                                 price: float, lmp: float, p_max_kw: float) -> tuple:
+        """AGENT ECONOMICS: Compute optimal EV demand and utility based on price.
+        
+        This represents the agent's economic decision model for EV charging optimization.
+        
+        Args:
+            ev_battery_capacity: Battery capacity (kWh)
+            ev_soc: Initial state of charge (fraction)
+            price: Charging price ($/kWh)
+            lmp: Locational marginal price ($/kWh)
+            p_max_kw: Charger power (kW)
+        
+        Returns:
+            Tuple of (optimal_demand_kwh, utility)
         """
-        # First compute all subordinate rewards
+        # Simple linear demand model: lower price -> higher demand
+        # This is a placeholder; replace with actual EV utility model
+        demand_min = 0.2 * ev_battery_capacity
+        max_demand = (1.0 - ev_soc) * ev_battery_capacity
+        
+        # Price elasticity: demand decreases with price
+        price_factor = max(0.0, 1.0 - (price / 0.8))  # 0 at max price, 1 at zero price
+        demand = demand_min + (max_demand - demand_min) * price_factor
+        
+        # Simple utility: higher demand at lower prices
+        utility = max(0.0, (0.5 - price) * demand)
+        
+        return demand, utility
+
+    def compute_pricing_strategy(self, lmp: float, occupancy_ratio: float) -> float:
+        """AGENT ECONOMICS: Determine optimal pricing based on market and station state.
+        
+        Args:
+            lmp: Locational marginal price ($/kWh)
+            occupancy_ratio: Current occupancy ratio (0-1)
+        
+        Returns:
+            Recommended price in [0, 0.8] range
+        """
+        # Simple strategy: price between LMP and reasonable markup
+        base_price = lmp + 0.1  # 10 cent markup over LMP
+        
+        # Adjust based on occupancy: higher price when high occupancy
+        occupancy_adjustment = occupancy_ratio * 0.2  # Up to 20 cent additional markup
+        
+        price = base_price + occupancy_adjustment
+        price = np.clip(price, 0.0, 0.8)
+        
+        return float(price)
+
+    def compute_rewards(self, proxy) -> Dict[AgentID, float]:
+        """聚合协调员及其所有下属充电桩代理的奖励。
+
+        此方法在事件驱动模式下至关重要。它会轮询每个 ChargerAgent，
+        获取它们基于实际接收到的价格（受通信延迟影响）计算出的奖励。
+        """
+        # 1. 首先计算所有下属充电桩代理的奖励
         sub_rewards: Dict[AgentID, float] = {}
         for subordinate in self.subordinates.values():
+            # 这里会调用 ChargerAgent.compute_local_reward
             sub_rewards.update(subordinate.compute_rewards(proxy))
 
-        # Coordinator reward = sum of subordinate rewards
+        # 2. 协调员奖励 = 所有下属充电桩代理奖励之和（即站点总收益）
         coordinator_reward = sum(sub_rewards.values())
 
         rewards = {self.agent_id: coordinator_reward}
@@ -96,29 +164,31 @@ class StationCoordinator(CoordinatorAgent):
         return rewards
 
     def compute_local_reward(self, local_state: dict) -> float:
-        """Compute station reward from own features.
+        """基于自身特征计算站点本地奖励（通常作为辅助参考）。
 
-        Each agent computes its own reward independently using local features.
-
-        Reward = occupied_fraction * margin (price - LMP).
+        奖励公式 = 占用比例 * 利润边际 (价格 - 实时电价 LMP)。
         """
+        # 获取站点特征
         csf = local_state.get("ChargingStationFeature")
         if csf is None:
             return 0.0
-        # ChargingStationFeature.vector(): [open_norm, price_norm]
+
+        # open_norm 是空闲比例，则占用比例为 1 - open_norm
         open_norm = float(csf[0])
-        price_norm = float(csf[1])
         occupied_fraction = 1.0 - open_norm
 
-        # Denormalize price: price_norm is in [0, 1], actual price in [0, 0.8]
+        # 获取当前设置的价格
+        price_norm = float(csf[1])
         price = price_norm * 0.8
 
+        # 获取市场特征（LMP）
         mf = local_state.get("MarketFeature")
         if mf is not None:
-            # MarketFeature.vector(): [lmp, sin(theta), cos(theta)]
             lmp = float(mf[0])
         else:
             lmp = 0.2
 
+        # 计算边际利润，最低为 0
         margin = max(0.0, price - lmp)
         return occupied_fraction * margin
+

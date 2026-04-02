@@ -5,11 +5,12 @@ paths:
   run_name: null
 
 env_specs:
-  num_stations: 3
-  num_chargers: 5
-  arrival_rate: 50.0
+  num_stations: 2
+  num_chargers: 3
+  charger_p_max_kw: 150.0
+  arrival_rate: 10.0
   dt: 300.0
-  episode_length: 86400.0
+  episode_length: 172800.0
 
 nondeterminism:
   default_config:
@@ -22,11 +23,26 @@ nondeterminism:
   
   station_specific:
     station_0:
-      jitter_ratio: 0.3
-    station_1:
-      jitter_ratio: 0.2
-    station_2:
+      tick_interval: 300.0
+      obs_delay: 0.0
+      act_delay: 0.0
+      msg_delay: 0.0
+      jitter_type: "GAUSSIAN"
       jitter_ratio: 0.1
+    station_1:
+      tick_interval: 300.0
+      obs_delay: 0.0
+      act_delay: 0.0
+      msg_delay: 0.0
+      jitter_type: "GAUSSIAN"
+      jitter_ratio: 0.1
+#    station_2:
+#      tick_interval: 900.0
+#      obs_delay: 0.0
+#      act_delay: 0.0
+#      msg_delay: 0.0
+#      jitter_type: "GAUSSIAN"
+#      jitter_ratio: 0.1
 
 training:
   num_iterations: 50

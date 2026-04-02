@@ -134,6 +134,7 @@ class EpisodeAnalyzer:
                 data_summary = {"status": message_content.get("set_state_completion")}
 
             # Check for tick result messages
+            # TODO: export to output (need to check message's details)
             elif "set_tick_result" in message_content:
                 message_type = "set_tick_result"
                 self.action_result_count += 1

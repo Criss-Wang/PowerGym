@@ -1,36 +1,32 @@
 """Common data structures for EV charging environment simulation."""
 
 from dataclasses import dataclass, field
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
+# common.py
 @dataclass
-class SlotState:
-    """State of a single charging slot during simulation."""
-    p_kw: float = 0.0
+class ChargerState:
     p_max_kw: float = 150.0
-    open_or_not: int = 1
-    occupied: int = 0
-    soc: float = 0.0
-    soc_target: float = 0.8
-    arrival_time: float = 0.0
-    max_wait_time: float = 3600.0
-    price_sensitivity: float = 0.5
-    # Revenue accumulated during this step
+    occupied_or_not: int = 0
+    ev: Optional[Any] = None  # Internal reference only - DO NOT serialize to global_state!
+    last_received_price: float = 0.25
+    p_kw: float = 0.0
     revenue: float = 0.0
-
 
 @dataclass
 class EnvState:
     """Simulation state exchanged between global_state ↔ env ↔ run_simulation."""
-    slot_states: Dict[str, SlotState] = field(default_factory=dict)
+    charger_states: Dict[str, ChargerState] = field(default_factory=dict)
     station_prices: Dict[str, float] = field(default_factory=dict)
-    # Map slot_id → station_id for reverse lookup
-    slot_to_station: Dict[str, str] = field(default_factory=dict)
+    # Map charger_agent_id -> station_id for reverse lookup
+    charger_agent_to_station: Dict[str, str] = field(default_factory=dict)
     # Market info
     lmp: float = 0.20
     time_s: float = 0.0
     dt: float = 300.0
     new_arrivals: int = 0
-    station_power: Dict[str, float] = field(default_factory=dict)
-    station_capacity: Dict[str, float] = field(default_factory=dict)
+    # Station aggregated metrics
+    station_power: Dict[str, float] = field(default_factory=dict)  # Current power output per station (kW)
+    station_capacity: Dict[str, float] = field(default_factory=dict)  # Total capacity per station (kW)
+    station_revenue: Dict[str, float] = field(default_factory=dict)  # Cumulative revenue per station

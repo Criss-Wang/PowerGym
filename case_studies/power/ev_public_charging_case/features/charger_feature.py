@@ -13,22 +13,29 @@ class ChargerFeature(Feature):
     visibility: ClassVar[Sequence[str]] = ['owner']
     p_kw: float = 0.0
     p_max_kw: float = 150.0
-    open_or_not: int = 1
+    occupied_or_not: int = 0
+    charging_price: float = 0.25
+    revenue: float = 0.0
 
     def vector(self) -> np.ndarray:
         return np.array(
-            [safe_div(self.p_kw, self.p_max_kw), float(self.open_or_not)],
+            [safe_div(self.p_kw, self.p_max_kw),
+             float(self.occupied_or_not),
+             self.charging_price,
+             self.revenue],
             dtype=np.float32,
         )
 
     def names(self):
-        return ['p_norm', 'open']
+        return ['p_norm', 'occupied_or_not', 'price', 'revenue']
 
     def to_dict(self):
         return {
             'p_kw': self.p_kw,
             'p_max_kw': self.p_max_kw,
-            'open_or_not': self.open_or_not,
+            'occupied_or_not': self.occupied_or_not,
+            'charging_price': self.charging_price,
+            'revenue': self.revenue,
         }
 
     @classmethod
@@ -36,13 +43,7 @@ class ChargerFeature(Feature):
         return cls(**d)
 
     def set_values(self, **kw):
-        allowed = {'p_kw', 'p_max_kw', 'open_or_not'}
+        allowed = {'p_kw', 'p_max_kw', 'occupied_or_not', 'charging_price', 'revenue'}
         for k, v in kw.items():
-            if k not in allowed:
-                continue
-            if k == 'p_kw':
-                self.p_kw = float(v)
-            elif k == 'p_max_kw':
-                self.p_max_kw = float(v)
-            elif k == 'open_or_not':
-                self.open_or_not = int(np.clip(v, 0, 1))
+            if k in allowed:
+                setattr(self, k, v)

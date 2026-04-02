@@ -6,6 +6,7 @@ Style: Fully Config-driven via YAML (Supporting per-agent schedule overrides).
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import math
 import json
@@ -25,11 +26,222 @@ from heron.core.policies import Policy
 from heron.scheduling.analysis import EpisodeAnalyzer
 from heron.scheduling.schedule_config import JitterType, ScheduleConfig
 
-from case_studies.power.ev_public_charging_case.agents import ChargingSlot, StationCoordinator
+from case_studies.power.ev_public_charging_case.agents import ChargerAgent, StationCoordinator
 from case_studies.power.ev_public_charging_case.envs.charging_env import ChargingEnv
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _to_optional_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        casted = float(value)
+        return casted if math.isfinite(casted) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _write_csv(path: Path, rows: List[Dict[str, Any]], fieldnames: List[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def _extract_metric_from_nested(obj: Any, key: str) -> List[float]:
+    values: List[float] = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k == key:
+                as_float = _to_optional_float(v)
+                if as_float is not None:
+                    values.append(as_float)
+            values.extend(_extract_metric_from_nested(v, key))
+    elif isinstance(obj, list):
+        for v in obj:
+            values.extend(_extract_metric_from_nested(v, key))
+    return values
+
+
+def _get_episode_len_mean(result: Dict[str, Any]) -> float | None:
+    candidates = [
+        result.get("env_runners", {}).get("episode_len_mean"),
+        result.get("episode_len_mean"),
+        result.get("sampler_results", {}).get("episode_len_mean"),
+    ]
+    for value in candidates:
+        as_float = _to_optional_float(value)
+        if as_float is not None:
+            return as_float
+    return None
+
+
+def _get_loss_means(result: Dict[str, Any]) -> Dict[str, float | None]:
+    policy_losses = _extract_metric_from_nested(result, "policy_loss")
+    vf_losses = _extract_metric_from_nested(result, "vf_loss")
+    return {
+        "policy_loss": float(np.mean(policy_losses)) if policy_losses else None,
+        "vf_loss": float(np.mean(vf_losses)) if vf_losses else None,
+    }
+
+
+def _plot_training_metrics(train_rows: List[Dict[str, Any]], output_dir: Path) -> Dict[str, str]:
+    if not train_rows:
+        return {}
+
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.warning("matplotlib not installed, skipping training plots")
+        return {}
+
+    plots_dir = output_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    reward_points = [
+        (int(r["iteration"]), float(r["reward_mean"]))
+        for r in train_rows
+        if _to_optional_float(r.get("reward_mean")) is not None
+    ]
+    outputs: Dict[str, str] = {}
+    if reward_points:
+        xs = [x for x, _ in reward_points]
+        ys = [y for _, y in reward_points]
+        plt.figure(figsize=(8, 4))
+        plt.plot(xs, ys, marker="o", linewidth=1.5)
+        plt.title("Training Reward Mean vs Iteration")
+        plt.xlabel("Iteration")
+        plt.ylabel("Episode Reward Mean")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        reward_fig = plots_dir / "training_reward_curve.png"
+        plt.savefig(reward_fig, dpi=150)
+        plt.close()
+        outputs["training_reward_curve"] = str(reward_fig)
+
+    loss_points = [
+        (
+            int(r["iteration"]),
+            _to_optional_float(r.get("policy_loss")),
+            _to_optional_float(r.get("vf_loss")),
+        )
+        for r in train_rows
+    ]
+    if any((p is not None) or (v is not None) for _, p, v in loss_points):
+        xs = [it for it, _, _ in loss_points]
+        p_losses = [np.nan if p is None else p for _, p, _ in loss_points]
+        v_losses = [np.nan if v is None else v for _, _, v in loss_points]
+        plt.figure(figsize=(8, 4))
+        plt.plot(xs, p_losses, marker=".", linewidth=1.3, label="policy_loss")
+        plt.plot(xs, v_losses, marker=".", linewidth=1.3, label="vf_loss")
+        plt.title("Training Loss Curves")
+        plt.xlabel("Iteration")
+        plt.ylabel("Loss")
+        plt.grid(alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        loss_fig = plots_dir / "training_loss_curve.png"
+        plt.savefig(loss_fig, dpi=150)
+        plt.close()
+        outputs["training_loss_curve"] = str(loss_fig)
+
+    return outputs
+
+
+def _save_event_reward_artifacts(
+    reward_history: Dict[str, List[Any]],
+    output_dir: Path,
+) -> Dict[str, Any]:
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.warning("matplotlib not installed, skipping event-driven plots")
+        plt = None
+
+    metrics_dir = output_dir / "metrics"
+    plots_dir = output_dir / "plots"
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    station_history = {
+        agent_id: rewards
+        for agent_id, rewards in reward_history.items()
+        if "station" in agent_id and "_charger_" not in agent_id
+    }
+
+    rows: List[Dict[str, Any]] = []
+    reward_totals: Dict[str, float] = {}
+    cumulative_history: Dict[str, List[tuple[float, float]]] = {}
+    for agent_id, rewards in station_history.items():
+        total = 0.0
+        trajectory: List[tuple[float, float]] = []
+        for timestamp, reward in rewards:
+            ts = float(timestamp)
+            r = float(reward)
+            total += r
+            trajectory.append((ts, total))
+            rows.append(
+                {
+                    "agent_id": agent_id,
+                    "timestamp": ts,
+                    "reward": r,
+                    "cumulative_reward": total,
+                }
+            )
+        reward_totals[agent_id] = total
+        cumulative_history[agent_id] = trajectory
+
+    csv_path = metrics_dir / "event_reward_timeseries.csv"
+    _write_csv(
+        csv_path,
+        rows=rows,
+        fieldnames=["agent_id", "timestamp", "reward", "cumulative_reward"],
+    )
+
+    artifacts: Dict[str, Any] = {
+        "reward_totals": reward_totals,
+        "event_reward_timeseries_csv": str(csv_path),
+    }
+
+    if plt is not None and cumulative_history:
+        plt.figure(figsize=(9, 4.5))
+        for agent_id, series in sorted(cumulative_history.items()):
+            if not series:
+                continue
+            xs = [x for x, _ in series]
+            ys = [y for _, y in series]
+            plt.plot(xs, ys, linewidth=1.5, label=agent_id)
+        plt.title("Event-Driven Cumulative Reward by Station")
+        plt.xlabel("Simulation Time (s)")
+        plt.ylabel("Cumulative Reward")
+        plt.grid(alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        line_fig = plots_dir / "event_reward_timeseries.png"
+        plt.savefig(line_fig, dpi=150)
+        plt.close()
+        artifacts["event_reward_timeseries_plot"] = str(line_fig)
+
+        names = sorted(reward_totals.keys())
+        vals = [reward_totals[name] for name in names]
+        plt.figure(figsize=(8, 4.5))
+        plt.bar(names, vals)
+        plt.title("Event-Driven Total Reward by Station")
+        plt.xlabel("Station")
+        plt.ylabel("Total Reward")
+        plt.grid(axis="y", alpha=0.3)
+        plt.xticks(rotation=20)
+        plt.tight_layout()
+        bar_fig = plots_dir / "event_reward_totals_bar.png"
+        plt.savefig(bar_fig, dpi=150)
+        plt.close()
+        artifacts["event_reward_totals_bar_plot"] = str(bar_fig)
+
+    return artifacts
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -70,20 +282,37 @@ def _config_fingerprint(config: Dict[str, Any]) -> str:
 def _build_run_name(config: Dict[str, Any]) -> str:
     env_specs = config.get("env_specs", {})
     training = config.get("training", {})
-    nondeterminism = config.get("nondeterminism", {})
-    default_sched = nondeterminism.get("default_config", {})
+    nondet = config.get("nondeterminism", {})
 
-    label_parts = [
-        f"s{int(env_specs.get('num_stations', 0))}",
-        f"c{int(env_specs.get('num_chargers', 0))}",
-        f"arr{float(env_specs.get('arrival_rate', 0.0)):g}",
-        f"dt{float(env_specs.get('dt', 0.0)):g}",
-        f"seed{int(training.get('seed', 0))}",
-        f"jit{float(default_sched.get('jitter_ratio', 0.0)):g}",
+    parts = [
+        f"s{env_specs.get('num_stations', 0)}",
+        f"c{env_specs.get('num_chargers', 0)}",
+        f"arr{env_specs.get('arrival_rate', 0.0):g}"
     ]
-    base_label = _slugify("_".join(label_parts))
-    return f"{base_label}_{_utc_compact_now()}_{_config_fingerprint(config)}"
 
+    spec_configs = nondet.get("station_specific", {})
+    if spec_configs:
+        intervals = [v.get("tick_interval") for v in spec_configs.values()]
+        unique_intervals = sorted(list(set(intervals)))
+
+        if len(unique_intervals) > 1:
+            parts.append(f"ticks{min(unique_intervals):g}-{max(unique_intervals):g}")
+        else:
+            parts.append(f"tick{unique_intervals[0]:g}")
+    else:
+        default_tick = nondet.get("default_config", {}).get("tick_interval", 0)
+        parts.append(f"tick{default_tick:g}")
+
+    jit = nondet.get("default_config", {}).get("jitter_ratio", 0.0)
+    parts.append(f"jit{jit:g}")
+
+    parts.append(f"seed{training.get('seed', 0)}")
+    parts.append(f"num_iterations{training.get('num_iterations', 0)}")
+
+    base_label = "_".join(parts)
+
+    fingerprint = _config_fingerprint(config)[:6]
+    return f"{base_label}_{_utc_compact_now()}_{fingerprint}"
 
 def resolve_output_dir(config: Dict[str, Any]) -> Path:
     paths_cfg = config.setdefault("paths", {})
@@ -160,31 +389,57 @@ def configure_schedule_configs(env: ChargingEnv, nondeterm_specs: Dict[str, Any]
         if hasattr(agent, "schedule_config") and agent.schedule_config is not None:
             env.scheduler._agent_schedule_configs[agent_id] = agent.schedule_config
 
+
+def _validate_env_specs_strict(env_specs: Dict[str, Any]) -> None:
+    """Validate env_specs in strict charger-only mode."""
+    required_keys = {
+        "num_stations",
+        "num_chargers",
+        "charger_p_max_kw",
+        "arrival_rate",
+        "dt",
+        "episode_length",
+    }
+    allowed_keys = set(required_keys)
+
+    present_keys = set(env_specs.keys())
+    missing = sorted(required_keys - present_keys)
+    unknown = sorted(present_keys - allowed_keys)
+
+    if missing:
+        raise ValueError(f"env_specs missing required keys: {', '.join(missing)}")
+    if unknown:
+        raise ValueError(f"env_specs has unsupported keys in strict charger-only mode: {', '.join(unknown)}")
+
 def create_charging_env(env_specs: Dict[str, Any]) -> ChargingEnv:
-    num_stations = int(env_specs.get("num_stations"))
-    num_chargers = int(env_specs.get("num_chargers"))
+    _validate_env_specs_strict(env_specs)
+    num_stations = int(env_specs["num_stations"])
+    num_chargers = int(env_specs["num_chargers"])
+    charger_p_max_kw = float(env_specs["charger_p_max_kw"])
 
     coordinators: List[StationCoordinator] = []
     for i in range(num_stations):
         station_id = f"station_{i}"
-        slots = {
-            f"{station_id}_slot_{j}": ChargingSlot(agent_id=f"{station_id}_slot_{j}", p_max_kw=150.0)
+        charger_agents = {
+            f"{station_id}_charger_{j}": ChargerAgent(agent_id=f"{station_id}_charger_{j}", p_max_kw=charger_p_max_kw)
             for j in range(num_chargers)
         }
-        coordinators.append(StationCoordinator(agent_id=station_id, subordinates=slots))
+        coordinators.append(StationCoordinator(agent_id=station_id, subordinates=charger_agents))
 
     return ChargingEnv(
         coordinator_agents=coordinators,
-        arrival_rate=float(env_specs.get("arrival_rate", 10.0)),
-        dt=float(env_specs.get("dt", 300.0)),
-        episode_length=float(env_specs.get("episode_length", 86400.0)),
+        arrival_rate=float(env_specs["arrival_rate"]),
+        dt=float(env_specs["dt"]),
+        episode_length=float(env_specs["episode_length"]),
     )
 
 
 def build_rllib_env_config(env_specs: Dict[str, Any], nondeterminism: Dict[str, Any]) -> Dict[str, Any]:
     """Build the flat env_config expected by RLlibBasedHeronEnv."""
-    num_stations = int(env_specs.get("num_stations", 2))
-    num_chargers = int(env_specs.get("num_chargers", 4))
+    _validate_env_specs_strict(env_specs)
+    num_stations = int(env_specs["num_stations"])
+    num_chargers = int(env_specs["num_chargers"])
+    charger_p_max_kw = float(env_specs["charger_p_max_kw"])
 
     default_sched = nondeterminism.get("default_config", {})
     station_specific = nondeterminism.get("station_specific", {})
@@ -209,16 +464,16 @@ def build_rllib_env_config(env_specs: Dict[str, Any], nondeterminism: Dict[str, 
         trainable_agent_ids.append(station_id)
         station_spec = station_specific.get(station_id, {})
 
-        slot_ids: List[str] = []
+        charger_agent_ids: List[str] = []
         for j in range(num_chargers):
-            slot_id = f"{station_id}_slot_{j}"
-            slot_ids.append(slot_id)
+            charger_agent_id = f"{station_id}_charger_{j}"
+            charger_agent_ids.append(charger_agent_id)
             agents.append(
                 {
-                    "agent_id": slot_id,
-                    "agent_cls": ChargingSlot,
+                    "agent_id": charger_agent_id,
+                    "agent_cls": ChargerAgent,
                     "coordinator": station_id,
-                    "p_max_kw": float(env_specs.get("slot_p_max_kw", 150.0)),
+                    "p_max_kw": charger_p_max_kw,
                 }
             )
 
@@ -226,7 +481,7 @@ def build_rllib_env_config(env_specs: Dict[str, Any], nondeterminism: Dict[str, 
             {
                 "coordinator_id": station_id,
                 "agent_cls": StationCoordinator,
-                "subordinates": slot_ids,
+                "subordinates": charger_agent_ids,
                 "schedule_config": _schedule_from_spec(station_spec, seed=42 + i),
             }
         )
@@ -234,14 +489,14 @@ def build_rllib_env_config(env_specs: Dict[str, Any], nondeterminism: Dict[str, 
     return {
         "env_class": ChargingEnv,
         "env_kwargs": {
-            "arrival_rate": float(env_specs.get("arrival_rate", 10.0)),
-            "dt": float(env_specs.get("dt", 300.0)),
-            "episode_length": float(env_specs.get("episode_length", 86400.0)),
+            "arrival_rate": float(env_specs["arrival_rate"]),
+            "dt": float(env_specs["dt"]),
+            "episode_length": float(env_specs["episode_length"]),
         },
         "agents": agents,
         "coordinators": coordinators,
         "agent_ids": trainable_agent_ids,
-        "max_steps": int(env_specs.get("episode_length", 86400) // env_specs.get("dt", 300)),
+        "max_steps": int(float(env_specs["episode_length"]) // float(env_specs["dt"])),
     }
 
 
@@ -307,6 +562,9 @@ def train_rllib_ppo(config: Dict[str, Any]) -> Dict[str, Any]:
         import ray
         from ray.rllib.algorithms.ppo import PPOConfig
         from heron.adaptors.rllib import RLlibBasedHeronEnv
+
+        ray.init(local_mode=True)
+
     except ImportError:
         raise RuntimeError("Ray RLlib is required. Install with: pip install 'ray[rllib]'")
 
@@ -328,7 +586,7 @@ def train_rllib_ppo(config: Dict[str, Any]) -> Dict[str, Any]:
         .environment(env=RLlibBasedHeronEnv, env_config=env_config)
         .framework("torch")
         .training(lr=1e-4, train_batch_size=4000)
-        .env_runners(num_env_runners=2)
+        .env_runners(num_env_runners=0)
         .multi_agent(
             policies=policy_ids,
             policy_mapping_fn=lambda agent_id, *args, **kwargs: f"policy_st_{agent_id.split('_')[1]}"
@@ -340,10 +598,26 @@ def train_rllib_ppo(config: Dict[str, Any]) -> Dict[str, Any]:
 
     best_reward = float("-inf")
     best_ckpt_path = None
+    train_history: List[Dict[str, Any]] = []
 
     for iteration in range(1, train_params.get("num_iterations", 50) + 1):
         result = algo.train()
         reward_mean = _get_mean_reward(result)
+        episode_len_mean = _get_episode_len_mean(result)
+        loss_means = _get_loss_means(result)
+        timesteps_total = result.get("timesteps_total")
+
+        train_history.append(
+            {
+                "iteration": iteration,
+                "reward_mean": reward_mean if reward_mean == reward_mean else None,
+                "episode_len_mean": episode_len_mean,
+                "timesteps_total": timesteps_total,
+                "policy_loss": loss_means["policy_loss"],
+                "vf_loss": loss_means["vf_loss"],
+            }
+        )
+
         reward_txt = f"{reward_mean:.3f}" if reward_mean == reward_mean else "n/a"
         logger.info(f"Iter {iteration}: reward_mean = {reward_txt}")
 
@@ -370,12 +644,31 @@ def train_rllib_ppo(config: Dict[str, Any]) -> Dict[str, Any]:
     }
     _write_json(output_dir / "best_checkpoint.json", best_checkpoint_meta)
 
+    metrics_dir = output_dir / "metrics"
+    train_csv = metrics_dir / "train_metrics.csv"
+    _write_csv(
+        train_csv,
+        rows=train_history,
+        fieldnames=["iteration", "reward_mean", "episode_len_mean", "timesteps_total", "policy_loss", "vf_loss"],
+    )
+    plots = _plot_training_metrics(train_history, output_dir)
+    _write_json(
+        metrics_dir / "train_metrics_meta.json",
+        {
+            "timestamp": _utc_now(),
+            "train_metrics_csv": str(train_csv),
+            "plots": plots,
+        },
+    )
+
     algo.stop()
     ray.shutdown()
     return {
         "status": "completed",
         "best_checkpoint": best_ckpt_path,
         "best_reward_mean": best_checkpoint_meta["best_reward_mean"],
+        "plots": plots,
+        "train_metrics_csv": str(train_csv),
     }
 
 
@@ -431,6 +724,7 @@ def _build_event_driven_policies_from_checkpoint(
         raise RuntimeError("Ray RLlib is required for checkpoint inference. Install with: pip install 'ray[rllib]'")
 
     env_specs = config.get("env_specs", {})
+    num_stations = int(env_specs.get("num_stations", 0))
     env_config = build_rllib_env_config(
         env_specs=env_specs,
         nondeterminism=config.get("nondeterminism", {}),
@@ -449,8 +743,8 @@ def _build_event_driven_policies_from_checkpoint(
         .training(lr=1e-4, train_batch_size=4000)
         .env_runners(num_env_runners=2)
         .multi_agent(
-            policies={"station_policy"},
-            policy_mapping_fn=lambda agent_id, *args, **kwargs: "station_policy",
+            policies={f"policy_st_{i}" for i in range(num_stations)},
+            policy_mapping_fn=lambda agent_id, *args, **kwargs: f"policy_st_{agent_id.split('_')[1]}",
         )
         .build_algo()
     )
@@ -462,10 +756,20 @@ def _build_event_driven_policies_from_checkpoint(
         for agent_id, agent in env.registered_agents.items():
             if isinstance(agent, StationCoordinator):
                 p_id = f"policy_st_{agent_id.split('_')[1]}"
-                module = algo.get_module(p_id)
+                module = None
+                attempted_ids = [p_id, "station_policy"]
+                for candidate in attempted_ids:
+                    try:
+                        module = algo.get_module(candidate)
+                    except Exception:
+                        module = None
+                    if module is not None:
+                        break
 
                 if module is None:
-                    raise RuntimeError(f"Failed to load RLModule for {p_id}")
+                    raise RuntimeError(
+                        f"Failed to load RLModule for station '{agent_id}'. Tried ids: {attempted_ids}"
+                    )
 
                 obs_dim = int(np.prod(agent.observation_space.shape))
                 policies[agent_id] = RLlibPPOPolicyBridge(
@@ -504,28 +808,40 @@ def run_event_driven_sim(config: Dict[str, Any], checkpoint_path: str | None = N
     try:
         configure_schedule_configs(env, nondeterm, seed=42)
 
-        episode_analyzer = EpisodeAnalyzer(verbose=False, track_data=True)
+        resolved_checkpoint = _resolve_best_checkpoint(config, explicit_checkpoint=checkpoint_path)
+        if resolved_checkpoint:
+            policies = _build_event_driven_policies_from_checkpoint(
+                env=env,
+                config=config,
+                checkpoint_path=resolved_checkpoint,
+            )
+            env.set_agent_policies(policies)
+            logger.info(f"Loaded RLlib checkpoint for event-driven run: {resolved_checkpoint}")
+        else:
+            logger.warning("No checkpoint found for event-driven run; using default agent policies.")
+
+        episode_analyzer = EpisodeAnalyzer(verbose=True, track_data=True)
         t_end_val = float(env_specs.get("episode_length"))
         episode = env.run_event_driven(episode_analyzer=episode_analyzer, t_end=t_end_val)
 
         reward_history = episode_analyzer.get_reward_history()
-        reward_totals = {
-            agent_id: float(sum(r for _, r in rewards))
-            for agent_id, rewards in reward_history.items()
-            if "station" in agent_id and "slot" not in agent_id
-        }
+        reward_artifacts = _save_event_reward_artifacts(reward_history, output_dir)
+        reward_totals = reward_artifacts.get("reward_totals", {})
 
         summary = episode.summary()
         payload = {
             "summary": summary,
             "reward_totals": reward_totals,
             "station_jitters": nondeterm.get("station_specific", {}),
+            "checkpoint_path": resolved_checkpoint,
+            "artifacts": reward_artifacts,
             "timestamp": _utc_now()
         }
         _write_json(output_dir / "event_driven_summary.json", payload)
 
         logger.info(f"Final Rewards: {reward_totals}")
     finally:
+        _cleanup_event_driven_inference(env)
         env.close()
 
 
@@ -568,6 +884,6 @@ def main():
             checkpoint_for_event_driven = train_result.get("best_checkpoint")
         run_event_driven_sim(full_config, checkpoint_path=checkpoint_for_event_driven)
 
-
+# TODO: track each reward event
 if __name__ == "__main__":
     main()
