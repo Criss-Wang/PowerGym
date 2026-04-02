@@ -27,6 +27,7 @@ MSG_GET_INFO = "get_info"
 MSG_SET_STATE = "set_state"
 MSG_SET_TICK_RESULT = "set_tick_result"
 MSG_SET_STATE_COMPLETION = "set_state_completion"
+MSG_PHYSICS_COMPLETED = "physics_completed"
 
 # Response message types
 MSG_GET_OBS_RESPONSE = "get_obs_response"

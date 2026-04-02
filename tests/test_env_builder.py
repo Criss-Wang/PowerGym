@@ -43,7 +43,7 @@ class DummyAgent(FieldAgent):
     def apply_action(self) -> None:
         pass
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         return 0.0
 
 

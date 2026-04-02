@@ -369,7 +369,7 @@ class Generator(DeviceAgent):
 
         self.metrics.set_values(cost=cost, safety=safety)
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         """Compute reward based on cost and safety.
 
         Reward = -cost - safety

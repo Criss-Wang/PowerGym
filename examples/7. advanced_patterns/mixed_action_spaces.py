@@ -290,7 +290,7 @@ class Generator(FieldAgent):
         power = self.action.c[0] * is_on
         feat.set_values(power=power, is_on=is_on)
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         if "GeneratorFeature" not in local_state:
             return 0.0
         vec = local_state["GeneratorFeature"]
@@ -322,7 +322,7 @@ class Transformer(FieldAgent):
         voltage = 0.95 + tap * 0.01  # tap 0=0.95pu, tap 5=1.00pu, tap 10=1.05pu
         feat.set_values(tap_pos=tap, voltage=voltage)
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         if "TransformerFeature" not in local_state:
             return 0.0
         vec = local_state["TransformerFeature"]

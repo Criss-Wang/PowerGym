@@ -23,14 +23,14 @@ This document defines the complete set of files to run and their passing criteri
 | Category | Count | Command |
 |----------|-------|---------|
 | Unit tests | 4 tests in 1 file | `pytest tests/test_env_builder.py -v` |
-| Integration tests (pytest) | 14 tests in 1 file | `pytest tests/integration/test_active_mask.py -v` |
-| Integration tests (manual) | 5 files | See [Section 2](#2-integration-tests-pytest) |
+| Integration tests | 6 files (manual + pytest) | See [Section 2](#2-integration-tests-pytest) |
+| Event-driven timing tests | 41 tests in 1 file | `pytest tests/integration/test_event_driven_timing.py -v` |
 | Case study tests | 1 file | `pytest case_studies/power/tests/test_hierarchical_env.py -v` |
 | Case study scripts | 4 scripts | See [Section 4](#4-case-study-run-scripts) |
 | Framework examples | 17 scripts | `python examples/<N>.*/<script>.py` |
 | Framework notebooks | 2 notebooks | `examples/notebooks/` |
 | Power grid notebooks | 6 notebooks | `case_studies/power/tutorials/` |
-| **Total** | **40 runnable items** | |
+| **Total** | **61 runnable items** | |
 
 ---
 
@@ -165,6 +165,40 @@ python tests/integration/test_rllib_action_passing.py
 | MAPPO trains | 5 iterations of `algo.train()` complete; `mean_reward` is not NaN |
 | IPPO trains | 5 iterations of `algo.train()` complete; `mean_reward` is not NaN |
 | Agent IDs | `["device_1", "device_2"]` present in all dicts |
+
+---
+
+### 2.6 `tests/integration/test_event_driven_timing.py`
+
+**Run command:**
+```bash
+pytest tests/integration/test_event_driven_timing.py -v
+```
+
+**What it tests:** End-to-end timing correctness under all meaningful orderings of agent_tick, action_effect, simulation (physics), and message_delivery events. Uses a minimal CounterAgent domain with identity physics, exercising the full BaseEnv → Proxy → Scheduler → Agent pipeline.
+
+| Test ID | Scenario | What It Validates | Passing Criteria |
+|---------|----------|-------------------|------------------|
+| T1 (2 tests) | Happy path: action lands before physics | Reward has >= 1 (obs,action) pair; action_effect precedes simulation in timeline | `len(pairs) >= 1`; `ae_time < sim_time` |
+| T2 (2 tests) | Physics before action_effect | Reward has ZERO pairs (no fake attribution); simulation precedes action_effect in timeline | `len(pairs) == 0`; `sim_time < ae_time` |
+| T3 (1 test) | Multiple ticks before physics | Fast-ticking agent accumulates >= 2 (obs,action) pairs per physics cycle | `len(pairs) >= 2` |
+| T4 (1 test) | Physics before any agent tick | Early physics produces reward with empty cache and prev=None | `len(pairs) == 0` |
+| T5 (1 test) | Two physics steps between ticks | Non-empty rewards <= agent ticks; total rewards >= 2 from multiple physics cycles | `non_empty <= agent_ticks` |
+| T6 (2 tests) | Overlapping action_effects (fast tick, slow act_delay) | FIFO queue handles concurrent pending obs without crash; queue length never negative | No `IndexError`; `pending >= 0` |
+| T7 (3 tests) | Reactive agents: bottom-up reward cascade | Reactive agents produce rewards; coordinator reward after subordinates; reactive ticks after coordinator | `sub_time <= coord_time` |
+| T8 (2 tests) | Heterogeneous tick rates | Fast agent ticks more than slow agent; fast agent accumulates more pairs per physics | `ticks_fast > ticks_slow` |
+| T9 (5 tests) | Jitter robustness (Gaussian + Uniform × 4 seeds) | Non-deterministic delays don't break invariants; queue never negative | Completes without error; `pending >= 0` |
+| T10 (2 tests) | Reset isolation | Cache/queue/prev cleared after reset; deterministic replay across episodes | All timing state zeroed; identical event sequences |
+| T11 (2 tests) | Long simulation stress (100s) | No accumulation errors; rewards non-decreasing (counter domain) | `> 100 events`; `reward[i] >= reward[i-1]` |
+| T12 (2 tests) | Reactive agent physics-before-action_effect | Reactive sub reward has 0 pairs when physics fires first; simulation precedes reactive action_effect | `len(pairs) == 0`; `sim_time < ae_time` |
+| T13 (2 tests) | Rapid physics — coordinator pending_sub_rewards stress | Coordinator produces rewards under fast physics; no crash or deadlock | `>=1 reward`; completes without error |
+| T14 (2 tests) | Large system msg_delay — delayed physics notification | Delayed notification doesn't lose pairs; accumulated pairs >= baseline | `len(pairs) >= 1`; `delayed >= baseline` |
+| T15 (3 tests) | Mixed periodic + reactive hierarchy | All agent types produce rewards; queue invariants hold across hierarchy | All agents have rewards; `pending >= 0` |
+| T16 (2 tests) | Agent re-ticks before action lands (tick < round-trip) | State evolves non-decreasingly; second obs reflects pre-action1 state | `state[i] >= state[i-1]`; `obs[0] == obs[1]` |
+| T17 (3 tests) | Full 3-level reactive cascade with interleaved physics | Bottom-up ordering; reactive pairs empty when physics interleaves; coordinator caches at compute time | `sub_t <= coord_t`; `len(pairs) == 0` for subs |
+| T18 (4 tests) | Extreme config boundary conditions | Zero delays, near-zero, extreme ratios all complete without crash | `pending >= 0`; no crash |
+
+**Pass = All 41 tests green.**
 
 ---
 
@@ -395,9 +429,9 @@ jupyter nbconvert --to notebook --execute examples/notebooks/ctde_event_driven_t
 | Criteria | How to Verify |
 |----------|---------------|
 | All cells execute | No errors |
-| Hierarchy | 3 coordinators with heterogeneous obs_dims (e.g., 7, 9, 12) |
+| Hierarchy | 3 coordinators with heterogeneous obs_dims (values depend on device count per microgrid) |
 | Training | 30 episodes; returns improve over training |
-| Event-driven eval | 300s simulation; ~70 events processed, ~12 agent ticks |
+| Event-driven eval | 300s simulation; ~2600+ events processed, ~560+ agent ticks |
 | Action decomposition | Joint actions correctly split to per-device via VerticalProtocol |
 
 ### 7.5 `case_studies/power/tutorials/05_event_driven_testing.ipynb`
@@ -424,7 +458,7 @@ jupyter nbconvert --to notebook --execute examples/notebooks/ctde_event_driven_t
 
 ## Running Everything
 
-### Full pytest suite
+### Full pytest suite (unit + timing integration)
 ```bash
 source .venv/bin/activate
 pytest tests/ case_studies/power/tests/ -v
@@ -492,7 +526,7 @@ When time is limited, run tests in this order:
 
 ### Tier 1 - Must Pass (core correctness)
 1. `pytest tests/test_env_builder.py -v`
-2. `pytest tests/integration/test_active_mask.py -v`
+2. `pytest tests/integration/test_event_driven_timing.py -v`
 3. `python tests/integration/test_action_passing.py`
 4. `python tests/integration/test_e2e.py`
 5. `python tests/integration/test_rllib_action_passing.py`
