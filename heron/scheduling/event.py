@@ -4,6 +4,7 @@ Events represent scheduled actions in the simulation timeline.
 The EventScheduler processes events in timestamp order.
 """
 
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional
@@ -51,6 +52,8 @@ class Event:
     event_type: EventType = field(default=EventType.AGENT_TICK, compare=False)
     agent_id: Optional[str] = field(default=None, compare=False)
     payload: Dict[str, Any] = field(default_factory=dict, compare=False)
+    event_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12], compare=False)
+    cancelled: bool = field(default=False, compare=False)
 
     def __repr__(self) -> str:
         return (

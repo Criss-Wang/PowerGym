@@ -8,6 +8,7 @@ This module provides discrete-event simulation capabilities with:
 - Event analysis and episode result tracking
 """
 
+from heron.scheduling.condition_monitor import ConditionMonitor
 from heron.scheduling.event import Event, EventType, EVENT_TYPE_FROM_STRING
 from heron.scheduling.scheduler import EventScheduler
 from heron.scheduling.schedule_config import (
@@ -20,6 +21,7 @@ from heron.scheduling.schedule_config import (
 from heron.scheduling.analysis import EpisodeAnalyzer, EpisodeStats, EventAnalysis
 
 __all__ = [
+    "ConditionMonitor",
     "DEFAULT_COORDINATOR_AGENT_SCHEDULE_CONFIG",
     "DEFAULT_FIELD_AGENT_SCHEDULE_CONFIG",
     "DEFAULT_SYSTEM_AGENT_SCHEDULE_CONFIG",

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Iter
 if TYPE_CHECKING:
     from heron.agents import Agent
 
+from heron.scheduling.condition_monitor import ConditionMonitor
 from heron.scheduling.event import Event, EventType
 from heron.utils.typing import AgentID
 from heron.scheduling.schedule_config import ScheduleConfig
@@ -23,6 +24,9 @@ class EventScheduler:
         self.handlers: Dict[
             AgentID, Dict[EventType, Callable[[Event, "EventScheduler"], None]]
         ] = {}
+
+        # Condition monitors (evaluated after SIMULATION and ENV_UPDATE events)
+        self._condition_monitors: List[ConditionMonitor] = []
 
         # Tracking
         self._processed_count: int = 0
@@ -71,16 +75,44 @@ class EventScheduler:
     # ===============================
     # Event Scheduling Methods
     # ===============================
-    def schedule(self, event: Event) -> None:
+    def schedule(self, event: Event) -> str:
         """Schedule an event for future processing.
 
         Args:
             event: Event to schedule
+
+        Returns:
+            The event_id assigned to this event.
         """
         # Assign sequence number for deterministic ordering
         event.sequence = self._sequence_counter
         self._sequence_counter += 1
         heapq.heappush(self.event_queue, event)
+        return event.event_id
+
+    def cancel_event(self, event_id: str) -> bool:
+        """Mark a specific event as cancelled. Returns True if found."""
+        for event in self.event_queue:
+            if event.event_id == event_id and not event.cancelled:
+                event.cancelled = True
+                return True
+        return False
+
+    def cancel_events(self, agent_id: AgentID, event_type: EventType) -> int:
+        """Cancel all pending events matching agent_id and event_type.
+
+        Returns count of cancelled events.
+        """
+        count = 0
+        for event in self.event_queue:
+            if (
+                event.agent_id == agent_id
+                and event.event_type == event_type
+                and not event.cancelled
+            ):
+                event.cancelled = True
+                count += 1
+        return count
 
     def schedule_agent_tick(
         self,
@@ -181,6 +213,64 @@ class EventScheduler:
                 priority=1,  # Environment-level events (runs physics after actions)
             )
         )
+
+    # ===============================
+    # Condition Monitor Management
+    # ===============================
+    def register_condition(self, monitor: ConditionMonitor) -> None:
+        """Register a condition monitor. Conditions are evaluated after
+        SIMULATION and ENV_UPDATE events."""
+        self._condition_monitors.append(monitor)
+
+    def deregister_condition(self, monitor_id: str) -> bool:
+        """Remove a condition monitor by ID. Returns True if found."""
+        for i, m in enumerate(self._condition_monitors):
+            if m.monitor_id == monitor_id:
+                self._condition_monitors.pop(i)
+                return True
+        return False
+
+    def evaluate_conditions(self, proxy_state: Dict[str, Any]) -> List[Event]:
+        """Evaluate all registered conditions against current state.
+
+        Schedules CONDITION_TRIGGER events for any that fire.
+        Returns list of triggered events.
+        """
+        triggered: List[Event] = []
+        to_remove: List[str] = []
+
+        for monitor in self._condition_monitors:
+            if not monitor.condition_fn(proxy_state):
+                continue
+            if self.current_time - monitor._last_triggered < monitor.cooldown:
+                continue
+
+            # Condition fired — schedule CONDITION_TRIGGER
+            event = Event(
+                timestamp=self.current_time,
+                event_type=EventType.CUSTOM,  # Renamed to CONDITION_TRIGGER in Phase 2
+                agent_id=monitor.agent_id,
+                priority=2,
+                payload={
+                    "monitor_id": monitor.monitor_id,
+                    "condition": monitor.monitor_id,
+                },
+            )
+            self.schedule(event)
+            triggered.append(event)
+
+            monitor._last_triggered = self.current_time
+
+            if monitor.preempt_next_tick:
+                self.cancel_events(monitor.agent_id, EventType.AGENT_TICK)
+
+            if monitor.one_shot:
+                to_remove.append(monitor.monitor_id)
+
+        for mid in to_remove:
+            self.deregister_condition(mid)
+
+        return triggered
 
     # ===============================
     # Delay and Interval Accessors with Jitter Support
@@ -326,11 +416,19 @@ class EventScheduler:
     def process_next(self) -> Optional[Event]:
         """Process the next event in the queue.
 
+        Cancelled events are silently discarded.
+
         Returns:
             The processed Event, or None if queue is empty
         """
-        event = self.pop()
-        if event is None:
+        # Skip cancelled events
+        while self.event_queue:
+            event = self.pop()
+            if event is None:
+                return None
+            if not event.cancelled:
+                break
+        else:
             return None
 
         # Advance simulation time
@@ -409,6 +507,9 @@ class EventScheduler:
         self.current_time = start_time
         self.clear()
         self._processed_count = 0
+        # Reset condition monitor cooldowns (keep registrations)
+        for monitor in self._condition_monitors:
+            monitor._last_triggered = -float("inf")
 
         # Re-schedule first tick only for system agent (matches attach() behavior)
         # System agent will cascade ticks to subordinates
