@@ -6,6 +6,8 @@ Usage:
 
 import numpy as np
 
+from heron.agents.system_agent import SystemAgent
+
 from case_studies.power.ev_public_charging_case.agents import ChargingSlot, StationCoordinator
 from case_studies.power.ev_public_charging_case.envs.charging_env import ChargingEnv
 
@@ -13,14 +15,20 @@ from case_studies.power.ev_public_charging_case.envs.charging_env import Chargin
 def main():
     # Create a single station with 5 charger slots
     s_id = "station_0"
-    slots = {
-        f"{s_id}_slot_{j}": ChargingSlot(agent_id=f"{s_id}_slot_{j}", p_max_kw=150.0)
+    slot_agents = [
+        ChargingSlot(agent_id=f"{s_id}_slot_{j}", p_max_kw=150.0)
         for j in range(5)
-    }
-    station = StationCoordinator(agent_id=s_id, subordinates=slots)
+    ]
+    station = StationCoordinator(agent_id=s_id)
+    system = SystemAgent()
 
+    slot_ids = [s.agent_id for s in slot_agents]
     env = ChargingEnv(
-        coordinator_agents=[station],
+        agents=[system, station] + slot_agents,
+        hierarchy={
+            "system_agent": [s_id],
+            s_id: slot_ids,
+        },
         arrival_rate=10.0,
         dt=300.0,
         episode_length=86400.0,

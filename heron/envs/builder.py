@@ -38,6 +38,7 @@ import fnmatch
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Type
 
+from heron.agents.base import Agent
 from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.agents.field_agent import FieldAgent
 from heron.agents.system_agent import SystemAgent
@@ -220,11 +221,14 @@ class EnvBuilder:
 
     def build(self) -> BaseEnv:
         """Construct and return the configured environment."""
-        agents = self._instantiate_agents()
-        coordinators = self._resolve_coordinators(agents)
-        if system := self._resolve_system_agent(coordinators):
-            return self._build_env(system=system)
-        return self._build_env(coordinators=coordinators)
+        field_agents = self._instantiate_agents()
+        coordinators, coord_hierarchy, unassigned = self._resolve_coordinators(field_agents)
+        system_agent, sys_hierarchy = self._resolve_system_agent(coordinators, unassigned)
+
+        all_agents = list(field_agents.values()) + coordinators + [system_agent]
+        hierarchy = {**coord_hierarchy, **sys_hierarchy}
+
+        return self._build_env(all_agents, hierarchy)
 
     def __call__(self, config: Any = None) -> BaseEnv:
         """Build the environment (callable shorthand for ``build()``).
@@ -238,8 +242,8 @@ class EnvBuilder:
     #  Internal helpers
     # ------------------------------------------------------------------
 
-    def _instantiate_agents(self) -> Dict[str, FieldAgent]:
-        agents: Dict[str, FieldAgent] = {}
+    def _instantiate_agents(self) -> Dict[str, Agent]:
+        agents: Dict[str, Agent] = {}
         for spec in self._agent_specs:
             ctor_kwargs = dict(agent_id=spec.agent_id, **spec.kwargs)
             if spec.features:
@@ -250,9 +254,17 @@ class EnvBuilder:
         return agents
 
     def _resolve_coordinators(
-        self, agents: Dict[str, FieldAgent],
-    ) -> List[CoordinatorAgent]:
-        coordinators: List[CoordinatorAgent] = []
+        self, agents: Dict[str, Agent],
+    ) -> tuple[List[Agent], Dict[str, List[str]], List[str]]:
+        """Create coordinators (without subordinates) and return hierarchy edges.
+
+        Returns:
+            Tuple of (coordinator_list, hierarchy_dict, unassigned_ids) where
+            hierarchy_dict maps coordinator_id -> [subordinate_agent_ids] and
+            unassigned_ids are agents not assigned to any coordinator.
+        """
+        coordinators: List[Agent] = []
+        hierarchy: Dict[str, List[str]] = {}
         assigned: set = set()
 
         for cspec in self._coordinator_specs:
@@ -269,14 +281,15 @@ class EnvBuilder:
                 if aspec.coordinator_id == cspec.agent_id and aspec.agent_id not in sub_ids:
                     sub_ids.append(aspec.agent_id)
 
-            subordinates = {aid: agents[aid] for aid in sub_ids if aid in agents}
+            # Filter to agents that actually exist
+            sub_ids = [aid for aid in sub_ids if aid in agents]
             assigned.update(sub_ids)
+            hierarchy[cspec.agent_id] = sub_ids
 
             features = [copy.deepcopy(f) for f in cspec.features]
             ctor_kwargs = dict(
                 agent_id=cspec.agent_id,
                 features=features,
-                subordinates=subordinates,
                 **cspec.kwargs,
             )
             if cspec.schedule_config is not None:
@@ -285,54 +298,54 @@ class EnvBuilder:
                 ctor_kwargs["protocol"] = cspec.protocol
             coordinators.append(cspec.agent_cls(**ctor_kwargs))
 
-        # Auto-create coordinator for unassigned agents
         unassigned = [aid for aid in agents if aid not in assigned]
-        if unassigned:
-            coordinators.append(CoordinatorAgent(
-                agent_id="auto_coordinator",
-                subordinates={aid: agents[aid] for aid in unassigned},
-            ))
+        return coordinators, hierarchy, unassigned
 
-        return coordinators
-    
     def _resolve_system_agent(
-        self, coordinators: List[CoordinatorAgent],
-    ) -> SystemAgent | None:
-        if not self._system_spec:
-            return None
-        features = list(self._system_spec.features)
-        schedule_config = self._system_spec.schedule_config
-        kwargs = dict(self._system_spec.kwargs)
+        self,
+        coordinators: List[Agent],
+        unassigned_ids: List[str],
+    ) -> tuple[SystemAgent, Dict[str, List[str]]]:
+        """Create system agent (without subordinates) and return hierarchy edges.
 
-        system_agent = SystemAgent(
-            features=features,
-            schedule_config=schedule_config,
-            subordinates={c.agent_id: c for c in coordinators},
-            **kwargs,
-        )
-        return system_agent
+        Unassigned field agents are attached directly under the system agent
+        alongside any coordinators.
+        """
+        child_ids = [c.agent_id for c in coordinators] + unassigned_ids
+
+        if self._system_spec:
+            features = list(self._system_spec.features)
+            schedule_config = self._system_spec.schedule_config
+            kwargs = dict(self._system_spec.kwargs)
+            system_agent = SystemAgent(
+                features=features,
+                schedule_config=schedule_config,
+                **kwargs,
+            )
+        else:
+            system_agent = SystemAgent()
+
+        hierarchy = {system_agent.agent_id: child_ids}
+        return system_agent, hierarchy
 
     def _build_env(
-        self, 
-        system: Optional[SystemAgent] = None, 
-        coordinators: Optional[List[CoordinatorAgent]] = None
+        self,
+        agents: List,
+        hierarchy: Dict[str, List[str]],
     ) -> BaseEnv:
-        if system and coordinators:
-            raise ValueError("Cannot build env with both SystemAgent and coordinators (not supported yet).")
-        
         if self._env_cls is not None:
             return self._env_cls(
+                agents=agents,
+                hierarchy=hierarchy,
                 env_id=self._env_id,
-                system_agent=system, 
-                coordinator_agents=coordinators,
                 **self._env_kwargs,
             )
-    
+
         if self._simulation_func is not None:
             return DefaultHeronEnv(
+                agents=agents,
+                hierarchy=hierarchy,
                 env_id=self._env_id,
-                system_agent=system,
-                coordinator_agents=coordinators,
                 simulation_func=self._simulation_func,
             )
 
