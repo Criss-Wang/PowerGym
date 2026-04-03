@@ -1,4 +1,5 @@
 import logging
+import warnings
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
@@ -145,6 +146,30 @@ class BaseEnv(ABC):
             self.pre_step,
             self.apply_disturbance,
         )
+        self._warn_if_cascades_may_overlap(system_agent)
+
+    def _warn_if_cascades_may_overlap(self, system_agent: SystemAgent) -> None:
+        """Emit a warning if the system tick interval is too short for reward cascades."""
+        sys_tick = system_agent.schedule_config.tick_interval
+        msg_delays = [
+            agent.schedule_config.msg_delay
+            for agent in self.registered_agents.values()
+            if hasattr(agent, "schedule_config") and agent.schedule_config is not None
+        ]
+        if not msg_delays:
+            return
+        max_msg_delay = max(msg_delays)
+        estimated_cascade = 6 * max_msg_delay  # ~3 round-trips × 2 hops
+        if estimated_cascade > 0 and sys_tick < estimated_cascade:
+            warnings.warn(
+                f"System tick interval ({sys_tick}s) is shorter than estimated "
+                f"reward cascade time (~{estimated_cascade:.1f}s). In event-driven "
+                f"mode, overlapping cascades may compute coordinator rewards against "
+                f"stale post-physics state. This is realistic for async distributed "
+                f"systems but may affect reward accuracy. Increase sys_tick_interval "
+                f"or reduce msg_delay to avoid.",
+                stacklevel=4,
+            )
 
     def get_agent(self, agent_id: AgentID) -> Optional[Agent]:
         """Get a registered agent by ID.

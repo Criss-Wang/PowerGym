@@ -1057,24 +1057,20 @@ def test_t12_reactive_action_effect_fires_after_first_simulation():
 
 
 # =============================================================================
-# T13: Rapid physics — coordinator _pending_sub_rewards overwrite
+# T13: Rapid physics — coordinator reward under overlapping cascades
 #
-# BUG FLAG: If sys_tick_interval is small enough that a second
-# MSG_PHYSICS_COMPLETED arrives at the coordinator before all reactive
-# subordinates completed reward from the first physics cycle,
-# _pending_sub_rewards gets overwritten (line 185 in coordinator_agent.py).
-# The coordinator loses the reward for the first physics cycle.
-#
-# This test documents the behaviour. If the bug is fixed (e.g. by
-# queueing pending-reward sets), the assertions should be tightened.
+# Tests that the deque-based per-cycle tracking in CoordinatorAgent
+# produces a coordinator reward for every physics cycle, even when
+# cascades overlap (sys_tick_interval < ~6×msg_delay).
 # =============================================================================
 
 def test_t13_rapid_physics_coordinator_reward_count():
-    """With fast physics and slow reactive reward cascade, check whether
-    the coordinator produces a reward for every physics cycle.
+    """With fast physics and slow reactive reward cascade, coordinator
+    should produce a reward for every physics cycle (no reward loss).
 
     Config: sys_tick_interval=2, msg_delay=0.5 → full reward cascade
     takes ~6×msg_delay = 3.0s, but physics fires every 2 + sim_wait.
+    The deque-based tracking ensures no cycle is silently dropped.
     """
     env = _build_reactive_env_custom(
         coord_tick_interval=2.0,
@@ -1095,17 +1091,15 @@ def test_t13_rapid_physics_coordinator_reward_count():
     sub_rewards_1 = analyzer.reward_history.get("reactive_1", [])
     sub_rewards_2 = analyzer.reward_history.get("reactive_2", [])
 
-    # At minimum, some rewards should be produced
     assert len(coord_rewards) >= 1, "Coordinator should produce at least 1 reward"
     assert len(sub_rewards_1) >= 1, "reactive_1 should produce at least 1 reward"
 
-    # Document the potential loss: coordinator rewards may be < simulation count
-    # because _pending_sub_rewards overwrite can skip reward cycles.
-    # If this assertion fails after a bug fix, tighten it to ==.
-    if sim_count > 2:
-        # We expect some reward loss if physics is faster than cascade
-        # This is informational — the key is no crash.
-        pass
+    # After race-condition fix: coordinator rewards should match simulation count.
+    # Allow -1 for edge effects (last cycle may not complete before t_end).
+    assert len(coord_rewards) >= sim_count - 1, (
+        f"Coordinator rewards ({len(coord_rewards)}) should be at least "
+        f"sim_count - 1 ({sim_count - 1}) — no reward loss from overlapping cascades"
+    )
 
 
 def test_t13_rapid_physics_no_crash():
@@ -1123,6 +1117,61 @@ def test_t13_rapid_physics_no_crash():
     analyzer = _run_and_analyze(env, t_end=15.0)
     summary = analyzer.get_summary()
     assert summary["action_results"] >= 1, "Should produce at least some rewards"
+
+
+def test_t13_rapid_physics_no_reward_loss_variant():
+    """Variant timing: even faster physics relative to cascade.
+
+    sys_tick=1.5, msg_delay=0.4 → cascade ~2.4s but physics every ~1.7s.
+    Multiple cascades will overlap; none should be lost.
+    """
+    env = _build_reactive_env_custom(
+        coord_tick_interval=1.5,
+        coord_act_delay=0.05,
+        field_act_delay=0.05,
+        msg_delay=0.4,
+        sim_wait=0.2,
+        sys_tick_interval=1.5,
+        sys_msg_delay=0.4,
+    )
+    env.reset(seed=99)
+    analyzer = EpisodeAnalyzer(verbose=False, track_data=True)
+    episode = env.run_event_driven(episode_analyzer=analyzer, t_end=15.0)
+
+    sim_count = len([a for a in episode.event_analyses
+                     if a.event_type == EventType.SIMULATION])
+    coord_rewards = analyzer.reward_history.get("coord_reactive", [])
+
+    assert sim_count >= 3, "Should have multiple physics cycles"
+    assert len(coord_rewards) >= sim_count - 1, (
+        f"No reward loss: coord_rewards={len(coord_rewards)}, sim_count={sim_count}"
+    )
+
+
+def test_t13_overlapping_cascades_correct_ordering():
+    """When cascades overlap, coordinator rewards should arrive in
+    chronological order (FIFO — earliest cycle's reward first)."""
+    env = _build_reactive_env_custom(
+        coord_tick_interval=2.0,
+        coord_act_delay=0.1,
+        field_act_delay=0.1,
+        msg_delay=0.5,
+        sim_wait=0.5,
+        sys_tick_interval=2.0,
+        sys_msg_delay=0.5,
+    )
+    env.reset(seed=42)
+    analyzer = EpisodeAnalyzer(verbose=False, track_data=True)
+    env.run_event_driven(episode_analyzer=analyzer, t_end=20.0)
+
+    coord_rewards = analyzer.reward_history.get("coord_reactive", [])
+    if len(coord_rewards) >= 2:
+        timestamps = [r[0] for r in coord_rewards]
+        for i in range(1, len(timestamps)):
+            assert timestamps[i] >= timestamps[i - 1], (
+                f"Coordinator rewards should be in chronological order: "
+                f"t[{i-1}]={timestamps[i-1]}, t[{i}]={timestamps[i]}"
+            )
 
 
 # =============================================================================
