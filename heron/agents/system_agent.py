@@ -11,6 +11,7 @@ from heron.core.state import State, SystemAgentState
 from heron.utils.typing import AgentID, MultiAgentDict
 from heron.core.policies import Policy
 from heron.protocols.base import Protocol
+from heron.scheduling.event import EventType
 from heron.scheduling.scheduler import Event, EventScheduler
 from heron.scheduling.schedule_config import DEFAULT_SYSTEM_AGENT_SCHEDULE_CONFIG, ScheduleConfig
 from gymnasium.spaces import Box, Space
@@ -60,9 +61,21 @@ class SystemAgent(Agent):
         )
         self._simulation_configured: bool = False
         self._subordinates_kicked_off: bool = False
+        self._last_post_physics_state: Optional[Dict] = None
+        self._apply_disturbance_func: Optional[Callable] = None
+        # FIFO queue tracking whether each in-flight simulation was
+        # disturbance-triggered. Pushed in simulation_handler, popped
+        # in message_delivery_handler at MSG_SET_STATE_COMPLETION.
+        from collections import deque
+        self._sim_origin_queue: deque = deque()
 
         # Resolve which agents are periodic vs reactive (R2-R4)
-        self._periodic_agents: List[AgentID] = self.resolve_periodic_children()
+        self._periodic_agents: List[AgentID] = []
+        self.refresh_periodic_agents()
+
+    def refresh_periodic_agents(self) -> None:
+        """Re-resolve periodic children and cache the result."""
+        self._periodic_agents = self.resolve_periodic_children()
 
     def init_state(self, features: List[Feature] = []) -> State:
         """Initialize a SystemAgentState from the provided features."""
@@ -196,6 +209,69 @@ class SystemAgent(Agent):
     def agent_tick_handler(self, event: Event, scheduler: EventScheduler) -> None:
         self.tick(scheduler, event.timestamp)
 
+    @Agent.handler("condition_trigger")
+    def condition_trigger_handler(self, event: Event, scheduler: EventScheduler) -> None:
+        """No-op: SystemAgent is an orchestrator and does not react to conditions.
+
+        Condition monitors should target field or coordinator agents instead.
+        """
+        logger.warning(
+            "SystemAgent received CONDITION_TRIGGER (monitor_id=%s). "
+            "Conditions should target field/coordinator agents.",
+            event.payload.get("monitor_id"),
+        )
+
+    @Agent.handler("env_update")
+    def env_update_handler(self, event: Event, scheduler: EventScheduler) -> None:
+        """Handle an exogenous disturbance event (Class 4).
+
+        Causal chain when ``requires_physics=True`` (default, recommended):
+          1. ``apply_disturbance()`` mutates environment state
+          2. Immediate SIMULATION scheduled (delay=0)
+          3. Physics re-solves with post-disturbance state
+          4. Condition monitors evaluated with fresh post-physics state
+             (via existing ``MSG_SET_STATE_COMPLETION`` path)
+
+        When ``requires_physics=False`` (lightweight disturbances only):
+          1. ``apply_disturbance()`` mutates environment state
+          2. Condition monitors evaluated against **cached** post-physics
+             state from the most recent SIMULATION.
+
+        .. note::
+           ``requires_physics=False`` evaluates conditions against stale
+           state because the event-driven architecture uses async messaging
+           and there is no synchronous proxy access. If the disturbance
+           changes state that condition monitors watch, use
+           ``requires_physics=True`` to ensure fresh evaluation.
+        """
+        disturbance = event.payload.get("disturbance")
+        if disturbance is None:
+            logger.warning("ENV_UPDATE event has no 'disturbance' in payload. Ignoring.")
+            return
+
+        if self._apply_disturbance_func is None:
+            raise RuntimeError(
+                "Received ENV_UPDATE but no apply_disturbance_func is configured. "
+                "Override apply_disturbance() in your BaseEnv subclass."
+            )
+
+        self._apply_disturbance_func(disturbance)
+        logger.info(
+            "Applied disturbance: type=%s at t=%.3f",
+            disturbance.disturbance_type,
+            event.timestamp,
+        )
+
+        if disturbance.requires_physics:
+            scheduler.schedule_simulation(
+                agent_id=self.agent_id, delay=0.0,
+                payload={"triggered_by": "disturbance"},
+            )
+        else:
+            # Best-effort: evaluate against cached state. See docstring note.
+            if self._last_post_physics_state is not None:
+                self.evaluate_conditions(self._last_post_physics_state, scheduler)
+
     @Agent.handler("action_effect")
     def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
         """No-op: SystemAgent does not apply actions (R1)."""
@@ -220,6 +296,8 @@ class SystemAgent(Agent):
             response_data = message_content[MSG_GET_GLOBAL_STATE_RESPONSE]
             global_state = response_data[MSG_KEY_BODY]
             updated_global_state = self.simulate(global_state)
+            # Cache for condition evaluation after proxy confirms write
+            self._last_post_physics_state = updated_global_state
             scheduler.schedule_message_delivery(
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
@@ -230,17 +308,37 @@ class SystemAgent(Agent):
             if message_content[MSG_SET_STATE_COMPLETION] != "success":
                 raise ValueError("State update failed in proxy, cannot proceed")
 
-            # Physics is done. Broadcast MSG_PHYSICS_COMPLETED to all periodic agents
-            # so they compute reward from post-physics state (R7).
-            for agent_id in self._periodic_agents:
-                scheduler.schedule_message_delivery(
-                    sender_id=self.agent_id,
-                    recipient_id=agent_id,
-                    message={MSG_PHYSICS_COMPLETED: "success"},
-                )
+            # Evaluate condition monitors against post-physics state (Class 3).
+            if self._last_post_physics_state is not None:
+                self.evaluate_conditions(self._last_post_physics_state, scheduler)
+                self._last_post_physics_state = None
 
-            # Self-reschedule for next physics cycle
-            scheduler.schedule_agent_tick(self.agent_id)
+            # Pop the origin of this simulation from the FIFO queue.
+            # The queue ensures correct pairing even when multiple
+            # simulations interleave in the message pipeline.
+            is_disturbance = (
+                self._sim_origin_queue.popleft()
+                if self._sim_origin_queue
+                else False
+            )
+
+            if is_disturbance:
+                # Disturbance-triggered SIMULATION: only evaluate conditions
+                # (done above). Do NOT broadcast PHYSICS_COMPLETED or
+                # self-reschedule — that would create a duplicate periodic
+                # cycle and generate empty-pair rewards.
+                pass
+            else:
+                # Periodic SIMULATION: broadcast PHYSICS_COMPLETED to all
+                # periodic agents so they compute reward (R7), then
+                # self-reschedule for next physics cycle.
+                for agent_id in self._periodic_agents:
+                    scheduler.schedule_message_delivery(
+                        sender_id=self.agent_id,
+                        recipient_id=agent_id,
+                        message={MSG_PHYSICS_COMPLETED: "success"},
+                    )
+                scheduler.schedule_agent_tick(self.agent_id)
 
         else:
             raise NotImplementedError(f"SystemAgent received unknown message: {list(message_content.keys())}")
@@ -248,12 +346,73 @@ class SystemAgent(Agent):
     @Agent.handler("simulation")
     def simulation_handler(self, event: Event, scheduler: EventScheduler) -> None:
         """Request global state from proxy to begin simulation cycle."""
+        is_disturbance = event.payload.get("triggered_by") == "disturbance"
+        self._sim_origin_queue.append(is_disturbance)
         scheduler.schedule_message_delivery(
             sender_id=self.agent_id,
             recipient_id=PROXY_AGENT_ID,
             message={MSG_GET_INFO: INFO_TYPE_GLOBAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
         )
 
+
+    # ============================================
+    # Condition Evaluation (Class 3)
+    # ============================================
+    def evaluate_conditions(
+        self,
+        post_physics_state: Dict[str, Any],
+        scheduler: EventScheduler,
+    ) -> List[Event]:
+        """Evaluate registered condition monitors against post-physics state.
+
+        This is the canonical evaluation point. Called after every SIMULATION
+        completion (both periodic and disturbance-triggered) and after
+        ``requires_physics=False`` disturbances.
+
+        The scheduler stores the monitors (for reset/cooldown management),
+        but SystemAgent owns the evaluation logic because condition
+        evaluation is domain coordination, not time management.
+
+        Args:
+            post_physics_state: Global state dict from ``simulate()``.
+            scheduler: Scheduler for scheduling CONDITION_TRIGGER events
+                and cancelling preempted ticks.
+
+        Returns:
+            List of triggered CONDITION_TRIGGER events.
+        """
+        triggered: List[Event] = []
+        to_remove: List[str] = []
+
+        for monitor in scheduler.condition_monitors:
+            if not monitor.condition_fn(post_physics_state):
+                continue
+            if scheduler.current_time - monitor._last_triggered < monitor.cooldown:
+                continue
+
+            event = Event(
+                timestamp=scheduler.current_time,
+                event_type=EventType.CONDITION_TRIGGER,
+                agent_id=monitor.agent_id,
+                priority=2,
+                payload={
+                    "monitor_id": monitor.monitor_id,
+                    "condition": monitor.monitor_id,
+                },
+            )
+            scheduler.schedule(event)
+            triggered.append(event)
+            monitor._last_triggered = scheduler.current_time
+
+            if monitor.preempt_next_tick:
+                scheduler.cancel_events(monitor.agent_id, EventType.AGENT_TICK)
+            if monitor.one_shot:
+                to_remove.append(monitor.monitor_id)
+
+        for mid in to_remove:
+            scheduler.deregister_condition(mid)
+
+        return triggered
 
     # ============================================
     # Simulation related functions - SystemAgent-specific
@@ -265,18 +424,27 @@ class SystemAgent(Agent):
         global_state_to_env_state: Callable,
         wait_interval: Optional[float] = None,
         pre_step_func: Optional[Callable] = None,
+        apply_disturbance_func: Optional[Callable] = None,
     ):
-        """
-        simulation_func: simulation function passed from environment
-        wait_interval: waiting time between action kick-off and simulation starts.
-            If None, derives from current schedule_config.tick_interval at runtime.
-        pre_step_func: optional hook called at the start of each step (before actions)
+        """Configure simulation pipeline callables from the environment.
+
+        Args:
+            simulation_func: Physics simulation function.
+            env_state_to_global_state: Converts env state to global state dict.
+            global_state_to_env_state: Converts global state dict to env state.
+            wait_interval: Waiting time between action kick-off and simulation.
+                If None, derives from current schedule_config.tick_interval.
+            pre_step_func: Optional hook called at the start of each step.
+            apply_disturbance_func: Optional callable to apply exogenous
+                disturbances to the environment (Class 4).
+                Signature: ``(disturbance: Disturbance) -> None``.
         """
         self._simulation_func = simulation_func
         self._env_state_to_global_state = env_state_to_global_state
         self._global_state_to_env_state = global_state_to_env_state
         self._explicit_wait_interval = wait_interval  # None means derive from schedule_config
         self._pre_step_func = pre_step_func
+        self._apply_disturbance_func = apply_disturbance_func
         self._simulation_configured = True
 
     @property

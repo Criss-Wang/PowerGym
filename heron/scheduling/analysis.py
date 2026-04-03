@@ -83,6 +83,7 @@ class EpisodeAnalyzer:
         self.local_state_count = 0
         self.state_update_count = 0
         self.action_result_count = 0
+        self.disturbance_count = 0
 
         # Track reward history per agent: {agent_id: [(timestamp, reward), ...]}
         self.reward_history: Dict[str, List[tuple]] = {}
@@ -102,8 +103,19 @@ class EpisodeAnalyzer:
         message_type = None
         data_summary = {}
 
+        # Track ENV_UPDATE (disturbance) events
+        if event.event_type == EventType.ENV_UPDATE:
+            self.disturbance_count += 1
+            disturbance = event.payload.get("disturbance")
+            if disturbance is not None:
+                message_type = "env_update"
+                data_summary = {
+                    "disturbance_type": disturbance.disturbance_type,
+                    "requires_physics": disturbance.requires_physics,
+                }
+
         # Focus on MESSAGE_DELIVERY events that contain state/obs/action data
-        if event.event_type == EventType.MESSAGE_DELIVERY:
+        elif event.event_type == EventType.MESSAGE_DELIVERY:
             payload = event.payload
             message_content = payload.get("message", {})
 
@@ -236,6 +248,7 @@ class EpisodeAnalyzer:
         self.local_state_count = 0
         self.state_update_count = 0
         self.action_result_count = 0
+        self.disturbance_count = 0
         self.reward_history = {}
 
     def get_summary(self) -> Dict[str, int]:
@@ -250,6 +263,7 @@ class EpisodeAnalyzer:
             "local_states": self.local_state_count,
             "state_updates": self.state_update_count,
             "action_results": self.action_result_count,
+            "disturbances": self.disturbance_count,
         }
 
     def get_reward_history(self, agent_id: Optional[str] = None) -> Dict[str, List[tuple]]:

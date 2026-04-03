@@ -153,6 +153,49 @@ class ChargingEnv(BaseEnv):
 
         return env_state
 
+    def apply_disturbance(self, disturbance) -> None:
+        """Apply an exogenous disturbance to the charging environment.
+
+        Supported disturbance types:
+          - ``charger_fault``: Disable a slot. Payload: ``{"slot_id": <str>}``
+          - ``charger_restore``: Re-enable a slot. Same payload.
+          - ``price_shock``: Override LMP. Payload: ``{"lmp": <float>}``
+          - ``arrival_surge``: Temporarily increase arrival rate.
+                Payload: ``{"rate_multiplier": <float>}``
+
+        Args:
+            disturbance: A ``Disturbance`` object.
+        """
+        dtype = disturbance.disturbance_type
+        p = disturbance.payload
+
+        if dtype == "charger_fault":
+            slot_id = p["slot_id"]
+            agent = self.registered_agents.get(slot_id)
+            if agent and hasattr(agent, "state") and agent.state:
+                if "ChargingSlotFeature" in agent.state.features:
+                    agent.state.features["ChargingSlotFeature"].set_values(open_or_not=0)
+                    self.proxy.set_local_state(slot_id, agent.state)
+
+        elif dtype == "charger_restore":
+            slot_id = p["slot_id"]
+            agent = self.registered_agents.get(slot_id)
+            if agent and hasattr(agent, "state") and agent.state:
+                if "ChargingSlotFeature" in agent.state.features:
+                    agent.state.features["ChargingSlotFeature"].set_values(open_or_not=1)
+                    self.proxy.set_local_state(slot_id, agent.state)
+
+        elif dtype == "price_shock":
+            self.scenario._lmp_override = float(p["lmp"])
+
+        elif dtype == "arrival_surge":
+            self._arrival_rate *= float(p.get("rate_multiplier", 2.0))
+
+        else:
+            raise NotImplementedError(
+                f"Unknown disturbance type '{dtype}' for ChargingEnv."
+            )
+
     def run_simulation(self, env_state: EnvState, *args, **kwargs) -> EnvState:
         """Run one step of EV charging simulation."""
         # 1) Advance market scenario

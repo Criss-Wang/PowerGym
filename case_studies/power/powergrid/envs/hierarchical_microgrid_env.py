@@ -354,6 +354,74 @@ class HierarchicalMicrogridEnv(BaseEnv):
 
         return env_state
 
+    def apply_disturbance(self, disturbance) -> None:
+        """Apply an exogenous disturbance to the Pandapower network.
+
+        Supported disturbance types:
+          - ``line_fault``: Trip a line. Payload: ``{"element": <line_name_or_idx>}``
+          - ``line_restore``: Restore a tripped line. Same payload.
+          - ``load_spike``: Add load delta. Payload: ``{"bus": <bus_idx>, "delta_mw": <float>}``
+          - ``gen_trip``: Trip a generator. Payload: ``{"element": <sgen_name_or_idx>}``
+          - ``storage_trip``: Trip a storage unit. Payload: ``{"element": <storage_name_or_idx>}``
+
+        Args:
+            disturbance: A ``Disturbance`` object.
+        """
+        dtype = disturbance.disturbance_type
+        p = disturbance.payload
+
+        if dtype == "line_fault":
+            idx = self._resolve_line_idx(p["element"])
+            self.net.line.at[idx, "in_service"] = False
+
+        elif dtype == "line_restore":
+            idx = self._resolve_line_idx(p["element"])
+            self.net.line.at[idx, "in_service"] = True
+
+        elif dtype == "load_spike":
+            bus_idx = int(p["bus"])
+            delta = float(p.get("delta_mw", 0.0))
+            mask = self.net.load.bus == bus_idx
+            self.net.load.loc[mask, "p_mw"] += delta
+
+        elif dtype == "gen_trip":
+            idx = self._resolve_sgen_idx(p["element"])
+            self.net.sgen.at[idx, "in_service"] = False
+
+        elif dtype == "storage_trip":
+            idx = self._resolve_storage_idx(p["element"])
+            self.net.storage.at[idx, "in_service"] = False
+
+        else:
+            raise NotImplementedError(
+                f"Unknown disturbance type '{dtype}' for HierarchicalMicrogridEnv."
+            )
+
+    # --- element index resolvers (name str or int) ---
+    def _resolve_line_idx(self, element):
+        if isinstance(element, str):
+            matches = self.net.line[self.net.line.name == element]
+            if len(matches) == 0:
+                raise KeyError(f"Line '{element}' not found in network")
+            return matches.index[0]
+        return int(element)
+
+    def _resolve_sgen_idx(self, element):
+        if isinstance(element, str):
+            matches = self.net.sgen[self.net.sgen.name == element]
+            if len(matches) == 0:
+                raise KeyError(f"Sgen '{element}' not found in network")
+            return matches.index[0]
+        return int(element)
+
+    def _resolve_storage_idx(self, element):
+        if isinstance(element, str):
+            matches = self.net.storage[self.net.storage.name == element]
+            if len(matches) == 0:
+                raise KeyError(f"Storage '{element}' not found in network")
+            return matches.index[0]
+        return int(element)
+
     def env_state_to_global_state(self, env_state: EnvState) -> Dict:
         """Convert simulation results back to global state format.
 

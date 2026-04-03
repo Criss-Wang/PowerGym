@@ -182,11 +182,19 @@ class FieldAgent(Agent):
         self,
         scheduler: EventScheduler,
         current_time: float,
+        reschedule: bool = True,
     ) -> None:
         """Action phase: observe → decide → act. [Event-Driven Mode]
 
         Periodic agents self-reschedule here (R5). Reactive agents do not —
         they are ticked by their upstream coordinator after action coordination.
+
+        Args:
+            scheduler: Event scheduler.
+            current_time: Current simulation time.
+            reschedule: If False, skip self-reschedule. Used by
+                ``condition_trigger_handler`` so reactive wakeups don't
+                create duplicate periodic cycles.
         """
         super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
 
@@ -201,7 +209,8 @@ class FieldAgent(Agent):
         )
 
         # R5: periodic agents self-reschedule immediately in tick()
-        self._self_reschedule(scheduler)
+        if reschedule:
+            self._self_reschedule(scheduler)
 
     # ============================================
     # Custom Handlers for Event-Driven Execution
@@ -209,6 +218,19 @@ class FieldAgent(Agent):
     @Agent.handler("agent_tick")
     def agent_tick_handler(self, event: Event, scheduler: EventScheduler) -> None:
         self.tick(scheduler, event.timestamp)
+
+    @Agent.handler("condition_trigger")
+    def condition_trigger_handler(self, event: Event, scheduler: EventScheduler) -> None:
+        """Handle a condition-triggered wakeup (e.g., voltage alarm).
+
+        Runs the same observe→decide→act cycle as a regular tick, but
+        does NOT self-reschedule. Condition-triggered wakeups are reactive
+        one-offs — the agent's periodic schedule is unaffected.
+
+        Override for custom reactive logic.
+        Payload contains monitor_id identifying which condition fired.
+        """
+        self.tick(scheduler, event.timestamp, reschedule=False)
 
     @Agent.handler("action_effect")
     def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:

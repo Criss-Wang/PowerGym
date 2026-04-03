@@ -151,8 +151,8 @@ class EnvState:
 class TimingTestEnv(BaseEnv):
     """Minimal environment: identity physics (pass-through)."""
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, agents, hierarchy, **kwargs):
+        super().__init__(agents=agents, hierarchy=hierarchy, **kwargs)
 
     def run_simulation(self, env_state: EnvState, *args, **kwargs) -> EnvState:
         return env_state
@@ -207,20 +207,20 @@ def _build_single_agent_env(
         tick_interval=tick_interval, obs_delay=0.0,
         act_delay=act_delay, msg_delay=msg_delay,
     )
-    coord = TimingCoordinator(
-        agent_id="coord_1",
-        subordinates={"counter_1": agent},
-    )
+    coord = TimingCoordinator(agent_id="coord_1")
     sys_agent = TimingSystemAgent(
         agent_id="system_agent",
-        subordinates={"coord_1": coord},
         schedule_config=ScheduleConfig.deterministic(
             tick_interval=sys_tick_interval, obs_delay=0.0,
             act_delay=0.0, msg_delay=msg_delay,
         ),
     )
     return TimingTestEnv(
-        system_agent=sys_agent,
+        agents=[sys_agent, coord, agent],
+        hierarchy={
+            "system_agent": ["coord_1"],
+            "coord_1": ["counter_1"],
+        },
         scheduler_config={"start_time": 0.0},
         message_broker_config={"buffer_size": 1000},
         simulation_wait_interval=sim_wait,
@@ -254,20 +254,20 @@ def _build_two_agent_env(
         tick_interval=tick_interval_2, obs_delay=0.0,
         act_delay=act_delay, msg_delay=msg_delay,
     )
-    coord = TimingCoordinator(
-        agent_id="coord_1",
-        subordinates={"counter_1": agent1, "counter_2": agent2},
-    )
+    coord = TimingCoordinator(agent_id="coord_1")
     sys_agent = TimingSystemAgent(
         agent_id="system_agent",
-        subordinates={"coord_1": coord},
         schedule_config=ScheduleConfig.deterministic(
             tick_interval=sys_tick_interval, obs_delay=0.0,
             act_delay=0.0, msg_delay=msg_delay,
         ),
     )
     return TimingTestEnv(
-        system_agent=sys_agent,
+        agents=[sys_agent, coord, agent1, agent2],
+        hierarchy={
+            "system_agent": ["coord_1"],
+            "coord_1": ["counter_1", "counter_2"],
+        },
         scheduler_config={"start_time": 0.0},
         message_broker_config={"buffer_size": 1000},
         simulation_wait_interval=sim_wait,
@@ -300,7 +300,6 @@ def _build_reactive_env(
     )
     coord = TimingCoordinator(
         agent_id="coord_reactive",
-        subordinates={"reactive_1": agent1, "reactive_2": agent2},
         protocol=Protocol(action_protocol=EqualSplitProtocol()),
         policy=IncrementPolicy(increment=4.0),
     )
@@ -310,14 +309,17 @@ def _build_reactive_env(
     )
     sys_agent = TimingSystemAgent(
         agent_id="system_agent",
-        subordinates={"coord_reactive": coord},
         schedule_config=ScheduleConfig.deterministic(
             tick_interval=sys_tick_interval, obs_delay=0.0,
             act_delay=0.0, msg_delay=msg_delay,
         ),
     )
     return TimingTestEnv(
-        system_agent=sys_agent,
+        agents=[sys_agent, coord, agent1, agent2],
+        hierarchy={
+            "system_agent": ["coord_reactive"],
+            "coord_reactive": ["reactive_1", "reactive_2"],
+        },
         scheduler_config={"start_time": 0.0},
         message_broker_config={"buffer_size": 1000},
         simulation_wait_interval=sim_wait,
@@ -700,20 +702,20 @@ def test_t9_jitter_gaussian_completes():
         tick_interval=5.0, obs_delay=0.1, act_delay=0.5, msg_delay=0.2,
         jitter_type=JitterType.GAUSSIAN, jitter_ratio=0.3, seed=42,
     )
-    coord = TimingCoordinator(
-        agent_id="coord_j",
-        subordinates={"jittered_1": agent},
-    )
+    coord = TimingCoordinator(agent_id="coord_j")
     sys_agent = TimingSystemAgent(
         agent_id="system_agent",
-        subordinates={"coord_j": coord},
         schedule_config=ScheduleConfig.with_jitter(
             tick_interval=8.0, obs_delay=0.0, act_delay=0.0, msg_delay=0.2,
             jitter_type=JitterType.GAUSSIAN, jitter_ratio=0.2, seed=43,
         ),
     )
     env = TimingTestEnv(
-        system_agent=sys_agent,
+        agents=[sys_agent, coord, agent],
+        hierarchy={
+            "system_agent": ["coord_j"],
+            "coord_j": ["jittered_1"],
+        },
         scheduler_config={"start_time": 0.0},
         message_broker_config={"buffer_size": 1000},
         simulation_wait_interval=3.0,
@@ -738,19 +740,19 @@ def test_t9_jitter_uniform_multiple_seeds(seed):
         tick_interval=3.0, obs_delay=0.05, act_delay=0.3, msg_delay=0.1,
         jitter_type=JitterType.UNIFORM, jitter_ratio=0.4, seed=seed,
     )
-    coord = TimingCoordinator(
-        agent_id="coord_su",
-        subordinates={"jsu_1": agent},
-    )
+    coord = TimingCoordinator(agent_id="coord_su")
     sys_agent = TimingSystemAgent(
         agent_id="system_agent",
-        subordinates={"coord_su": coord},
         schedule_config=ScheduleConfig.deterministic(
             tick_interval=5.0, obs_delay=0.0, act_delay=0.0, msg_delay=0.1,
         ),
     )
     env = TimingTestEnv(
-        system_agent=sys_agent,
+        agents=[sys_agent, coord, agent],
+        hierarchy={
+            "system_agent": ["coord_su"],
+            "coord_su": ["jsu_1"],
+        },
         scheduler_config={"start_time": 0.0},
         message_broker_config={"buffer_size": 1000},
         simulation_wait_interval=2.0,
@@ -887,7 +889,6 @@ def _build_reactive_env_custom(
     )
     coord = TimingCoordinator(
         agent_id="coord_reactive",
-        subordinates={"reactive_1": agent1, "reactive_2": agent2},
         protocol=Protocol(action_protocol=EqualSplitProtocol()),
         policy=IncrementPolicy(increment=4.0),
     )
@@ -897,14 +898,17 @@ def _build_reactive_env_custom(
     )
     sys_agent = TimingSystemAgent(
         agent_id="system_agent",
-        subordinates={"coord_reactive": coord},
         schedule_config=ScheduleConfig.deterministic(
             tick_interval=sys_tick_interval, obs_delay=0.0,
             act_delay=0.0, msg_delay=sys_msg_delay,
         ),
     )
     return TimingTestEnv(
-        system_agent=sys_agent,
+        agents=[sys_agent, coord, agent1, agent2],
+        hierarchy={
+            "system_agent": ["coord_reactive"],
+            "coord_reactive": ["reactive_1", "reactive_2"],
+        },
         scheduler_config={"start_time": 0.0},
         message_broker_config={"buffer_size": 1000},
         simulation_wait_interval=sim_wait,
@@ -938,10 +942,7 @@ def _build_mixed_hierarchy_env(
         tick_interval=periodic_tick_interval, obs_delay=0.0,
         act_delay=act_delay, msg_delay=msg_delay,
     )
-    coord_noop = TimingCoordinator(
-        agent_id="coord_noop",
-        subordinates={"periodic_1": periodic_agent},
-    )
+    coord_noop = TimingCoordinator(agent_id="coord_noop")
 
     # Reactive agents under coordinator with protocol
     reactive_1 = CounterFieldAgent(
@@ -962,7 +963,6 @@ def _build_mixed_hierarchy_env(
     )
     coord_active = TimingCoordinator(
         agent_id="coord_reactive",
-        subordinates={"reactive_1": reactive_1, "reactive_2": reactive_2},
         protocol=Protocol(action_protocol=EqualSplitProtocol()),
         policy=IncrementPolicy(increment=4.0),
     )
@@ -973,14 +973,18 @@ def _build_mixed_hierarchy_env(
 
     sys_agent = TimingSystemAgent(
         agent_id="system_agent",
-        subordinates={"coord_noop": coord_noop, "coord_reactive": coord_active},
         schedule_config=ScheduleConfig.deterministic(
             tick_interval=sys_tick_interval, obs_delay=0.0,
             act_delay=0.0, msg_delay=msg_delay,
         ),
     )
     return TimingTestEnv(
-        system_agent=sys_agent,
+        agents=[sys_agent, coord_noop, coord_active, periodic_agent, reactive_1, reactive_2],
+        hierarchy={
+            "system_agent": ["coord_noop", "coord_reactive"],
+            "coord_noop": ["periodic_1"],
+            "coord_reactive": ["reactive_1", "reactive_2"],
+        },
         scheduler_config={"start_time": 0.0},
         message_broker_config={"buffer_size": 1000},
         simulation_wait_interval=sim_wait,

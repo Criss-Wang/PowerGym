@@ -94,18 +94,26 @@ class CoordinatorAgent(Agent):
         self,
         scheduler: EventScheduler,
         current_time: float,
+        reschedule: bool = True,
     ) -> None:
         """Action phase: observe → decide → coordinate subordinates. [Event-Driven Mode]
 
         Periodic coordinators self-reschedule here (R5). Reactive subordinate
         ticks are scheduled after action coordination (in obs response handler).
+
+        Args:
+            scheduler: Event scheduler.
+            current_time: Current simulation time.
+            reschedule: If False, skip self-reschedule. Used by
+                ``condition_trigger_handler`` so reactive wakeups don't
+                create duplicate periodic cycles.
         """
         super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
 
         # Schedule subordinate ticks -> initiate action process
         for subordinate_id in self.subordinates:
             scheduler.schedule_agent_tick(subordinate_id)
-        
+
         # Always request obs from proxy first for state sync.
         # Upstream action (if any) will be applied after sync in get_obs_response handler.
         # Uses obs_delay (not msg_delay) to model sensor/telemetry latency.
@@ -117,7 +125,8 @@ class CoordinatorAgent(Agent):
         )
 
         # R5: periodic agents self-reschedule immediately in tick()
-        self._self_reschedule(scheduler)
+        if reschedule:
+            self._self_reschedule(scheduler)
 
     # ============================================
     # Custom Handlers for Event-Driven Execution
@@ -125,6 +134,19 @@ class CoordinatorAgent(Agent):
     @Agent.handler("agent_tick")
     def agent_tick_handler(self, event: Event, scheduler: EventScheduler) -> None:
         self.tick(scheduler, event.timestamp)
+
+    @Agent.handler("condition_trigger")
+    def condition_trigger_handler(self, event: Event, scheduler: EventScheduler) -> None:
+        """Handle a condition-triggered wakeup (e.g., voltage alarm).
+
+        Runs the same observe→decide→coordinate cycle as a regular tick,
+        but does NOT self-reschedule. Condition-triggered wakeups are
+        reactive one-offs — the coordinator's periodic schedule is unaffected.
+
+        Override for custom reactive logic.
+        Payload contains monitor_id identifying which condition fired.
+        """
+        self.tick(scheduler, event.timestamp, reschedule=False)
 
     @Agent.handler("action_effect")
     def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
