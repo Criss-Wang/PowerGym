@@ -226,6 +226,32 @@ class EventScheduler:
             )
         )
 
+    def schedule_env_update(
+        self,
+        agent_id: AgentID,
+        timestamp: float,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Schedule an exogenous disturbance (ENV_UPDATE) event.
+
+        Args:
+            agent_id: Agent that handles the event (typically SystemAgent).
+            timestamp: Absolute simulation time for the disturbance.
+            payload: Must contain a ``"disturbance"`` key with a Disturbance.
+
+        Returns:
+            The event_id for potential cancellation.
+        """
+        return self.schedule(
+            Event(
+                timestamp=timestamp,
+                event_type=EventType.ENV_UPDATE,
+                agent_id=agent_id,
+                priority=0,  # Same as ACTION_EFFECT: settles before physics
+                payload=payload or {},
+            )
+        )
+
     # ===============================
     # Condition Monitor Management
     # ===============================
@@ -242,11 +268,21 @@ class EventScheduler:
                 return True
         return False
 
+    @property
+    def condition_monitors(self) -> List[ConditionMonitor]:
+        """Read-only access to registered condition monitors."""
+        return self._condition_monitors
+
     def evaluate_conditions(self, proxy_state: Dict[str, Any]) -> List[Event]:
         """Evaluate all registered conditions against current state.
 
         Schedules CONDITION_TRIGGER events for any that fire.
         Returns list of triggered events.
+
+        .. deprecated::
+            Prefer calling ``SystemAgent.evaluate_conditions()`` instead.
+            This method is kept for backward compatibility and delegates
+            the same logic.
         """
         triggered: List[Event] = []
         to_remove: List[str] = []
@@ -512,6 +548,12 @@ class EventScheduler:
 
     def reset(self, start_time: float = 0.0) -> None:
         """Reset scheduler to initial state.
+
+        Clears all pending events and resets counters. Condition monitors
+        are **preserved** across resets (only their cooldowns are cleared).
+        To remove monitors, call ``deregister_condition()`` explicitly.
+        Disturbance schedules must be re-enqueued each episode via
+        ``DisturbanceSchedule.enqueue()`` (typically done in ``BaseEnv.reset()``).
 
         Args:
             start_time: New simulation start time

@@ -28,10 +28,13 @@ class BaseEnv(ABC):
         message_broker_config: Optional[Dict[str, Any]] = None,
         # simulation-related params
         simulation_wait_interval: Optional[float] = None,
+        # disturbance-related params (Class 4)
+        disturbance_schedule: Optional[Any] = None,
     ) -> None:
         # environment attributes
         self.env_id = env_id or f"env_{uuid.uuid4().hex[:8]}"
         self.simulation_wait_interval = simulation_wait_interval
+        self.disturbance_schedule = disturbance_schedule
 
         # agent-specific fields
         self.registered_agents: Dict[AgentID, Agent] = {}
@@ -134,6 +137,7 @@ class BaseEnv(ABC):
             self.global_state_to_env_state,
             self.simulation_wait_interval,
             self.pre_step,
+            self.apply_disturbance,
         )
 
     def get_agent(self, agent_id: AgentID) -> Optional[Agent]:
@@ -166,6 +170,7 @@ class BaseEnv(ABC):
         *,
         seed: Optional[int] = None,
         jitter_seed: Optional[int] = None,
+        disturbance_schedule: Optional[Any] = None,
         **kwargs,
     ) -> Tuple[MultiAgentDict, MultiAgentDict]:
         """Reset all registered agents.
@@ -176,6 +181,9 @@ class BaseEnv(ABC):
                 this seed (for reproducible event-driven evaluation).
                 Tick configs should be set at agent construction time
                 (e.g. via ``schedule_config`` in env_config).
+            disturbance_schedule: If provided, overrides
+                ``self.disturbance_schedule`` for this episode only.
+                If ``None``, uses the schedule configured at construction.
             **kwargs: Additional reset parameters
         """
         # Re-seed jitter RNG per episode for reproducible event-driven eval
@@ -193,6 +201,12 @@ class BaseEnv(ABC):
         self.proxy.reset(seed=seed)
         obs = self._system_agent.reset(seed=seed, proxy=self.proxy)
         self.proxy.init_global_state()  # Cache initial state in proxy after reset
+
+        # Enqueue disturbances: per-call override > env-level default
+        schedule = disturbance_schedule if disturbance_schedule is not None else self.disturbance_schedule
+        if schedule is not None:
+            schedule.enqueue(self.scheduler)
+
         return obs
     
     def step(self, actions: Dict[AgentID, Any]) -> Tuple[
@@ -258,6 +272,26 @@ class BaseEnv(ABC):
         Default implementation is a no-op.
         """
         pass
+
+    def apply_disturbance(self, disturbance: Any) -> None:
+        """Apply an exogenous disturbance to the environment state (Class 4).
+
+        Override in subclasses to handle domain-specific disturbance types.
+        Examples:
+          - Power systems: disconnect a line, change a load value
+          - Traffic: block a road segment, change signal timing
+
+        Called by SystemAgent's env_update_handler during event-driven execution.
+
+        Args:
+            disturbance: A ``Disturbance`` object with ``disturbance_type``,
+                ``payload``, and ``requires_physics`` fields.
+        """
+        raise NotImplementedError(
+            f"apply_disturbance() not implemented for {type(self).__name__}. "
+            f"Override this method to handle disturbance type "
+            f"'{getattr(disturbance, 'disturbance_type', '?')}'."
+        )
 
     @abstractmethod
     def run_simulation(self, env_state: Any, *args, **kwargs) -> Any:

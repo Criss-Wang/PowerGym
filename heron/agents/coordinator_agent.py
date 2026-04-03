@@ -130,11 +130,24 @@ class CoordinatorAgent(Agent):
     def condition_trigger_handler(self, event: Event, scheduler: EventScheduler) -> None:
         """Handle a condition-triggered wakeup (e.g., voltage alarm).
 
-        Default: same as agent_tick — request obs, run policy,
-        coordinate subordinates. Override for custom reactive logic.
+        Runs the same observe→decide→coordinate cycle as a regular tick,
+        but does NOT self-reschedule. Condition-triggered wakeups are
+        reactive one-offs — the coordinator's periodic schedule is unaffected.
+
+        Override for custom reactive logic.
         Payload contains monitor_id identifying which condition fired.
         """
-        self.agent_tick_handler(event, scheduler)
+        # Run tick logic without self-reschedule
+        super().tick(scheduler, event.timestamp)
+        for subordinate_id in self.subordinates:
+            scheduler.schedule_agent_tick(subordinate_id)
+        scheduler.schedule_message_delivery(
+            sender_id=self.agent_id,
+            recipient_id=PROXY_AGENT_ID,
+            message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
+            delay=scheduler.get_obs_delay(self.agent_id),
+        )
+        # No _self_reschedule() — this is a one-off reactive wakeup
 
     @Agent.handler("action_effect")
     def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
