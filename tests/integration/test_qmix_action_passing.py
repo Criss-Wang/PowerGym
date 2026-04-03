@@ -102,8 +102,8 @@ class EnvState:
 
 
 class ActionPassingEnv(BaseEnv):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, agents, hierarchy, **kwargs):
+        super().__init__(agents=agents, hierarchy=hierarchy, **kwargs)
 
     def run_simulation(self, env_state: EnvState, *args, **kwargs) -> EnvState:
         for did in env_state.device_powers:

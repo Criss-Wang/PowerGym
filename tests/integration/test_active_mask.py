@@ -98,6 +98,9 @@ class SimpleCoordinator(CoordinatorAgent):
 
 
 class SimpleEnv(BaseEnv):
+    def __init__(self, agents, hierarchy, **kwargs):
+        super().__init__(agents=agents, hierarchy=hierarchy, **kwargs)
+
     def run_simulation(self, env_state, *args, **kwargs):
         return env_state
 
@@ -131,13 +134,16 @@ def _build_env(
     )
     coordinator = SimpleCoordinator(
         agent_id="coord",
-        subordinates={"fast": fast_agent, "slow": slow_agent},
         protocol=VerticalProtocol(),
     )
-    system = SystemAgent(
-        subordinates={"coord": coordinator},
+    system = SystemAgent()
+    env = SimpleEnv(
+        agents=[system, coordinator, fast_agent, slow_agent],
+        hierarchy={
+            "system_agent": ["coord"],
+            "coord": ["fast", "slow"],
+        },
     )
-    env = SimpleEnv(system_agent=system)
     return env
 
 

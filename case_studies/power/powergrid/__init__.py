@@ -12,20 +12,18 @@ Example:
         from powergrid import Generator, ESS, PowerGridAgent, HierarchicalMicrogridEnv
         from heron.agents.system_agent import SystemAgent
 
-        # Create device agents
-        devices = {
-            "gen_1": Generator(agent_id="gen_1", ...),
-            "ess_1": ESS(agent_id="ess_1", ...),
-        }
+        # Create device agents (without subordinates)
+        gen = Generator(agent_id="gen_1", ...)
+        ess = ESS(agent_id="ess_1", ...)
+        grid = PowerGridAgent(agent_id="grid_1")
+        system = SystemAgent()
 
-        # Create coordinator
-        grid = PowerGridAgent(agent_id="grid_1", subordinates=devices)
-
-        # Create system agent
-        system = SystemAgent(agent_id="system", subordinates={"grid_1": grid})
-
-        # Create environment
-        env = HierarchicalMicrogridEnv(system_agent=system, dataset_path="...")
+        # Create environment with flat agents list + hierarchy dict
+        env = HierarchicalMicrogridEnv(
+            agents=[system, grid, gen, ess],
+            hierarchy={"system_agent": ["grid_1"], "grid_1": ["gen_1", "ess_1"]},
+            dataset_path="...",
+        )
 """
 
 __version__ = "0.1.0"

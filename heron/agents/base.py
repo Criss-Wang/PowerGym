@@ -95,9 +95,9 @@ class Agent(ABC):
         # Hierarchy structure (used by coordinators)
         self.env_id = env_id
         self.upstream_id = upstream_id
-        self.subordinates = self._build_subordinates(subordinates)
+        self.subordinates = self.build_subordinates(subordinates)
 
-    def _build_subordinates(self, subordinates: Optional[Dict[AgentID, "Agent"]] = None,) -> Dict[AgentID, "Agent"]:
+    def build_subordinates(self, subordinates: Optional[Dict[AgentID, "Agent"]] = None,) -> Dict[AgentID, "Agent"]:
         if not subordinates:
             return {}
         for _, agent in subordinates.items():
