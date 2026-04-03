@@ -187,10 +187,23 @@ The scheduler processes these event types:
 
 | Event | Handler Called When | Typical Action |
 |-------|---------------------|----------------|
-| `AGENT_TICK` | Agent's tick time | Call `agent.tick()` |
+| `AGENT_TICK` | Agent's tick time | Call `agent.tick()` — periodic agents self-reschedule |
 | `ACTION_EFFECT` | Action delay elapsed | Apply action to environment |
+| `SIMULATION` | Physics interval elapsed | SystemAgent runs physics solver |
 | `MESSAGE_DELIVERY` | Message delay elapsed | Deliver via message broker |
-| `OBSERVATION_READY` | Observation delay elapsed | Make observation available |
+
+### Agent Scheduling Types
+
+Agents are classified as **periodic** or **reactive** based on their upstream coordinator's protocol:
+
+| Type | Tick Source | Self-Reschedule | Example |
+|------|-----------|-----------------|---------|
+| **Periodic** | Self (via `_self_reschedule()`) | Yes, in `tick()` | Coordinator with protocol, or field agent under no-op coordinator |
+| **Reactive** | Upstream coordinator | No | Field agent under coordinator with VerticalProtocol |
+
+### Reward at Physics Boundaries
+
+Rewards are computed only after physics runs (R7). Between physics steps, agents tick and cache `(obs, action)` pairs. When `MSG_PHYSICS_COMPLETED` arrives, each agent computes `reward(prev_post_physics_state, curr_post_physics_state)` and associates it with all cached pairs.
 
 ## Setting Up Event Handlers
 

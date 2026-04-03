@@ -168,8 +168,19 @@ class EventScheduler:
         self,
         agent_id: AgentID,
         delay: Optional[float] = None,
+        payload: Optional[Dict[str, Any]] = None,
     ):
-        # TODO: enable lower-hierarchy agents to schedule simulation-level events (e.g. for environment dynamics) without exposing full scheduler API - may require additional checks or new event types to prevent abuse
+        """Schedule a simulation (physics) event.
+
+        Used both for periodic physics (called by SystemAgent each tick) and
+        for reactive/exogenous physics triggers (called by any agent needing
+        an out-of-band physics step).
+
+        Args:
+            agent_id: Agent that handles the simulation event (typically SystemAgent)
+            delay: Delay before simulation fires (default: 0.0)
+            payload: Optional metadata (e.g. requesting agent for reactive triggers)
+        """
         if delay is None:
             delay = _DEFAULT_SIMULATION_DELAY
 
@@ -179,6 +190,7 @@ class EventScheduler:
                 event_type=EventType.SIMULATION,
                 agent_id=agent_id,
                 priority=1,  # Environment-level events (runs physics after actions)
+                payload=payload or {},
             )
         )
 

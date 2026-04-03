@@ -96,7 +96,7 @@ class StationCoordinator(CoordinatorAgent):
         rewards.update(sub_rewards)
         return rewards
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         """Compute station reward from own features.
 
         Each agent computes its own reward independently using local features.

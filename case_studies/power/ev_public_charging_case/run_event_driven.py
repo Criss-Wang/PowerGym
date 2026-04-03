@@ -190,7 +190,7 @@ def deploy_event_driven(
     if reward_history:
         for agent_id, rewards in reward_history.items():
             if rewards:
-                total_r = sum(r for _, r in rewards)
+                total_r = sum(entry[1] for entry in rewards)
                 logger.info(f"  Agent {agent_id}: total_reward={total_r:.2f}, steps={len(rewards)}")
 
     return episode

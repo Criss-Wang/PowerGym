@@ -66,7 +66,7 @@ class Thermostat(FieldAgent):
         new_temp = feat.temp + self.action.c[0] * 2.0
         feat.set_values(temp=float(np.clip(new_temp, 10.0, 35.0)))
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         if "RoomTempFeature" not in local_state:
             return 0.0
         vec = local_state["RoomTempFeature"]

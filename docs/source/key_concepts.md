@@ -20,7 +20,7 @@ Each level has distinct responsibilities:
 |------------|-------|----------------|
 | `FieldAgent` | 1 | Local sensing, actuation, state management |
 | `CoordinatorAgent` | 2+ | Manages subordinates, aggregates observations |
-| `SystemAgent` | Top | Global objectives, system-wide coordination |
+| `SystemAgent` | Top | Pure orchestrator: schedules agent ticks, runs physics (does NOT observe/act/reward) |
 
 ```python
 from heron.agents import FieldAgent, CoordinatorAgent, SystemAgent
