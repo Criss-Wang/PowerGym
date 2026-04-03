@@ -8,6 +8,7 @@ from heron.core.action import Action
 from heron.core.feature import Feature
 from heron.core.observation import Observation
 from heron.core.state import State, SystemAgentState
+from heron.core.env_context import compute_all_done
 from heron.utils.typing import AgentID, MultiAgentDict
 from heron.core.policies import Policy
 from heron.protocols.base import Protocol
@@ -122,12 +123,22 @@ class SystemAgent(Agent):
         }
         return obs_vectorized, {}
     
-    def execute(self, actions: Dict[AgentID, Any], proxy: Optional[Proxy] = None) -> None:
+    def execute(
+        self,
+        actions: Dict[AgentID, Any],
+        proxy: Optional[Proxy] = None,
+        env_context: "Optional[EnvContext]" = None,
+    ) -> None:
         """Execute actions with hierarchical coordination and simulation. [Training Mode]
 
         R1: SystemAgent is a pure orchestrator — it does not observe, act, or
         compute reward for itself.  All returned dicts contain only subordinate
         agent entries.
+
+        Args:
+            actions: Per-agent actions dict.
+            proxy: Proxy for state management.
+            env_context: Environment context for termination decisions.
         """
         if not proxy:
             raise ValueError("We still require a valid proxy agent so far")
@@ -160,11 +171,23 @@ class SystemAgent(Agent):
             obs.update(subordinate.observe(proxy=proxy))
             rewards.update(subordinate.compute_rewards(proxy))
             infos.update(subordinate.get_info(proxy))
-            terminateds.update(subordinate.get_terminateds(proxy))
-            truncateds.update(subordinate.get_truncateds(proxy))
+            terminateds.update(subordinate.get_terminateds(proxy, env_context))
+            truncateds.update(subordinate.get_truncateds(proxy, env_context))
 
-        terminateds["__all__"] = all(terminateds.get(k, False) for k in terminateds if k != "__all__")
-        truncateds["__all__"] = all(truncateds.get(k, False) for k in truncateds if k != "__all__")
+        # Compute __all__ using configurable semantics
+        agent_ids = {k for k in terminateds if k != "__all__"}
+        semantics = env_context.all_semantics if env_context else "all"
+
+        terminateds["__all__"] = compute_all_done(terminateds, agent_ids, semantics)
+        truncateds["__all__"] = compute_all_done(truncateds, agent_ids, semantics)
+
+        # Environment-level max_steps truncation
+        if env_context and env_context.max_steps is not None:
+            if env_context.step_count >= env_context.max_steps:
+                for k in truncateds:
+                    if k != "__all__":
+                        truncateds[k] = True
+                truncateds["__all__"] = True
 
         # set step results in proxy agent
         proxy.set_step_result(obs, rewards, terminateds, truncateds, infos)

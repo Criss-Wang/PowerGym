@@ -30,7 +30,7 @@ Step-based training (default)::
     algo.evaluate()  # runs event-driven HERON evaluation via the runner
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from ray.rllib.env.multi_agent_env_runner import MultiAgentEnvRunner
@@ -158,6 +158,7 @@ class HeronEnvRunner(MultiAgentEnvRunner):
             ma_episode = self._build_episode_from_event_driven(
                 reward_history=reward_history,
                 agent_ids=rllib_agent_ids,
+                termination_history=analyzer.get_termination_history(),
             )
             episodes.append(ma_episode)
 
@@ -222,13 +223,15 @@ class HeronEnvRunner(MultiAgentEnvRunner):
         self,
         reward_history: Dict[str, list],
         agent_ids: List[str],
+        termination_history: Optional[Dict[str, list]] = None,
     ) -> MultiAgentEpisode:
         """Construct a ``MultiAgentEpisode`` from event-driven reward history.
 
         Each tick in the reward history becomes one env step.  Observations
         and actions are filled with zeros matching the respective spaces
-        (the real data is the reward trajectory).  The final step marks
-        all agents as terminated.
+        (the real data is the reward trajectory).  Uses real termination
+        flags from the analyzer when available; falls back to terminating
+        each agent at its last reward tick.
 
         Args:
             reward_history: ``{agent_id: [(timestamp, reward), ...]}``

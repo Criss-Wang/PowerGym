@@ -26,6 +26,7 @@ from heron.agents.constants import (
     MSG_KEY_PROTOCOL,
     MSG_GET_OBS_RESPONSE,
     MSG_GET_LOCAL_STATE_RESPONSE,
+    MSG_KEY_ENV_CONTEXT,
 )
 
 
@@ -232,6 +233,7 @@ class CoordinatorAgent(Agent):
             # R7: compute reward at physics boundary
             response_data = message_content[MSG_GET_LOCAL_STATE_RESPONSE]
             local_state = response_data[MSG_KEY_BODY]
+            env_context = response_data.get(MSG_KEY_ENV_CONTEXT)
 
             self.sync_state_from_observed(local_state)
 
@@ -240,8 +242,8 @@ class CoordinatorAgent(Agent):
 
             tick_result = {
                 "reward": reward,
-                "terminated": self.is_terminated(local_state),
-                "truncated": self.is_truncated(local_state),
+                "terminated": self.is_terminated(local_state, env_context),
+                "truncated": self.is_truncated(local_state, env_context),
                 "info": self.get_local_info(local_state),
                 "obs_action_pairs": obs_action_pairs,
             }

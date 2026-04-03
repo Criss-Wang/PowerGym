@@ -27,6 +27,7 @@ from heron.core.observation import Observation
 from heron.core.state import State, FieldAgentState, CoordinatorAgentState
 from heron.core.feature import Feature
 from heron.core.policies import Policy
+from heron.core.env_context import EnvContext
 
 # Agents
 from heron.agents.base import Agent
@@ -39,6 +40,7 @@ from heron.agents.proxy_agent import Proxy
 from heron.envs.base import BaseEnv
 from heron.envs.simple import DefaultHeronEnv
 from heron.envs.builder import EnvBuilder
+from heron.envs.termination import TerminationConfig, AllSemantics
 
 # Protocols
 from heron.protocols.base import Protocol, NoProtocol
@@ -69,6 +71,7 @@ __all__ = [
     "CoordinatorAgentState",
     "Feature",
     "Policy",
+    "EnvContext",
     # Agents
     "Agent",
     "FieldAgent",
@@ -79,6 +82,8 @@ __all__ = [
     "BaseEnv",
     "DefaultHeronEnv",
     "EnvBuilder",
+    "TerminationConfig",
+    "AllSemantics",
     # Protocols
     "Protocol",
     "NoProtocol",

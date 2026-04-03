@@ -13,6 +13,7 @@ from heron.core.observation import Observation
 from heron.core.state import State, FieldAgentState, CoordinatorAgentState, SystemAgentState
 from heron.core.feature import Feature
 from heron.core.policies import Policy
+from heron.core.env_context import EnvContext, compute_all_done
 
 __all__ = [
     "Action",
@@ -22,6 +23,8 @@ __all__ = [
     "CoordinatorAgentState",
     "SystemAgentState",
     "Feature",
-    "Policy"
+    "Policy",
+    "EnvContext",
+    "compute_all_done",
 ]
     
