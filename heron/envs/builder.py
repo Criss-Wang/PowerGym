@@ -94,6 +94,7 @@ class EnvBuilder:
         self._simulation_func: Optional[Callable] = None
         self._env_cls: Optional[Type[BaseEnv]] = None
         self._env_kwargs: Dict[str, Any] = {}
+        self._termination_config: Optional["TerminationConfig"] = None
 
     # ------------------------------------------------------------------
     #  Agent registration
@@ -215,6 +216,38 @@ class EnvBuilder:
         self._env_kwargs = kwargs
         return self
 
+    def termination(
+        self,
+        max_steps: Optional[int] = None,
+        max_sim_time: Optional[float] = None,
+        all_semantics: str = "all",
+    ) -> "EnvBuilder":
+        """Configure episode termination/truncation.
+
+        Args:
+            max_steps: Maximum env steps before truncation (training mode).
+            max_sim_time: Maximum simulation time before truncation (event-driven).
+            all_semantics: ``"all"`` (default) or ``"any"`` for ``__all__`` flag.
+
+        Example::
+
+            env = (
+                EnvBuilder("my_env")
+                .add_agents("agent", MyAgent, count=3, features=[MyFeature()])
+                .simulation(my_sim)
+                .termination(max_steps=100, all_semantics="any")
+                .build()
+            )
+        """
+        from heron.envs.termination import TerminationConfig, AllSemantics
+
+        self._termination_config = TerminationConfig(
+            max_steps=max_steps,
+            max_sim_time=max_sim_time,
+            all_semantics=AllSemantics(all_semantics),
+        )
+        return self
+
     # ------------------------------------------------------------------
     #  Build
     # ------------------------------------------------------------------
@@ -333,12 +366,18 @@ class EnvBuilder:
         agents: List,
         hierarchy: Dict[str, List[str]],
     ) -> BaseEnv:
+        # Common kwargs passed to all env constructors
+        extra_kwargs: Dict[str, Any] = {}
+        if self._termination_config is not None:
+            extra_kwargs["termination_config"] = self._termination_config
+
         if self._env_cls is not None:
             return self._env_cls(
                 agents=agents,
                 hierarchy=hierarchy,
                 env_id=self._env_id,
                 **self._env_kwargs,
+                **extra_kwargs,
             )
 
         if self._simulation_func is not None:
@@ -347,6 +386,7 @@ class EnvBuilder:
                 hierarchy=hierarchy,
                 env_id=self._env_id,
                 simulation_func=self._simulation_func,
+                **extra_kwargs,
             )
 
         raise ValueError(

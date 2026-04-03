@@ -88,6 +88,11 @@ class EpisodeAnalyzer:
         # Track reward history per agent: {agent_id: [(timestamp, reward), ...]}
         self.reward_history: Dict[str, List[tuple]] = {}
 
+        # Track termination state per agent
+        self.termination_history: Dict[str, List[tuple]] = {}
+        self._latest_termination: Dict[str, bool] = {}
+        self._latest_truncation: Dict[str, bool] = {}
+
     def parse_event(self, event: Event) -> EventAnalysis:
         """Parse and analyze a single event.
 
@@ -160,13 +165,25 @@ class EpisodeAnalyzer:
 
                 # Track reward history per agent, including obs_action_pairs (R7)
                 sender_id = payload.get("sender")
-                if sender_id and isinstance(result_data, dict) and "reward" in result_data:
-                    if sender_id not in self.reward_history:
-                        self.reward_history[sender_id] = []
-                    entry = (event.timestamp, result_data["reward"])
-                    if "obs_action_pairs" in result_data:
-                        entry = (*entry, result_data["obs_action_pairs"])
-                    self.reward_history[sender_id].append(entry)
+                if sender_id and isinstance(result_data, dict):
+                    if "reward" in result_data:
+                        if sender_id not in self.reward_history:
+                            self.reward_history[sender_id] = []
+                        entry = (event.timestamp, result_data["reward"])
+                        if "obs_action_pairs" in result_data:
+                            entry = (*entry, result_data["obs_action_pairs"])
+                        self.reward_history[sender_id].append(entry)
+
+                    # Track termination/truncation flags
+                    terminated = result_data.get("terminated", False)
+                    truncated = result_data.get("truncated", False)
+                    if sender_id not in self.termination_history:
+                        self.termination_history[sender_id] = []
+                    self.termination_history[sender_id].append(
+                        (event.timestamp, terminated, truncated)
+                    )
+                    self._latest_termination[sender_id] = terminated
+                    self._latest_truncation[sender_id] = truncated
 
         # Create analysis
         analysis = EventAnalysis(
@@ -250,6 +267,37 @@ class EpisodeAnalyzer:
         self.action_result_count = 0
         self.disturbance_count = 0
         self.reward_history = {}
+        self.termination_history = {}
+        self._latest_termination = {}
+        self._latest_truncation = {}
+
+    def get_termination_flags(self) -> Dict[str, bool]:
+        """Get latest terminated flag per agent.
+
+        Returns:
+            ``{agent_id: bool}`` — only includes agents that have
+            sent at least one ``set_tick_result``.
+        """
+        return dict(self._latest_termination)
+
+    def get_truncation_flags(self) -> Dict[str, bool]:
+        """Get latest truncated flag per agent."""
+        return dict(self._latest_truncation)
+
+    def get_termination_history(
+        self, agent_id: Optional[str] = None,
+    ) -> Dict[str, List[tuple]]:
+        """Get termination history for agents.
+
+        Args:
+            agent_id: If provided, return only that agent's history.
+
+        Returns:
+            ``{agent_id: [(timestamp, terminated, truncated), ...]}``
+        """
+        if agent_id:
+            return {agent_id: self.termination_history.get(agent_id, [])}
+        return self.termination_history
 
     def get_summary(self) -> Dict[str, int]:
         """Get summary of tracked message types.
@@ -298,6 +346,8 @@ class EpisodeStats:
         self.event_analyses: List[EventAnalysis] = []
         self.start_time: Optional[float] = None
         self.end_time: Optional[float] = None
+        self.terminated: bool = False
+        self.truncated: bool = False
 
     def add_event_analysis(self, analysis: EventAnalysis) -> None:
         """Add an event analysis to the episode results.

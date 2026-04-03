@@ -428,59 +428,95 @@ class Agent(ABC):
     # ============================================
     # terminateds related functions
     # ============================================
-    def get_terminateds(self, proxy: "Proxy") -> Dict[AgentID, bool]:
+    def get_terminateds(
+        self,
+        proxy: "Proxy",
+        env_context: "Optional[EnvContext]" = None,
+    ) -> Dict[AgentID, bool]:
         """Collect termination flags for this agent and all subordinates.
 
         Args:
-            proxy: Proxy for state retrieval
+            proxy: Proxy for state retrieval.
+            env_context: Environment context with step count, sim time,
+                and configured limits.  ``None`` in legacy call paths.
 
         Returns:
-            Dict mapping agent IDs to termination booleans
+            Dict mapping agent IDs to termination booleans.
         """
         if not proxy:
             raise ValueError("Agent requires a proxy agent to derive termination state")
-        # May need to use env fields to decide
-        # TODO: pass in the env field elegantly
-        # e.g. done = (self._t % self.max_episode_steps) == 0
         local_state = proxy.get_local_state(self.agent_id, self.protocol)
-        terminated = self.is_terminated(local_state)
+        terminated = self.is_terminated(local_state, env_context)
         terminateds = {
             self.agent_id: terminated,
         }
         for subordinate in self.subordinates.values():
-            terminateds.update(subordinate.get_terminateds(proxy))
+            terminateds.update(subordinate.get_terminateds(proxy, env_context))
         return terminateds
-    
-    def is_terminated(self, local_state: dict) -> bool:
+
+    def is_terminated(
+        self,
+        local_state: dict,
+        env_context: "Optional[EnvContext]" = None,
+    ) -> bool:
+        """Whether this agent's episode has naturally terminated.
+
+        Override in subclasses for domain-specific termination logic.
+
+        Args:
+            local_state: Agent's visibility-filtered local state dict.
+            env_context: Environment context (step count, sim time, limits).
+
+        Example::
+
+            def is_terminated(self, local_state, env_context=None):
+                soc = local_state.get("BatteryFeature", [1.0])[0]
+                return soc <= 0.0
+        """
         return False
-    
+
     # ============================================
     # truncateds related functions
     # ============================================
-    def get_truncateds(self, proxy: "Proxy") -> Dict[AgentID, bool]:
+    def get_truncateds(
+        self,
+        proxy: "Proxy",
+        env_context: "Optional[EnvContext]" = None,
+    ) -> Dict[AgentID, bool]:
         """Collect truncation flags for this agent and all subordinates.
 
         Args:
-            proxy: Proxy for state retrieval
+            proxy: Proxy for state retrieval.
+            env_context: Environment context with step count, sim time,
+                and configured limits.  ``None`` in legacy call paths.
 
         Returns:
-            Dict mapping agent IDs to truncation booleans
+            Dict mapping agent IDs to truncation booleans.
         """
         if not proxy:
             raise ValueError("Agent requires a proxy agent to derive truncated states")
-        # May need to use env fields to decide
-        # TODO: pass in the env field elegantly
-        # e.g. done = (self._t % self.max_episode_steps) == 0
         local_state = proxy.get_local_state(self.agent_id, self.protocol)
-        truncated = self.is_truncated(local_state)
+        truncated = self.is_truncated(local_state, env_context)
         truncateds = {
             self.agent_id: truncated
         }
         for subordinate in self.subordinates.values():
-            truncateds.update(subordinate.get_truncateds(proxy))
+            truncateds.update(subordinate.get_truncateds(proxy, env_context))
         return truncateds
-    
-    def is_truncated(self, local_state: dict) -> bool:
+
+    def is_truncated(
+        self,
+        local_state: dict,
+        env_context: "Optional[EnvContext]" = None,
+    ) -> bool:
+        """Whether this agent's episode is truncated (time/step limit).
+
+        Override in subclasses for domain-specific truncation logic.
+
+        Args:
+            local_state: Agent's visibility-filtered local state dict.
+            env_context: Environment context (step count, sim time, limits).
+        """
         return False
 
     # ============================================

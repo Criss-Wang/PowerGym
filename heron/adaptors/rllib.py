@@ -96,6 +96,17 @@ def _build_heron_env(config: Dict[str, Any]) -> BaseEnv:
     elif "simulation" in config:
         builder.simulation(config["simulation"])
 
+    # Termination config from env_config
+    max_steps = config.get("max_steps")
+    max_sim_time = config.get("max_sim_time")
+    all_semantics = config.get("all_semantics", "all")
+    if max_steps is not None or max_sim_time is not None:
+        builder.termination(
+            max_steps=max_steps,
+            max_sim_time=max_sim_time,
+            all_semantics=all_semantics,
+        )
+
     return builder.build()
 
 
@@ -140,8 +151,10 @@ class RLlibBasedHeronEnv(MultiAgentEnv):
         super().__init__()
         config = config or {}
 
-        self.max_steps: int = config.get("max_steps", 50)
-        self._step_count: int = 0
+        # max_steps is now handled by BaseEnv.termination_config via _build_heron_env.
+        # Default to 50 if not specified (backward compat for RLlib users).
+        if "max_steps" not in config:
+            config["max_steps"] = 50
 
         # ---- build the underlying HERON env ----
         self.heron_env: BaseEnv = _build_heron_env(config)
@@ -197,7 +210,6 @@ class RLlibBasedHeronEnv(MultiAgentEnv):
     # ------------------------------------------------------------------ #
 
     def reset(self, *, seed=None, options=None):
-        self._step_count = 0
         raw, _ = self.heron_env.reset(seed=seed)
         obs = {}
         for aid in self._agent_ids:
@@ -208,15 +220,13 @@ class RLlibBasedHeronEnv(MultiAgentEnv):
         return obs, {aid: {} for aid in obs}
 
     def step(self, action_dict: Dict[str, Any]):
-        self._step_count += 1
-
         raw_obs, raw_rew, raw_term, raw_trunc, raw_info = (
             self.heron_env.step(action_dict)
         )
 
         # --- activity-aware filtering (agents self-check via is_active_at) ---
         agents = self.heron_env.registered_agents
-        step = self._step_count
+        step = self.heron_env.step_count
 
         active_now = {
             aid for aid in self._agent_ids
@@ -224,8 +234,8 @@ class RLlibBasedHeronEnv(MultiAgentEnv):
         }
         all_flags = {aid: aid in active_now for aid in self._agent_ids}
 
-        hit_limit = self._step_count >= self.max_steps
-        episode_done = raw_term.get("__all__", False) or hit_limit
+        # Termination and truncation are now handled by BaseEnv
+        episode_done = raw_term.get("__all__", False) or raw_trunc.get("__all__", False)
 
         # RLlib requires obs for all agents on every step (including final).
         # Use raw obs when available, fall back to zeros for inactive agents.
@@ -243,8 +253,8 @@ class RLlibBasedHeronEnv(MultiAgentEnv):
         term = {aid: bool(raw_term.get(aid, False)) for aid in self._agent_ids}
         term["__all__"] = raw_term.get("__all__", False)
 
-        trunc = {aid: hit_limit for aid in self._agent_ids}
-        trunc["__all__"] = hit_limit
+        trunc = {aid: bool(raw_trunc.get(aid, False)) for aid in self._agent_ids}
+        trunc["__all__"] = raw_trunc.get("__all__", False)
 
         info = {aid: raw_info.get(aid, {}) for aid in self._agent_ids}
         for aid in info:

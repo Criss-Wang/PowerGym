@@ -13,7 +13,9 @@ from heron.utils.typing import AgentID, MultiAgentDict
 from heron.scheduling import EventScheduler, Event, EpisodeAnalyzer, EpisodeStats
 from heron.agents.system_agent import SystemAgent
 from heron.agents.proxy_agent import Proxy
-from heron.agents.constants import PROXY_AGENT_ID
+from heron.agents.constants import PROXY_AGENT_ID, SYSTEM_AGENT_ID
+from heron.core.env_context import EnvContext, compute_all_done
+from heron.envs.termination import TerminationConfig, AllSemantics
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +32,15 @@ class BaseEnv(ABC):
         simulation_wait_interval: Optional[float] = None,
         # disturbance-related params (Class 4)
         disturbance_schedule: Optional[Any] = None,
+        # termination/truncation config
+        termination_config: Optional[TerminationConfig] = None,
     ) -> None:
         # environment attributes
         self.env_id = env_id or f"env_{uuid.uuid4().hex[:8]}"
         self.simulation_wait_interval = simulation_wait_interval
         self.disturbance_schedule = disturbance_schedule
+        self.termination_config = termination_config or TerminationConfig.default()
+        self._step_count: int = 0
 
         # agent-specific fields
         self.registered_agents: Dict[AgentID, Agent] = {}
@@ -197,6 +203,9 @@ class BaseEnv(ABC):
         self.scheduler.reset(start_time=0.0)  # Always reset to time 0
         self.clear_broker_environment()
 
+        # Reset step counter
+        self._step_count = 0
+
         # Reset agents — SystemAgent.reset() returns (obs_vectorized, {})
         self.proxy.reset(seed=seed)
         obs = self._system_agent.reset(seed=seed, proxy=self.proxy)
@@ -209,6 +218,11 @@ class BaseEnv(ABC):
 
         return obs
     
+    @property
+    def step_count(self) -> int:
+        """Current step count (1-indexed after first step)."""
+        return self._step_count
+
     def step(self, actions: Dict[AgentID, Any]) -> Tuple[
         Dict[AgentID, Any],
         Dict[AgentID, float],
@@ -218,9 +232,6 @@ class BaseEnv(ABC):
     ]:
         """Execute one environment step.
 
-        The system_agent in the environment is responsible for entire 
-        simulation step
-
         Args:
             actions: Dictionary mapping agent IDs to actions
 
@@ -228,36 +239,90 @@ class BaseEnv(ABC):
             Tuple of (observations, rewards, terminated, truncated, infos)
             - observations: Dict mapping agent IDs to observation arrays
             - rewards: Dict mapping agent IDs to reward floats
-            - terminated: Dict with agent IDs and "__all__" key
-            - truncated: Dict with agent IDs and "__all__" key
+            - terminated: Dict with agent IDs and ``"__all__"`` key
+            - truncated: Dict with agent IDs and ``"__all__"`` key
             - infos: Dict mapping agent IDs to info dicts
         """
-        self._system_agent.execute(actions, self.proxy)
+        self._step_count += 1
+        env_context = EnvContext(
+            step_count=self._step_count,
+            sim_time=self.scheduler.current_time,
+            max_steps=self.termination_config.max_steps,
+            max_sim_time=self.termination_config.max_sim_time,
+            all_semantics=self.termination_config.all_semantics.value,
+        )
+        self.proxy.env_context = env_context
+        self._system_agent.execute(actions, self.proxy, env_context=env_context)
         return self.proxy.get_step_results()
-    
+
     def run_event_driven(
         self,
         t_end: float,
         episode_analyzer: Optional[EpisodeAnalyzer] = None,
         max_events: Optional[int] = None,
     ) -> EpisodeStats:
-        """Run event-driven simulation until time limit.
+        """Run event-driven simulation until time limit or termination.
+
+        The loop exits early if ``__all__`` termination is detected
+        (per ``termination_config.all_semantics``).
 
         Args:
-            t_end: Stop when simulation time exceeds this
+            t_end: Stop when simulation time exceeds this.
             episode_analyzer: EpisodeAnalyzer to parse events during simulation.
                 If None, a default EpisodeAnalyzer() is used.
-            max_events: Optional maximum number of events to process
+            max_events: Optional maximum number of events to process.
 
         Returns:
-            EpisodeStats containing all event analyses from the simulation
+            EpisodeStats with ``terminated`` and ``truncated`` flags set.
         """
         if episode_analyzer is None:
             episode_analyzer = EpisodeAnalyzer()
         result = EpisodeStats()
-        for event in self.scheduler.run_until(t_end=t_end, max_events=max_events):
-            result.add_event_analysis(episode_analyzer.parse_event(event))
+
+        # Effective time limit: min(t_end, max_sim_time)
+        effective_t_end = t_end
+        if self.termination_config.max_sim_time is not None:
+            effective_t_end = min(t_end, self.termination_config.max_sim_time)
+
+        # Publish env_context template on proxy for agents
+        self.proxy.env_context = EnvContext(
+            step_count=0,
+            sim_time=0.0,
+            max_steps=self.termination_config.max_steps,
+            max_sim_time=self.termination_config.max_sim_time,
+            all_semantics=self.termination_config.all_semantics.value,
+        )
+
+        for event in self.scheduler.run_until(t_end=effective_t_end, max_events=max_events):
+            analysis = episode_analyzer.parse_event(event)
+            result.add_event_analysis(analysis)
+            # Check early termination only after tick_result events
+            if analysis.message_type == "set_tick_result":
+                if self._check_terminated_event_driven(episode_analyzer):
+                    break
+
+        result.terminated = self._check_terminated_event_driven(episode_analyzer)
+        result.truncated = (
+            self.termination_config.max_sim_time is not None
+            and self.scheduler.current_time >= self.termination_config.max_sim_time
+        )
         return result
+
+    def _check_terminated_event_driven(self, analyzer: EpisodeAnalyzer) -> bool:
+        """Check if ``__all__`` termination is met from event-driven tick results.
+
+        Considers all expected agents (registered minus system/proxy).
+        Agents that haven't sent a tick_result yet default to not terminated.
+        """
+        expected_agents = {
+            aid for aid in self.registered_agents
+            if aid not in (SYSTEM_AGENT_ID, PROXY_AGENT_ID)
+        }
+        return compute_all_done(
+            analyzer.get_termination_flags(),
+            expected_agents,
+            self.termination_config.all_semantics.value,
+        )
 
     # ============================================
     # Simulation-related Methods

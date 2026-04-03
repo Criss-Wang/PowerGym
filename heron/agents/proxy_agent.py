@@ -31,6 +31,7 @@ from heron.agents.constants import (
     MSG_GET_OBS_RESPONSE,
     MSG_GET_GLOBAL_STATE_RESPONSE,
     MSG_GET_LOCAL_STATE_RESPONSE,
+    MSG_KEY_ENV_CONTEXT,
 )
 
 
@@ -64,6 +65,7 @@ class Proxy(Agent):
         self._agent_levels: Dict[AgentID, int] = {}  # Track agent hierarchy levels for visibility
         self._agent_upstreams: Dict[AgentID, Optional[AgentID]] = {}  # Track upstream (parent) for each agent
         self._tick_results: Dict[AgentID, Dict[str, Any]] = {}  # Store tick results per agent
+        self.env_context: Optional[Any] = None  # Set by BaseEnv before step/event-driven
 
         if message_broker:
             self.set_message_broker(message_broker)
@@ -183,6 +185,7 @@ class Proxy(Agent):
         """
         # Proxy doesn't need parent reset - it manages its own state cache
         self.state_cache = {}
+        self.env_context = None
 
     def execute(self, actions: Dict[AgentID, Any], proxy: Optional["Proxy"] = None) -> None:
         pass
@@ -233,14 +236,27 @@ class Proxy(Agent):
                 # For other info types (global_state, local_state), send as-is
                 info_data = info
 
+            # Build response payload
+            response_payload = {MSG_KEY_BODY: info_data}
+
+            # Piggyback env_context only on LOCAL_STATE responses — the only
+            # path where agents call is_terminated/is_truncated.  A fresh
+            # EnvContext snapshot is created with live sim_time.
+            if info_type == INFO_TYPE_LOCAL_STATE and self.env_context is not None:
+                from heron.core.env_context import EnvContext
+
+                response_payload[MSG_KEY_ENV_CONTEXT] = EnvContext(
+                    step_count=self.env_context.step_count,
+                    sim_time=scheduler.current_time,
+                    max_steps=self.env_context.max_steps,
+                    max_sim_time=self.env_context.max_sim_time,
+                    all_semantics=self.env_context.all_semantics,
+                )
+
             scheduler.schedule_message_delivery(
                 sender_id=recipient_id, # same as self.agent_id
                 recipient_id=sender_id,
-                message={
-                    info_type_key: {
-                        MSG_KEY_BODY: info_data
-                    }
-                },
+                message={info_type_key: response_payload},
             )
         elif MSG_SET_STATE in message_content:
             from heron.core.state import State
