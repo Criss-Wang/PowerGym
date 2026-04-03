@@ -270,6 +270,9 @@ class TransformerFeature(Feature):
 class Generator(FieldAgent):
     """Generator with mixed action: continuous power + discrete on/off."""
 
+    def set_state(self, *args, **kwargs) -> None:
+        self.state.update_features(**kwargs)
+
     def init_action(self, features: List[Feature] = []) -> Action:
         action = Action()
         action.set_specs(
@@ -288,7 +291,7 @@ class Generator(FieldAgent):
         power = self.action.c[0] * is_on
         feat.set_values(power=power, is_on=is_on)
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         if "GeneratorFeature" not in local_state:
             return 0.0
         vec = local_state["GeneratorFeature"]
@@ -308,6 +311,9 @@ class Transformer(FieldAgent):
         action.set_specs(dim_d=1, ncats=[self._num_taps])  # tap positions 0-10
         return action
 
+    def set_state(self, *args, **kwargs) -> None:
+        self.state.update_features(**kwargs)
+
     def set_action(self, action: Any, *args, **kwargs) -> None:
         self.action.set_values(action)
 
@@ -317,7 +323,7 @@ class Transformer(FieldAgent):
         voltage = 0.95 + tap * 0.01  # tap 0=0.95pu, tap 5=1.00pu, tap 10=1.05pu
         feat.set_values(tap_pos=tap, voltage=voltage)
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         if "TransformerFeature" not in local_state:
             return 0.0
         vec = local_state["TransformerFeature"]

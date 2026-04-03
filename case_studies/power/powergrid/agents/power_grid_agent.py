@@ -123,7 +123,7 @@ class PowerGridAgent(CoordinatorAgent):
         """
         return {"cost": self.cost, "safety": self.safety}
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         """Compute coordinator reward from its own local features.
 
         Uses cost and safety metrics from local state. Each agent computes

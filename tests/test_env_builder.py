@@ -37,10 +37,13 @@ class DummyAgent(FieldAgent):
         if isinstance(action, np.ndarray):
             self.action.set_values(c=action.flatten()[:1])
 
+    def set_state(self, *args, **kwargs) -> None:
+        self.state.update_features(**kwargs)
+
     def apply_action(self) -> None:
         pass
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         return 0.0
 
 

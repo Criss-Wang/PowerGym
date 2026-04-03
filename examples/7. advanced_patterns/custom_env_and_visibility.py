@@ -202,6 +202,9 @@ class BatteryFeature(Feature):
 class SolarAgent(FieldAgent):
     """Solar farm with mixed-visibility features."""
 
+    def set_state(self, *args, **kwargs) -> None:
+        self.state.update_features(**kwargs)
+
     def init_action(self, features: List[Feature] = []) -> Action:
         action = Action()
         action.set_specs(
@@ -219,7 +222,7 @@ class SolarAgent(FieldAgent):
         # Store curtailment factor; run_simulation computes actual power
         feat.set_values(curtailment=curtailment)
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         if "SolarFeature" not in local_state:
             return 0.0
         vec = local_state["SolarFeature"]  # numpy array [power, curtailment]
@@ -229,6 +232,9 @@ class SolarAgent(FieldAgent):
 
 class BatteryAgent(FieldAgent):
     """Battery with charge/discharge control."""
+
+    def set_state(self, *args, **kwargs) -> None:
+        self.state.update_features(**kwargs)
 
     def init_action(self, features: List[Feature] = []) -> Action:
         action = Action()
@@ -248,7 +254,7 @@ class BatteryAgent(FieldAgent):
         soc = float(np.clip(soc, 0.0, 1.0))
         feat.set_values(power=power, soc=soc)
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         if "BatteryFeature" not in local_state:
             return 0.0
         vec = local_state["BatteryFeature"]  # numpy array [power, soc]

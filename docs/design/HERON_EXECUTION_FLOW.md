@@ -57,16 +57,18 @@ SystemAgent (L3) - Root orchestrator
 ┌─────────────────────────────────────────────────────────────────┐
 │ SystemAgent (Level 3, SYSTEM_LEVEL=3)                           │
 │ - Root of hierarchy (upstream_id=None)                          │
+│ - Pure orchestrator: does NOT observe, act, or compute reward   │
 │ - Manages simulation/physics via set_simulation()               │
-│ - Orchestrates all subordinates                                 │
 │ - Owns pre_step hook for timestep-specific setup                │
 ├─────────────────────────────────────────────────────────────────┤
-│ Responsibilities:                                               │
-│ - execute() -> Orchestrate hierarchical execution               │
+│ Responsibilities (R1):                                          │
+│ - execute() -> Delegate to subordinates, run physics, collect   │
+│                results from subordinates only (not self)        │
+│ - tick()    -> Schedule periodic agents + physics (event-driven)│
 │ - simulate() -> Run environment physics                         │
-│ - observe() -> Aggregate observations from all levels           │
-│ - compute_rewards() -> Aggregate rewards                        │
-│ Default tick_interval: 300.0s                                   │
+│ - resolve_periodic_children() -> Classify periodic vs reactive  │
+│ Does NOT: observe(), compute_rewards() for itself               │
+│ Default tick_interval: 300.0s (= physics interval)              │
 └─────────────────────────────────────────────────────────────────┘
                     │
                     │ subordinates (coordinators)

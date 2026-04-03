@@ -54,7 +54,7 @@ class BatteryAgent(FieldAgent):
         action.set_values(np.array([0.0]))
         return action
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         """Compute reward for this agent (reward = SOC).
 
         Args:

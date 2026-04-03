@@ -70,7 +70,7 @@ class Thermostat(FieldAgent):
         new_temp = feat.temp + self.action.c[0] * 2.0
         feat.set_values(temp=float(np.clip(new_temp, 10.0, 35.0)))
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         if "RoomTempFeature" not in local_state:
             return 0.0
         vec = local_state["RoomTempFeature"]
@@ -280,7 +280,7 @@ def demo_event_driven():
     # Run event-driven simulation
     analyzer = EpisodeAnalyzer(verbose=False, track_data=True)
     t_end = 30.0
-    result = env.run_event_driven(analyzer, t_end=t_end)
+    result = env.run_event_driven(t_end=t_end, episode_analyzer=analyzer)
 
     summary = result.summary()
     print(f"  Simulation ran for {summary['duration']:.2f}s (target: {t_end}s)")
@@ -307,7 +307,7 @@ def demo_event_driven():
     print(f"\n  Reward history:")
     for agent_id, rewards in sorted(reward_history.items()):
         if rewards:
-            total = sum(r for _, r in rewards)
+            total = sum(entry[1] for entry in rewards)
             print(f"    {agent_id}: {len(rewards)} rewards, total={total:.2f}")
 
     return result

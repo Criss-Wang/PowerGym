@@ -150,7 +150,7 @@ class DeviceAgent(FieldAgent):
         action.set_values(np.array([0.0]))
         return action
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         """Reward = maintain power near zero (minimize deviation).
 
         Args:
@@ -193,7 +193,7 @@ class DeviceAgent(FieldAgent):
 class ZoneCoordinator(CoordinatorAgent):
     """Coordinator - owns policy and distributes actions via protocol."""
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         """Coordinator computes its own local reward independently."""
         return 0.0
 
@@ -728,7 +728,8 @@ timestamps = {"coordinator": [], "device_1": [], "device_2": []}
 
 for agent_id in ["coordinator", "device_1", "device_2"]:
     if agent_id in reward_history:
-        for ts, reward in reward_history[agent_id]:
+        for entry in reward_history[agent_id]:
+            ts, reward = entry[0], entry[1]
             timestamps[agent_id].append(ts)
             reward_data[agent_id].append(reward)
         print(f"  {agent_id}: {len(reward_history[agent_id])} reward data points")

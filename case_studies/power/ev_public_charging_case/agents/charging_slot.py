@@ -119,7 +119,7 @@ class ChargingSlot(FieldAgent):
         """
         pass
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         """Per-slot reward: 0 for empty slots, positive for charging revenue.
 
         The local_state dict maps feature names to numpy vectors (from proxy

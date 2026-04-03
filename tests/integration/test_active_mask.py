@@ -44,6 +44,9 @@ class CounterFeature(Feature):
 class CountingAgent(FieldAgent):
     """Field agent that counts apply_action calls for testing."""
 
+    def set_state(self, *args, **kwargs) -> None:
+        pass
+
     def init_action(self, features: List[Feature] = []):
         action = Action()
         action.set_specs(dim_c=1, range=(np.array([-1.0]), np.array([1.0])))
@@ -61,7 +64,7 @@ class CountingAgent(FieldAgent):
             apply_count=feat.apply_count + 1.0,
         )
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         if "CounterFeature" in local_state:
             return -float(local_state["CounterFeature"][0]) ** 2
         return 0.0

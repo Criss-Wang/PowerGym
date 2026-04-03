@@ -12,6 +12,7 @@ from heron.agents.constants import (
     MSG_GET_OBS_RESPONSE,
     MSG_GET_GLOBAL_STATE_RESPONSE,
     MSG_GET_LOCAL_STATE_RESPONSE,
+    MSG_PHYSICS_COMPLETED,
 )
 from heron.scheduling.event import Event, EventType
 
@@ -61,7 +62,7 @@ class EpisodeAnalyzer:
 
     Example:
         analyzer = EpisodeAnalyzer()
-        result = env.run_event_driven(analyzer, t_end=100.0)
+        result = env.run_event_driven(t_end=100.0, episode_analyzer=analyzer)
         print(f"Observations: {result.observation_count}")
         print(f"State updates: {result.state_update_count}")
     """
@@ -127,6 +128,11 @@ class EpisodeAnalyzer:
                 state_data = message_content[MSG_GET_LOCAL_STATE_RESPONSE].get("body", {})
                 data_summary = self._summarize_state(state_data, "local")
 
+            # Check for physics completion
+            elif MSG_PHYSICS_COMPLETED in message_content:
+                message_type = MSG_PHYSICS_COMPLETED
+                data_summary = {"status": message_content.get(MSG_PHYSICS_COMPLETED)}
+
             # Check for state update completion
             elif "set_state_completion" in message_content:
                 message_type = "set_state_completion"
@@ -140,12 +146,15 @@ class EpisodeAnalyzer:
                 result_data = message_content.get("body", {})
                 data_summary = self._summarize_action_result(result_data)
 
-                # Track reward history per agent
+                # Track reward history per agent, including obs_action_pairs (R7)
                 sender_id = payload.get("sender")
                 if sender_id and isinstance(result_data, dict) and "reward" in result_data:
                     if sender_id not in self.reward_history:
                         self.reward_history[sender_id] = []
-                    self.reward_history[sender_id].append((event.timestamp, result_data["reward"]))
+                    entry = (event.timestamp, result_data["reward"])
+                    if "obs_action_pairs" in result_data:
+                        entry = (*entry, result_data["obs_action_pairs"])
+                    self.reward_history[sender_id].append(entry)
 
         # Create analysis
         analysis = EventAnalysis(

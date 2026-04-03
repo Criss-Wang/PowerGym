@@ -74,7 +74,7 @@ class PumpAgent(FieldAgent):
         new_level = feat.level + self.action.c[0] * 5.0
         feat.set_values(level=float(np.clip(new_level, 0.0, feat.capacity)))
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         if "WaterLevelFeature" not in local_state:
             return 0.0
         vec = local_state["WaterLevelFeature"]

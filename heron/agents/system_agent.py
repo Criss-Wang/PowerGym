@@ -21,15 +21,15 @@ from heron.agents.constants import (
     MSG_GET_INFO,
     MSG_SET_STATE,
     MSG_SET_STATE_COMPLETION,
-    MSG_SET_TICK_RESULT,
+    MSG_PHYSICS_COMPLETED,
     INFO_TYPE_GLOBAL_STATE,
-    INFO_TYPE_LOCAL_STATE,
     STATE_TYPE_GLOBAL,
     MSG_KEY_BODY,
     MSG_KEY_PROTOCOL,
     MSG_GET_GLOBAL_STATE_RESPONSE,
-    MSG_GET_LOCAL_STATE_RESPONSE,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SystemAgent(Agent):
@@ -59,6 +59,10 @@ class SystemAgent(Agent):
             protocol=protocol
         )
         self._simulation_configured: bool = False
+        self._subordinates_kicked_off: bool = False
+
+        # Resolve which agents are periodic vs reactive (R2-R4)
+        self._periodic_agents: List[AgentID] = self.resolve_periodic_children()
 
     def init_state(self, features: List[Feature] = []) -> State:
         """Initialize a SystemAgentState from the provided features."""
@@ -83,18 +87,22 @@ class SystemAgent(Agent):
     # Core Lifecycle Methods Overrides (see heron/agents/base.py for more details)
     # ============================================
     def reset(self, *, seed: Optional[int] = None, proxy: Optional[Proxy] = None, **kwargs) -> Any:
-        """Reset system agent and all coordinators. [Both Modes]
+        """Reset system agent and all subordinates. [Both Modes]
 
-        Returns vectorized observations (``np.ndarray``) consistent with
-        the format returned by ``step()`` via ``proxy.get_step_results()``.
+        Returns vectorized observations (``np.ndarray``) for subordinate
+        agents only (R1: system agent does not observe).
 
         Args:
             seed: Random seed
             **kwargs: Additional reset parameters
         """
         super().reset(seed=seed, proxy=proxy, **kwargs)
+        self._subordinates_kicked_off = False
 
-        obs = self.observe(proxy=proxy)
+        # R1: collect obs from subordinates only, not self
+        obs: Dict[AgentID, Any] = {}
+        for subordinate in self.subordinates.values():
+            obs.update(subordinate.observe(proxy=proxy))
         obs_vectorized = {
             aid: o.vector() if isinstance(o, Observation) else o
             for aid, o in obs.items()
@@ -102,7 +110,12 @@ class SystemAgent(Agent):
         return obs_vectorized, {}
     
     def execute(self, actions: Dict[AgentID, Any], proxy: Optional[Proxy] = None) -> None:
-        """Execute actions with hierarchical coordination and simulation. [Training Mode]"""
+        """Execute actions with hierarchical coordination and simulation. [Training Mode]
+
+        R1: SystemAgent is a pure orchestrator — it does not observe, act, or
+        compute reward for itself.  All returned dicts contain only subordinate
+        agent entries.
+        """
         if not proxy:
             raise ValueError("We still require a valid proxy agent so far")
         if not self._simulation_configured:
@@ -112,28 +125,33 @@ class SystemAgent(Agent):
         if self._pre_step_func is not None:
             self._pre_step_func()
 
-        # Sync state first (by-product of proxy having updated global state)
-        local_state = proxy.get_local_state(self.agent_id, self.protocol)
-        self.sync_state_from_observed(local_state)
-
-        # Layer actions for hierarchical structure and act
+        # Layer actions for hierarchical structure and act (delegates to subordinates)
         actions = self.layer_actions(actions)
         self.act(actions, proxy)
-        
+
         # get latest global state in dict format for simulation pipeline
         global_state = proxy.get_global_states(self.agent_id, self.protocol, for_simulation=True)
         # run external environment simulation step (upon action -> agent state update)
         updated_global_state = self.simulate(global_state)
-        
+
         # broadcast updated global state via proxy
         proxy.set_global_state(updated_global_state)
 
-        # get current step statistics
-        obs = self.observe(proxy=proxy)
-        rewards = self.compute_rewards(proxy)
-        infos = self.get_info(proxy)
-        terminateds = self.get_terminateds(proxy)
-        truncateds = self.get_truncateds(proxy)
+        # R1: collect step statistics from subordinates only, not self
+        obs: Dict[AgentID, Any] = {}
+        rewards: Dict[AgentID, float] = {}
+        infos: Dict[AgentID, Dict] = {}
+        terminateds: Dict[AgentID, bool] = {}
+        truncateds: Dict[AgentID, bool] = {}
+        for subordinate in self.subordinates.values():
+            obs.update(subordinate.observe(proxy=proxy))
+            rewards.update(subordinate.compute_rewards(proxy))
+            infos.update(subordinate.get_info(proxy))
+            terminateds.update(subordinate.get_terminateds(proxy))
+            truncateds.update(subordinate.get_truncateds(proxy))
+
+        terminateds["__all__"] = all(terminateds.get(k, False) for k in terminateds if k != "__all__")
+        truncateds["__all__"] = all(truncateds.get(k, False) for k in truncateds if k != "__all__")
 
         # set step results in proxy agent
         proxy.set_step_result(obs, rewards, terminateds, truncateds, infos)
@@ -144,36 +162,30 @@ class SystemAgent(Agent):
         scheduler: EventScheduler,
         current_time: float,
     ) -> None:
-        """
-        Action phase - equivalent to `self.act`
-        - Initiate tick for subordinates
-        - Initiate self
-        - Schedule for simulation
+        """Orchestrate periodic agent ticks and physics. [Event-Driven Mode]
 
-        Note on entire event-driven flow:
-        - Schedule Actions
-        - Schedule Simulation (tick handles until this part)
-        (following steps are handled by individual event handlers)
-        - Actions take effect (some may fail to take effect before next step)
-        - Run simulation
-        - Update states
-        - Compute rewards
-        - Schedule next tick
+        R1: SystemAgent does not observe, act, or compute reward.
+        It only:
+        1. Runs the pre-step hook
+        2. Kicks off periodic agents on the first cycle (they self-reschedule after)
+        3. Schedules the next periodic physics simulation
         """
         if not self._simulation_configured:
             raise RuntimeError("Simulation not configured. Call set_simulation() before tick().")
+
+        self._timestep = current_time
 
         # Run pre-step hook (e.g., update profiles for current timestep)
         if self._pre_step_func is not None:
             self._pre_step_func()
 
-        super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
+        # First cycle only: kick off periodic agents. After that, they self-reschedule (R5).
+        if not self._subordinates_kicked_off:
+            for agent_id in self._periodic_agents:
+                scheduler.schedule_agent_tick(agent_id)
+            self._subordinates_kicked_off = True
 
-        # Schedule subordinate ticks
-        for subordinate_id in self.subordinates:
-            scheduler.schedule_agent_tick(subordinate_id)
-        
-        # schedule simulation
+        # Schedule periodic physics
         scheduler.schedule_simulation(self.agent_id, self._simulation_wait_interval)
 
 
@@ -186,90 +198,56 @@ class SystemAgent(Agent):
 
     @Agent.handler("action_effect")
     def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
-        """System agent actions don't update local state (they manage simulation).
-
-        No-op handler to handle action_effect events scheduled by compute_action.
-        """
+        """No-op: SystemAgent does not apply actions (R1)."""
         pass
 
     @Agent.handler("message_delivery")
     def message_delivery_handler(self, event: Event, scheduler: EventScheduler) -> None:
-        """Deliver message via message broker."""
+        """Handle messages for physics orchestration.
+
+        Two cases:
+        a. MSG_GET_GLOBAL_STATE_RESPONSE → run simulation, send updated state to proxy
+        b. MSG_SET_STATE_COMPLETION → physics done, broadcast MSG_PHYSICS_COMPLETED
+           to periodic agents and self-reschedule
+        """
         recipient_id = event.agent_id
         assert recipient_id == self.agent_id
         message_content = event.payload.get("message", {})
-
-        # 3 cases:
-        # a. getting global state -> starting simulation
-        # b. getting local state -> compute rewards
-        # c. receiving "state set completion" message from proxy -> schedule reward computation
         assert isinstance(message_content, dict)
+
         if MSG_GET_GLOBAL_STATE_RESPONSE in message_content:
-            # The response structure is {'get_global_state_response': {'body': {...}}}
+            # Run simulation with global state from proxy
             response_data = message_content[MSG_GET_GLOBAL_STATE_RESPONSE]
-            global_state = response_data[MSG_KEY_BODY] # a dict of {agent_id: state}
+            global_state = response_data[MSG_KEY_BODY]
             updated_global_state = self.simulate(global_state)
             scheduler.schedule_message_delivery(
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
                 message={MSG_SET_STATE: STATE_TYPE_GLOBAL, MSG_KEY_BODY: updated_global_state},
             )
-        elif MSG_GET_LOCAL_STATE_RESPONSE in message_content:
-            response_data = message_content[MSG_GET_LOCAL_STATE_RESPONSE]
-            local_state = response_data[MSG_KEY_BODY]
-
-            # Sync internal state with what's stored in proxy (may have been modified by simulation)
-            self.sync_state_from_observed(local_state)
-
-            tick_result = {
-                "reward": self.compute_local_reward(local_state),
-                "terminated": self.is_terminated(local_state),
-                "truncated": self.is_truncated(local_state),
-                "info": self.get_local_info(local_state)
-            }
-
-            scheduler.schedule_message_delivery(
-                sender_id=self.agent_id,
-                recipient_id=PROXY_AGENT_ID,
-                message={MSG_SET_TICK_RESULT: INFO_TYPE_LOCAL_STATE, MSG_KEY_BODY: tick_result},
-            )
-
-            # Schedule next tick for continuous operation if not terminated/truncated
-            if not tick_result["terminated"] and not tick_result["truncated"]:
-                scheduler.schedule_agent_tick(self.agent_id)
 
         elif MSG_SET_STATE_COMPLETION in message_content:
             if message_content[MSG_SET_STATE_COMPLETION] != "success":
-                raise ValueError(f"State update failed in proxy, cannot proceed with reward computation")
+                raise ValueError("State update failed in proxy, cannot proceed")
 
-            # Initiate state syncing + reward computation after state update by propagating the set state completion message.
-            # Each coordinator handles triggering its own subordinate (field agent) reward computation
-            # internally (see CoordinatorAgent.message_delivery_handler get_local_state_response branch).
-            for subordinate_id in self.subordinates:
+            # Physics is done. Broadcast MSG_PHYSICS_COMPLETED to all periodic agents
+            # so they compute reward from post-physics state (R7).
+            for agent_id in self._periodic_agents:
                 scheduler.schedule_message_delivery(
                     sender_id=self.agent_id,
-                    recipient_id=subordinate_id,
-                    message={MSG_SET_STATE_COMPLETION: message_content[MSG_SET_STATE_COMPLETION]},
+                    recipient_id=agent_id,
+                    message={MSG_PHYSICS_COMPLETED: "success"},
                 )
 
-            # System agent computes its own reward independently.
-            scheduler.schedule_message_delivery(
-                sender_id=self.agent_id,
-                recipient_id=PROXY_AGENT_ID,
-                message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
-            )
+            # Self-reschedule for next physics cycle
+            scheduler.schedule_agent_tick(self.agent_id)
+
         else:
-            raise NotImplementedError
+            raise NotImplementedError(f"SystemAgent received unknown message: {list(message_content.keys())}")
 
     @Agent.handler("simulation")
     def simulation_handler(self, event: Event, scheduler: EventScheduler) -> None:
-        """
-        Simulation cycle:
-        1. Ask for proxy for global states
-        2. Proxy returns the global states via message delivery
-        3. Run simulation
-        4. Gather updated global state and broadcast via proxy
-        """
+        """Request global state from proxy to begin simulation cycle."""
         scheduler.schedule_message_delivery(
             sender_id=self.agent_id,
             recipient_id=PROXY_AGENT_ID,

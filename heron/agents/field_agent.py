@@ -1,5 +1,6 @@
 
 
+from abc import abstractmethod
 from typing import Any, Dict, Optional, List
 
 import numpy as np
@@ -22,8 +23,9 @@ from heron.agents.constants import (
     MSG_GET_INFO,
     MSG_SET_STATE,
     STATE_TYPE_LOCAL,
-    MSG_SET_STATE_COMPLETION,
     MSG_SET_TICK_RESULT,
+    MSG_SET_STATE_COMPLETION,
+    MSG_PHYSICS_COMPLETED,
     INFO_TYPE_OBS,
     INFO_TYPE_LOCAL_STATE,
     MSG_KEY_BODY,
@@ -100,30 +102,36 @@ class FieldAgent(Agent):
         """Initialize an empty Action (override to define custom action structure)."""
         return Action()
 
+    @abstractmethod
     def set_state(self, *args, **kwargs) -> None:
-        raise NotImplementedError(
-            "No implementation of set_state found, you need to define how to update state for this agent"
-        )
+        """Define how to update state for this agent."""
+        ...
 
+    @abstractmethod
     def set_action(self, action: Any, *args, **kwargs) -> None:
-        raise NotImplementedError(
-            "No implementation of set_action found, you need to define how to set action for this agent"
-        )
+        """Define how to set action for this agent."""
+        ...
 
     def post_proxy_attach(self, proxy: "Proxy") -> None:
         """Hook for any additional setup after proxy attachment and global state initialization."""
         self.action_space = self.get_action_space()
         self.observation_space = self.get_observation_space(proxy)
 
-    def compute_local_reward(self, local_state: dict) -> float:
-        raise NotImplementedError(
-            "No implementation of compute_local_reward found, you need to define reward computation mechanism for this agent"
-        )
+    @abstractmethod
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state: Optional[dict] = None) -> float:
+        """Define reward computation mechanism for this agent.
 
+        Args:
+            local_state: Current post-physics local state.
+            prev_post_physics_state: Previous post-physics local state
+                (event-driven mode). None on first call or in step-based mode.
+        """
+        ...
+
+    @abstractmethod
     def apply_action(self):
-        raise NotImplementedError(
-            "No implementation of apply_action found, you need to define action effect mechanism for this agent"
-        )
+        """Define action effect mechanism for this agent."""
+        ...
 
     def get_action_space(self) -> Space:
         """Get action space based on agent action. [Both Modes]
@@ -175,26 +183,25 @@ class FieldAgent(Agent):
         scheduler: EventScheduler,
         current_time: float,
     ) -> None:
-        """
-        Action phase - equivalent to `self.act`
+        """Action phase: observe → decide → act. [Event-Driven Mode]
 
-        Note:
-        - FieldAgent ticks only upon CoordinatorAgent.tick (see heron/agents/coordinator_agent.py)
-        - Upstream actions checked in base.Agent.tick() via _check_for_upstream_action()
-
-        Always requests obs from proxy first for state sync. If an upstream
-        action was received (stored in self._upstream_action by super().tick()),
-        it is applied after state sync in the get_obs_response handler.
+        Periodic agents self-reschedule here (R5). Reactive agents do not —
+        they are ticked by their upstream coordinator after action coordination.
         """
         super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
 
         # Always request obs from proxy first for state sync.
         # Upstream action (if any) will be applied after sync in get_obs_response handler.
+        # Uses obs_delay (not msg_delay) to model sensor/telemetry latency.
         scheduler.schedule_message_delivery(
             sender_id=self.agent_id,
             recipient_id=PROXY_AGENT_ID,
             message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
+            delay=scheduler.get_obs_delay(self.agent_id),
         )
+
+        # R5: periodic agents self-reschedule immediately in tick()
+        self._self_reschedule(scheduler)
 
     # ============================================
     # Custom Handlers for Event-Driven Execution
@@ -206,6 +213,12 @@ class FieldAgent(Agent):
     @Agent.handler("action_effect")
     def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
         self.apply_action()
+
+        # R7: cache (obs, action) only after action has landed on state.
+        if self._pending_obs_queue:
+            obs = self._pending_obs_queue.popleft()
+            self._cache_obs_action(obs, self.action)
+
         scheduler.schedule_message_delivery(
             sender_id=self.agent_id,
             recipient_id=PROXY_AGENT_ID,
@@ -214,59 +227,83 @@ class FieldAgent(Agent):
 
     @Agent.handler("message_delivery")
     def message_delivery_handler(self, event: Event, scheduler: EventScheduler) -> None:
-        """Deliver message via message broker."""
+        """Handle messages for action and reward phases.
+
+        Three cases:
+        a. MSG_GET_OBS_RESPONSE → sync state, compute action, cache (obs, action)
+        b. MSG_PHYSICS_COMPLETED → request post-physics local state for reward
+        c. MSG_GET_LOCAL_STATE_RESPONSE → compute reward at physics boundary (R7)
+        """
         recipient_id = event.agent_id
         assert recipient_id == self.agent_id
         message_content = event.payload.get("message", {})
 
-        # Publish message via broker
         if MSG_GET_OBS_RESPONSE in message_content:
             assert isinstance(message_content, dict)
             response_data = message_content[MSG_GET_OBS_RESPONSE]
             body = response_data[MSG_KEY_BODY]
 
-            # Proxy sends both obs and local_state (design principle: agent asks for obs, proxy gives both)
             obs_dict = body["obs"]
             local_state = body["local_state"]
-
-            # Deserialize observation dict back to Observation object
             obs = Observation.from_dict(obs_dict)
 
-            # Sync state first (proxy gives both obs & state)
             self.sync_state_from_observed(local_state)
-
             self.compute_action(obs, scheduler)
+
+            # R7: queue obs for caching at action_effect time (not here).
+            # Caching here would create fake rewards if physics runs before
+            # the action_effect lands.
+            if self.action:
+                self._pending_obs_queue.append(obs)
+
+        elif MSG_SET_STATE_COMPLETION in message_content:
+            # No-op: proxy acknowledges local state update from action_effect.
+            # Reward computation happens later at physics boundary.
+            pass
+
+        elif MSG_PHYSICS_COMPLETED in message_content:
+            # Physics just completed. Request post-physics local state for reward.
+            scheduler.schedule_message_delivery(
+                sender_id=self.agent_id,
+                recipient_id=PROXY_AGENT_ID,
+                message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
+            )
+
         elif MSG_GET_LOCAL_STATE_RESPONSE in message_content:
+            # R7: compute reward at physics boundary
             response_data = message_content[MSG_GET_LOCAL_STATE_RESPONSE]
             local_state = response_data[MSG_KEY_BODY]
 
-            # Sync internal state with what's stored in proxy (may have been modified by simulation)
             self.sync_state_from_observed(local_state)
 
+            reward = self.compute_local_reward(local_state, self._prev_post_physics_state)
+            obs_action_pairs = self._flush_obs_action_cache()
+
             tick_result = {
-                "reward": self.compute_local_reward(local_state),
+                "reward": reward,
                 "terminated": self.is_terminated(local_state),
                 "truncated": self.is_truncated(local_state),
-                "info": self.get_local_info(local_state)
+                "info": self.get_local_info(local_state),
+                "obs_action_pairs": obs_action_pairs,
             }
+            self._prev_post_physics_state = local_state
 
             scheduler.schedule_message_delivery(
                 sender_id=self.agent_id,
                 recipient_id=PROXY_AGENT_ID,
                 message={MSG_SET_TICK_RESULT: INFO_TYPE_LOCAL_STATE, MSG_KEY_BODY: tick_result},
             )
-        elif MSG_SET_STATE_COMPLETION in message_content:
-            if message_content[MSG_SET_STATE_COMPLETION] != "success":
-                raise ValueError(f"State update failed in proxy, cannot proceed")
 
-            # We don't need reward delays for field agents
-            scheduler.schedule_message_delivery(
-                sender_id=self.agent_id,
-                recipient_id=PROXY_AGENT_ID,
-                message={MSG_GET_INFO: INFO_TYPE_LOCAL_STATE, MSG_KEY_PROTOCOL: self.protocol},
-            )
+            # Reactive agents: notify upstream coordinator that reward is done
+            if not self.is_periodic and self.upstream_id:
+                scheduler.schedule_message_delivery(
+                    sender_id=self.agent_id,
+                    recipient_id=self.upstream_id,
+                    message={"sub_reward_complete": self.agent_id},
+                )
+
         else:
-            raise NotImplementedError
+            raise NotImplementedError(f"FieldAgent received unknown message: {list(message_content.keys())}")
     
 
     # ============================================

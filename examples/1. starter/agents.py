@@ -39,7 +39,7 @@ class TransportDrone(FieldAgent):
         new_x = pf.x_pos + self.action.c[0] * 0.02
         pf.set_values(x_pos=new_x)
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         pf = local_state.get("DronePositionFeature")
         if pf is None:
             return 0.0
@@ -90,7 +90,7 @@ class TransportCoordinator(CoordinatorAgent):
         rewards.update(sub_rewards)
         return rewards
 
-    def compute_local_reward(self, local_state: dict) -> float:
+    def compute_local_reward(self, local_state: dict, prev_post_physics_state=None) -> float:
         sf = local_state.get("FleetSafetyFeature")
         if sf is None:
             return 0.0

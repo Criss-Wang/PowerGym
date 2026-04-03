@@ -6,9 +6,11 @@ This module provides environment implementations:
 """
 
 from heron.envs.base import BaseEnv
+from heron.envs.builder import EnvBuilder
 from heron.envs.simple import DefaultHeronEnv
 
 __all__ = [
     "BaseEnv",
     "DefaultHeronEnv",
+    "EnvBuilder",
 ]

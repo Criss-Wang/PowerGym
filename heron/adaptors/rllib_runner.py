@@ -149,7 +149,7 @@ class HeronEnvRunner(MultiAgentEnvRunner):
             ep_seed = seed + ep_idx
             heron_env.reset(seed=ep_seed, jitter_seed=ep_seed)
             analyzer = EpisodeAnalyzer(verbose=False, track_data=True)
-            episode_stats = heron_env.run_event_driven(analyzer, t_end=t_end)
+            episode_stats = heron_env.run_event_driven(t_end=t_end, episode_analyzer=analyzer)
 
             # 3. Build MultiAgentEpisode from reward history
             reward_history = analyzer.get_reward_history()
@@ -163,7 +163,7 @@ class HeronEnvRunner(MultiAgentEnvRunner):
 
             # 4. Store HERON-specific metrics
             total_reward = sum(
-                sum(r for _, r in rewards)
+                sum(entry[1] for entry in rewards)
                 for rewards in reward_history.values()
                 if rewards
             )
@@ -269,37 +269,64 @@ class HeronEnvRunner(MultiAgentEnvRunner):
         )
         num_ticks = max(num_ticks, 1)  # at least 1 step
 
+        # Track per-agent tick counts so we terminate each agent at its
+        # own last tick instead of padding shorter agents with phantom 0.0s.
+        agent_tick_counts = {
+            aid: len(filtered_rh.get(aid, [])) for aid in agent_ids
+        }
+
         # Reset step
         episode.add_env_reset(
             observations=zero_obs,
             infos={aid: {} for aid in agent_ids},
         )
 
-        # One env step per tick
+        # One env step per tick — only include agents with actual reward data
+        terminated_agents: set = set()
         for t in range(num_ticks):
-            is_last = (t == num_ticks - 1)
+            is_global_last = (t == num_ticks - 1)
+            active_aids = [aid for aid in agent_ids if aid not in terminated_agents]
 
             tick_rewards = {}
-            for aid in agent_ids:
+            tick_terminateds = {}
+            for aid in active_aids:
                 agent_rw = filtered_rh.get(aid, [])
                 if t < len(agent_rw):
                     tick_rewards[aid] = agent_rw[t][1]  # (timestamp, reward)
+                    # Terminate agent at its own last tick
+                    if t == agent_tick_counts[aid] - 1:
+                        tick_terminateds[aid] = True
+                        terminated_agents.add(aid)
                 else:
-                    tick_rewards[aid] = 0.0
+                    # Agent has no data at this tick — already terminated
+                    # or never had data; skip without phantom reward.
+                    continue
 
-            terminateds = None
-            if is_last:
-                terminateds = {aid: True for aid in agent_ids}
-                terminateds["__all__"] = True
+            # If all agents are done or this is the global last step,
+            # mark __all__ terminated for any stragglers.
+            if is_global_last:
+                for aid in active_aids:
+                    if aid not in tick_terminateds:
+                        tick_terminateds[aid] = True
+                tick_terminateds["__all__"] = True
+            elif len(terminated_agents) == len(agent_ids):
+                tick_terminateds["__all__"] = True
+
+            step_obs = {aid: zero_obs[aid] for aid in active_aids if aid in tick_rewards}
+            step_acts = {aid: zero_acts[aid] for aid in active_aids if aid in tick_rewards}
+            step_infos = {aid: {} for aid in active_aids if aid in tick_rewards}
 
             episode.add_env_step(
-                observations=zero_obs,
-                actions=zero_acts,
+                observations=step_obs,
+                actions=step_acts,
                 rewards=tick_rewards,
-                infos={aid: {} for aid in agent_ids},
-                terminateds=terminateds,
+                infos=step_infos,
+                terminateds=tick_terminateds if tick_terminateds else None,
                 truncateds=None,
             )
+
+            if len(terminated_agents) == len(agent_ids):
+                break  # All agents done, no need to continue
 
         return episode
 

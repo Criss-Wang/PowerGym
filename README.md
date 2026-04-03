@@ -73,109 +73,65 @@ pip install -e ".[all]"             # Everything (includes dev tools)
 
 ## Quick Start
 
-### 1. Define Features with Visibility Control
-
-Features are the building blocks of agent state. Each feature declares who can observe it.
+Copy-paste this into a file and run it — a complete two-room thermostat control in ~30 lines:
 
 ```python
 from dataclasses import dataclass
-from typing import ClassVar, Sequence
-from heron.core import Feature
-
-@dataclass(slots=True)
-class BatterySOC(Feature):
-    visibility: ClassVar[Sequence[str]] = ["owner", "upper_level"]
-    soc: float = 0.5          # State of charge (0-1)
-    capacity: float = 100.0   # kWh
-
-@dataclass(slots=True)
-class PowerOutput(Feature):
-    visibility: ClassVar[Sequence[str]] = ["public"]  # Everyone can see
-    p_kw: float = 0.0
-    q_kvar: float = 0.0
-```
-
-Visibility options: `"public"`, `"owner"`, `"upper_level"`, `"system"`
-
-### 2. Create Agents
-
-Extend `FieldAgent` and implement four required methods:
-
-```python
-from heron.agents import FieldAgent
-from heron.core import Action, Feature
-from typing import List, Any
+from typing import Any, ClassVar, List, Sequence
 import numpy as np
+from heron.core import Feature, Action
+from heron.agents import FieldAgent, CoordinatorAgent
+from heron.envs import DefaultHeronEnv
 
-class Battery(FieldAgent):
-    def set_action(self, action: Any) -> None:
-        """Store the action received from policy or coordinator."""
-        self.action.c = np.array(action, dtype=np.float32)
+# 1. Define a feature with visibility
+@dataclass(slots=True)
+class RoomTemp(Feature):
+    visibility: ClassVar[Sequence[str]] = ["public"]
+    temp: float = 20.0
+    target: float = 22.0
+
+# 2. Define an agent (implement the four required abstract methods)
+class Thermostat(FieldAgent):
+    def init_action(self, features: List[Feature] = []) -> Action:
+        action = Action()
+        action.set_specs(dim_c=1, range=(np.array([-1.0]), np.array([1.0])))
+        return action
+
+    def set_action(self, action: Any, *args, **kwargs) -> None:
+        self.action.set_values(action)
 
     def set_state(self, **kwargs) -> None:
-        """Update features from simulation results."""
-        self.state.update_features(**kwargs)
+        if "temp" in kwargs:
+            self.state.features["RoomTemp"].set_values(temp=kwargs["temp"])
 
-    def apply_action(self):
-        """Apply action effects to internal state."""
-        charge_kw = self.action.c[0]
-        soc_feature = self.state.features["BatterySOC"]
-        soc_feature.set_values(soc=soc_feature.soc + charge_kw * 0.01)
+    def apply_action(self) -> None:
+        feat = self.state.features["RoomTemp"]
+        feat.set_values(temp=float(np.clip(feat.temp + self.action.c[0] * 2.0, 10, 35)))
 
     def compute_local_reward(self, local_state: dict) -> float:
-        """Compute reward from local state dict."""
-        soc = local_state["BatterySOC"]["soc"]
-        return -abs(soc - 0.5)  # Penalize deviation from 50%
+        t, tgt = float(local_state["RoomTemp"][0]), float(local_state["RoomTemp"][1])
+        return -abs(t - tgt)
 
-    def init_action(self, features: List[Feature] = []) -> Action:
-        """Define the action space."""
-        action = Action()
-        action.set_specs(dim_c=1, range=(np.array([-10.0]), np.array([10.0])))
-        return action
+# 3. Simulation function: receives/returns {agent_id: {feature: {field: val}}}
+def sim(agent_states: dict) -> dict:
+    for features in agent_states.values():
+        if "RoomTemp" in features:
+            features["RoomTemp"]["temp"] += 0.1 * (15.0 - features["RoomTemp"]["temp"])
+    return agent_states
+
+# 4. Wire up and run
+agents = [Thermostat(agent_id=f"room_{i}", features=[RoomTemp()]) for i in range(2)]
+coord  = CoordinatorAgent(agent_id="bldg", subordinates={a.agent_id: a for a in agents})
+env    = DefaultHeronEnv(coordinator_agents=[coord], simulation_func=sim)
+
+obs, info = env.reset(seed=0)
+for step in range(10):
+    actions = {a.agent_id: a.action.sample() for a in agents}
+    obs, rewards, terminated, truncated, infos = env.step(actions)
+    print(f"step {step}: rewards={rewards}")
 ```
 
-### 3. Build a Hierarchy
-
-```python
-from heron.agents import CoordinatorAgent, SystemAgent
-from heron.protocols import VerticalProtocol
-
-# Create field agents with features
-batteries = [
-    Battery(
-        agent_id=f"bat_{i}",
-        features=[BatterySOC(), PowerOutput()],
-    )
-    for i in range(3)
-]
-
-# Coordinator manages field agents via a protocol
-coordinator = CoordinatorAgent(
-    agent_id="microgrid_0",
-    subordinates={b.agent_id: b for b in batteries},
-    protocol=VerticalProtocol(),  # Decomposes joint action → per-device actions
-)
-```
-
-### 4. Run Training or Testing
-
-```python
-# Synchronous mode (RL training) — all agents step together
-obs, info = env.reset()
-obs, rewards, terminated, truncated, infos = env.step(actions)
-
-# Event-driven mode (realistic testing) — heterogeneous timing
-from heron.scheduling import ScheduleConfig, JitterType, EpisodeAnalyzer
-
-coordinator.schedule_config = ScheduleConfig.with_jitter(
-    tick_interval=5.0,       # Ticks every 5 seconds
-    obs_delay=0.1,           # 100ms observation latency
-    act_delay=0.2,           # 200ms actuation delay
-    jitter_type=JitterType.GAUSSIAN,
-    jitter_ratio=0.1,        # 10% timing jitter
-)
-result = env.run_event_driven(episode_analyzer=EpisodeAnalyzer(), t_end=3600.0)
-```
+For more examples see [`examples/`](examples/) and the [power grid tutorials](case_studies/power/tutorials/).
 
 ---
 
