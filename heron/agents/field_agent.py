@@ -182,11 +182,19 @@ class FieldAgent(Agent):
         self,
         scheduler: EventScheduler,
         current_time: float,
+        reschedule: bool = True,
     ) -> None:
         """Action phase: observe → decide → act. [Event-Driven Mode]
 
         Periodic agents self-reschedule here (R5). Reactive agents do not —
         they are ticked by their upstream coordinator after action coordination.
+
+        Args:
+            scheduler: Event scheduler.
+            current_time: Current simulation time.
+            reschedule: If False, skip self-reschedule. Used by
+                ``condition_trigger_handler`` so reactive wakeups don't
+                create duplicate periodic cycles.
         """
         super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
 
@@ -201,7 +209,8 @@ class FieldAgent(Agent):
         )
 
         # R5: periodic agents self-reschedule immediately in tick()
-        self._self_reschedule(scheduler)
+        if reschedule:
+            self._self_reschedule(scheduler)
 
     # ============================================
     # Custom Handlers for Event-Driven Execution
@@ -221,15 +230,7 @@ class FieldAgent(Agent):
         Override for custom reactive logic.
         Payload contains monitor_id identifying which condition fired.
         """
-        # Run tick logic without self-reschedule
-        super().tick(scheduler, event.timestamp)
-        scheduler.schedule_message_delivery(
-            sender_id=self.agent_id,
-            recipient_id=PROXY_AGENT_ID,
-            message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
-            delay=scheduler.get_obs_delay(self.agent_id),
-        )
-        # No _self_reschedule() — this is a one-off reactive wakeup
+        self.tick(scheduler, event.timestamp, reschedule=False)
 
     @Agent.handler("action_effect")
     def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:

@@ -63,7 +63,11 @@ class SystemAgent(Agent):
         self._subordinates_kicked_off: bool = False
         self._last_post_physics_state: Optional[Dict] = None
         self._apply_disturbance_func: Optional[Callable] = None
-        self._disturbance_triggered_sim: bool = False
+        # FIFO queue tracking whether each in-flight simulation was
+        # disturbance-triggered. Pushed in simulation_handler, popped
+        # in message_delivery_handler at MSG_SET_STATE_COMPLETION.
+        from collections import deque
+        self._sim_origin_queue: deque = deque()
 
         # Resolve which agents are periodic vs reactive (R2-R4)
         self._periodic_agents: List[AgentID] = []
@@ -309,12 +313,21 @@ class SystemAgent(Agent):
                 self.evaluate_conditions(self._last_post_physics_state, scheduler)
                 self._last_post_physics_state = None
 
-            if self._disturbance_triggered_sim:
+            # Pop the origin of this simulation from the FIFO queue.
+            # The queue ensures correct pairing even when multiple
+            # simulations interleave in the message pipeline.
+            is_disturbance = (
+                self._sim_origin_queue.popleft()
+                if self._sim_origin_queue
+                else False
+            )
+
+            if is_disturbance:
                 # Disturbance-triggered SIMULATION: only evaluate conditions
                 # (done above). Do NOT broadcast PHYSICS_COMPLETED or
                 # self-reschedule — that would create a duplicate periodic
                 # cycle and generate empty-pair rewards.
-                self._disturbance_triggered_sim = False
+                pass
             else:
                 # Periodic SIMULATION: broadcast PHYSICS_COMPLETED to all
                 # periodic agents so they compute reward (R7), then
@@ -333,9 +346,8 @@ class SystemAgent(Agent):
     @Agent.handler("simulation")
     def simulation_handler(self, event: Event, scheduler: EventScheduler) -> None:
         """Request global state from proxy to begin simulation cycle."""
-        self._disturbance_triggered_sim = (
-            event.payload.get("triggered_by") == "disturbance"
-        )
+        is_disturbance = event.payload.get("triggered_by") == "disturbance"
+        self._sim_origin_queue.append(is_disturbance)
         scheduler.schedule_message_delivery(
             sender_id=self.agent_id,
             recipient_id=PROXY_AGENT_ID,

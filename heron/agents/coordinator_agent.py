@@ -94,18 +94,26 @@ class CoordinatorAgent(Agent):
         self,
         scheduler: EventScheduler,
         current_time: float,
+        reschedule: bool = True,
     ) -> None:
         """Action phase: observe → decide → coordinate subordinates. [Event-Driven Mode]
 
         Periodic coordinators self-reschedule here (R5). Reactive subordinate
         ticks are scheduled after action coordination (in obs response handler).
+
+        Args:
+            scheduler: Event scheduler.
+            current_time: Current simulation time.
+            reschedule: If False, skip self-reschedule. Used by
+                ``condition_trigger_handler`` so reactive wakeups don't
+                create duplicate periodic cycles.
         """
         super().tick(scheduler, current_time)  # Update internal timestep and check for upstream actions
 
         # Schedule subordinate ticks -> initiate action process
         for subordinate_id in self.subordinates:
             scheduler.schedule_agent_tick(subordinate_id)
-        
+
         # Always request obs from proxy first for state sync.
         # Upstream action (if any) will be applied after sync in get_obs_response handler.
         # Uses obs_delay (not msg_delay) to model sensor/telemetry latency.
@@ -117,7 +125,8 @@ class CoordinatorAgent(Agent):
         )
 
         # R5: periodic agents self-reschedule immediately in tick()
-        self._self_reschedule(scheduler)
+        if reschedule:
+            self._self_reschedule(scheduler)
 
     # ============================================
     # Custom Handlers for Event-Driven Execution
@@ -137,17 +146,7 @@ class CoordinatorAgent(Agent):
         Override for custom reactive logic.
         Payload contains monitor_id identifying which condition fired.
         """
-        # Run tick logic without self-reschedule
-        super().tick(scheduler, event.timestamp)
-        for subordinate_id in self.subordinates:
-            scheduler.schedule_agent_tick(subordinate_id)
-        scheduler.schedule_message_delivery(
-            sender_id=self.agent_id,
-            recipient_id=PROXY_AGENT_ID,
-            message={MSG_GET_INFO: INFO_TYPE_OBS, MSG_KEY_PROTOCOL: self.protocol},
-            delay=scheduler.get_obs_delay(self.agent_id),
-        )
-        # No _self_reschedule() — this is a one-off reactive wakeup
+        self.tick(scheduler, event.timestamp, reschedule=False)
 
     @Agent.handler("action_effect")
     def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
