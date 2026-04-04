@@ -6,8 +6,8 @@ and instantiate them with ``heron.make(env_id, **kwargs)``.
 Example::
 
     import heron
+    import heron.demo_envs  # auto-registers built-in demo envs
 
-    # Built-in demo envs are auto-registered on import
     env = heron.make("Thermostat-v0")
 
     # Override default kwargs
@@ -15,7 +15,7 @@ Example::
 
     # Register a custom env
     heron.register(
-        id="MyEnv-v0",
+        env_id="MyEnv-v0",
         entry_point="my_package.envs:MyEnv",
         kwargs={"default_param": 42},
     )
@@ -48,56 +48,57 @@ _registry: Dict[str, EnvSpec] = {}
 
 
 def register(
-    id: str,
+    env_id: str,
     entry_point: Union[str, Callable, Type],
     kwargs: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Register an environment.
 
     Args:
-        id: Unique environment identifier.
+        env_id: Unique environment identifier (e.g. ``"Thermostat-v0"``).
         entry_point: Callable or import path ``"module:Class"``.
         kwargs: Default keyword arguments for the entry point.
 
     Raises:
-        ValueError: If *id* is already registered.
+        ValueError: If *env_id* is already registered.
     """
-    if id in _registry:
+    if env_id in _registry:
         raise ValueError(
-            f"Environment '{id}' is already registered. "
-            f"Use a different ID or call unregister('{id}') first."
+            f"Environment '{env_id}' is already registered. "
+            f"Use a different ID or call unregister('{env_id}') first."
         )
-    _registry[id] = EnvSpec(
-        id=id,
+    _registry[env_id] = EnvSpec(
+        id=env_id,
         entry_point=entry_point,
         kwargs=dict(kwargs or {}),
     )
 
 
-def make(id: str, **override_kwargs: Any) -> Any:
+def make(env_id: str, **override_kwargs: Any) -> Any:
     """Create an environment instance by ID.
 
     Default kwargs from ``register()`` are merged with *override_kwargs*
     (overrides take precedence).
 
     Args:
-        id: Registered environment identifier.
+        env_id: Registered environment identifier.
         **override_kwargs: Keyword arguments that override defaults.
 
     Returns:
         Environment instance.
 
     Raises:
-        KeyError: If *id* is not registered.
+        KeyError: If *env_id* is not registered.
+        ValueError: If the entry_point string cannot be resolved.
     """
-    if id not in _registry:
+    if env_id not in _registry:
         available = ", ".join(sorted(_registry.keys())) or "(none)"
         raise KeyError(
-            f"Environment '{id}' not found in registry. "
+            f"Environment '{env_id}' not found in registry. "
             f"Available: {available}"
         )
-    spec = _registry[id]
-    entry_point = spec.entry_point
+    env_spec = _registry[env_id]
+    entry_point = env_spec.entry_point
 
     # Lazy import from string path
     if isinstance(entry_point, str):
@@ -107,38 +108,58 @@ def make(id: str, **override_kwargs: Any) -> Any:
                 f"entry_point string must be 'module.path:ClassName', "
                 f"got '{entry_point}'"
             )
-        module = importlib.import_module(module_path)
+        try:
+            module = importlib.import_module(module_path)
+        except ModuleNotFoundError as exc:
+            raise ValueError(
+                f"Failed to import module '{module_path}' for env "
+                f"'{env_id}'. Check the entry_point: '{env_spec.entry_point}'"
+            ) from exc
+        if not hasattr(module, attr_name):
+            raise ValueError(
+                f"Module '{module_path}' has no attribute '{attr_name}' "
+                f"(entry_point='{env_spec.entry_point}' for env '{env_id}')."
+            )
         entry_point = getattr(module, attr_name)
 
-    merged_kwargs = {**spec.kwargs, **override_kwargs}
+    merged_kwargs = {**env_spec.kwargs, **override_kwargs}
     return entry_point(**merged_kwargs)
 
 
-def unregister(id: str) -> None:
+def unregister(env_id: str) -> None:
     """Remove an environment from the registry.
 
     Args:
-        id: Environment identifier to remove.
+        env_id: Environment identifier to remove.
 
     Raises:
-        KeyError: If *id* is not registered.
+        KeyError: If *env_id* is not registered.
     """
-    if id not in _registry:
-        raise KeyError(f"Environment '{id}' is not registered.")
-    del _registry[id]
+    if env_id not in _registry:
+        raise KeyError(f"Environment '{env_id}' is not registered.")
+    del _registry[env_id]
 
 
 def list_envs() -> Dict[str, EnvSpec]:
-    """Return a copy of the current registry."""
+    """Return a snapshot of the current registry.
+
+    Returns:
+        A dict mapping env ID strings to their ``EnvSpec`` objects.
+        The returned dict is a shallow copy — mutating it does not
+        affect the registry.
+    """
     return dict(_registry)
 
 
-def spec(id: str) -> EnvSpec:
-    """Return the EnvSpec for a registered environment.
+def spec(env_id: str) -> EnvSpec:
+    """Return the ``EnvSpec`` for a registered environment.
+
+    Args:
+        env_id: Registered environment identifier.
 
     Raises:
-        KeyError: If *id* is not registered.
+        KeyError: If *env_id* is not registered.
     """
-    if id not in _registry:
-        raise KeyError(f"Environment '{id}' is not registered.")
-    return _registry[id]
+    if env_id not in _registry:
+        raise KeyError(f"Environment '{env_id}' is not registered.")
+    return _registry[env_id]
