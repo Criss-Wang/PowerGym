@@ -51,6 +51,9 @@ from heron.protocols.horizontal import HorizontalProtocol
 from heron.messaging import Message, MessageType, MessageBroker
 from heron.messaging.in_memory_broker import InMemoryBroker
 
+# Registry
+from heron.registry import make, register, list_envs, spec as env_spec
+
 # Scheduling
 from heron.scheduling import (
     Event,
@@ -94,6 +97,11 @@ __all__ = [
     "MessageType",
     "MessageBroker",
     "InMemoryBroker",
+    # Registry
+    "make",
+    "register",
+    "list_envs",
+    "env_spec",
     # Scheduling
     "Event",
     "EventType",
