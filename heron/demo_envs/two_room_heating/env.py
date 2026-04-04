@@ -13,6 +13,7 @@ Two rooms with heaters, each level adding one concept:
     v7 -- Multi-level hierarchy
 """
 
+import copy
 from functools import partial
 from typing import Any, Dict, Optional
 
@@ -190,7 +191,12 @@ def _register_overheat_monitors(
     threshold: float,
     cooldown: float = 2.0,
 ) -> None:
-    """Register ConditionMonitor thresholds for both heater zones."""
+    """Register ConditionMonitor thresholds for both heater zones.
+
+    When a zone's temperature exceeds *threshold*, the vent agent is
+    woken via a CONDITION_TRIGGER event (even if it is not periodically
+    scheduled).
+    """
     for zone in ("heater_a", "heater_b"):
         env.scheduler.register_condition(
             ConditionMonitor.threshold(
@@ -447,17 +453,19 @@ def build_v3(
         system_agent -> [heater_a (1s), heater_b (3s),
                          building_ctrl (5s) -> vent (reactive)]
 
-    Same structure as v2.  In step-based mode, the observation scoping
+    Same structure as v2.  The concept this level teaches is that peers
+    can share state directly.  In step-based mode, observation scoping
     already makes upper-level features visible via the coordinator.
-    In event-driven mode, a HorizontalProtocol enables peers to share
-    temperature state directly through messages.
+    In event-driven mode, a ``HorizontalProtocol`` would enable direct
+    peer-to-peer message exchange — that wire-up is planned but not yet
+    implemented; this level currently serves as a structural placeholder
+    with its own ``env_id`` for the progression.
 
-    The ``enable_horizontal`` parameter is accepted for forward-compatibility
-    but has no additional effect in step-based mode because
-    ZoneTemperatureFeature visibility already includes ``"upper_level"``.
+    .. note:: ``enable_horizontal`` is accepted for forward-compatibility
+       but currently has no effect.
     """
-    # Delegate to build_v2 -- the hierarchy is identical.
-    return build_v2(
+    # Identical to v2 structurally; distinct env_id for introspection.
+    env = build_v2(
         target_temp=target_temp,
         initial_temp_a=initial_temp_a,
         initial_temp_b=initial_temp_b,
@@ -472,6 +480,8 @@ def build_v3(
         overheat_threshold=overheat_threshold,
         enable_condition_monitor=enable_condition_monitor,
     )
+    env.env_id = "two_room_v3"
+    return env
 
 
 # ---------------------------------------------------------------------------
@@ -506,7 +516,6 @@ def build_v4(
     schedule includes cold snaps at t=10, t=30, and a heat wave at t=50.
     """
     if disturbance_schedule is None:
-        import copy
         disturbance_schedule = copy.deepcopy(_DEFAULT_DISTURBANCE_SCHEDULE)
 
     env = (
@@ -592,10 +601,16 @@ def build_v5(
     T > threshold it can send a custom event to the other heater, which then
     clamps its next action to cooling-only.
 
-    The custom event sending happens during ``tick()`` in event-driven mode.
-    In step-based training, the handler is registered but not triggered.
+    The ``@Agent.custom_handler("overheat_alert")`` decorator on
+    ``HeaterAgent`` registers the handler at class definition time.
+    In event-driven mode, custom events can be dispatched via
+    ``scheduler.schedule_custom_event()``.  In step-based training
+    the handler exists but is not triggered.
+
+    Structurally identical to v4 — the new capability is latent in
+    the agent class definition, not in the environment wiring.
     """
-    return build_v4(
+    env = build_v4(
         target_temp=target_temp,
         initial_temp_a=initial_temp_a,
         initial_temp_b=initial_temp_b,
@@ -611,6 +626,8 @@ def build_v5(
         enable_condition_monitor=enable_condition_monitor,
         disturbance_schedule=disturbance_schedule,
     )
+    env.env_id = "two_room_v5"
+    return env
 
 
 # ---------------------------------------------------------------------------
@@ -737,7 +754,6 @@ def build_v7(
     reactive (ticked by their parent coordinator).
     """
     if disturbance_schedule is None:
-        import copy
         disturbance_schedule = copy.deepcopy(_DEFAULT_DISTURBANCE_SCHEDULE)
 
     if floor_ctrl_schedule is None:
