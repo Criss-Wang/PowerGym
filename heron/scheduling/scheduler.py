@@ -25,6 +25,11 @@ class EventScheduler:
             AgentID, Dict[EventType, Callable[[Event, "EventScheduler"], None]]
         ] = {}
 
+        # Custom event handlers: {agent_id: {custom_type_str: handler}}
+        self._custom_handlers: Dict[
+            AgentID, Dict[str, Callable[[Event, "EventScheduler"], None]]
+        ] = {}
+
         # Condition monitors (evaluated after SIMULATION and ENV_UPDATE events)
         self._condition_monitors: List[ConditionMonitor] = []
 
@@ -61,6 +66,9 @@ class EventScheduler:
             self._agent_schedule_configs[agent_id] = agent.schedule_config
             self._active_agents.add(agent_id)
             self.set_handlers_for_agent(agent_id, agent.get_handlers())
+            custom_handlers = agent.get_custom_handlers()
+            if custom_handlers:
+                self.set_custom_handlers_for_agent(agent_id, custom_handlers)
             if agent_id == SYSTEM_AGENT_ID:
                 # Only schedule first tick for system agent
                 self.schedule(
@@ -251,6 +259,91 @@ class EventScheduler:
                 payload=payload or {},
             )
         )
+
+    # ===============================
+    # Custom Event Scheduling
+    # ===============================
+    def schedule_custom_event(
+        self,
+        sender_id: AgentID,
+        recipient_id: AgentID,
+        custom_type: str,
+        payload: Optional[Dict[str, Any]] = None,
+        delay: Optional[float] = None,
+        priority: int = 0,
+    ) -> str:
+        """Schedule a domain-specific agent-to-agent event.
+
+        The recipient agent must have a ``@Agent.custom_handler(custom_type)``
+        registered or a ``ValueError`` will be raised at dispatch time.
+
+        Args:
+            sender_id: Sending agent.
+            recipient_id: Receiving agent.
+            custom_type: Domain-specific event name (e.g., ``"new_delivery"``).
+            payload: Event-specific data dict.
+            delay: Delay from current time (default 0).
+            priority: Event priority (lower = earlier at same timestamp).
+
+        Returns:
+            The event_id for potential cancellation.
+        """
+        full_payload: Dict[str, Any] = {"custom_type": custom_type, "sender": sender_id}
+        if payload:
+            full_payload.update(payload)
+        return self.schedule(
+            Event(
+                timestamp=self.current_time + (delay or 0.0),
+                event_type=EventType.CUSTOM,
+                agent_id=recipient_id,
+                priority=priority,
+                payload=full_payload,
+            )
+        )
+
+    def schedule_custom_broadcast(
+        self,
+        sender_id: AgentID,
+        recipient_ids: Iterable[AgentID],
+        custom_type: str,
+        payload: Optional[Dict[str, Any]] = None,
+        delay: Optional[float] = None,
+        priority: int = 0,
+    ) -> List[str]:
+        """Schedule the same custom event to multiple agents.
+
+        Convenience wrapper around ``schedule_custom_event``.
+
+        Returns:
+            List of event_ids (one per recipient).
+        """
+        return [
+            self.schedule_custom_event(
+                sender_id, rid, custom_type, payload, delay, priority,
+            )
+            for rid in recipient_ids
+        ]
+
+    def set_custom_handler(
+        self,
+        agent_id: AgentID,
+        custom_type: str,
+        handler: Callable[[Event, "EventScheduler"], None],
+    ) -> None:
+        """Register a handler for a custom event type on a specific agent."""
+        if agent_id not in self._custom_handlers:
+            self._custom_handlers[agent_id] = {}
+        self._custom_handlers[agent_id][custom_type] = handler
+
+    def set_custom_handlers_for_agent(
+        self,
+        agent_id: AgentID,
+        handlers: Dict[str, Callable[[Event, "EventScheduler"], None]],
+    ) -> None:
+        """Register multiple custom handlers for a specific agent."""
+        if agent_id not in self._custom_handlers:
+            self._custom_handlers[agent_id] = {}
+        self._custom_handlers[agent_id].update(handlers)
 
     # ===============================
     # Condition Monitor Management
@@ -489,12 +582,20 @@ class EventScheduler:
                 f"{event.agent_id} is not registered, check your environment setup again"
             )
 
-        # Dispatch to handler (agent-specific first, then global fallback)
-        handler = self.get_handler(event.event_type, event.agent_id)
-        if handler is None:
-            raise ValueError(
-                f"No handler registered for event_type={event.event_type}, agent_id={event.agent_id}"
-            )
+        # Dispatch to handler
+        if event.event_type == EventType.CUSTOM:
+            custom_type = event.payload.get("custom_type", "")
+            handler = self._custom_handlers.get(event.agent_id, {}).get(custom_type)
+            if handler is None:
+                raise ValueError(
+                    f"No custom handler for '{custom_type}' on agent '{event.agent_id}'"
+                )
+        else:
+            handler = self.get_handler(event.event_type, event.agent_id)
+            if handler is None:
+                raise ValueError(
+                    f"No handler registered for event_type={event.event_type}, agent_id={event.agent_id}"
+                )
         handler(event, self)
 
         return event

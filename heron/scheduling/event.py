@@ -27,6 +27,7 @@ class EventType(Enum):
     ENV_UPDATE = "env_update"
     SIMULATION = "simulation"
     CONDITION_TRIGGER = "condition_trigger"
+    CUSTOM = "custom"
 
 
 @dataclass(order=True)

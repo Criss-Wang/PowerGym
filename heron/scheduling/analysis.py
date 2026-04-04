@@ -84,6 +84,7 @@ class EpisodeAnalyzer:
         self.state_update_count = 0
         self.action_result_count = 0
         self.disturbance_count = 0
+        self.custom_event_count = 0
 
         # Track reward history per agent: {agent_id: [(timestamp, reward), ...]}
         self.reward_history: Dict[str, List[tuple]] = {}
@@ -108,8 +109,18 @@ class EpisodeAnalyzer:
         message_type = None
         data_summary = {}
 
+        # Track CUSTOM (domain-specific) events
+        if event.event_type == EventType.CUSTOM:
+            self.custom_event_count += 1
+            custom_type = event.payload.get("custom_type", "unknown")
+            message_type = f"custom:{custom_type}"
+            data_summary = {
+                "custom_type": custom_type,
+                "sender": event.payload.get("sender"),
+            }
+
         # Track ENV_UPDATE (disturbance) events
-        if event.event_type == EventType.ENV_UPDATE:
+        elif event.event_type == EventType.ENV_UPDATE:
             self.disturbance_count += 1
             disturbance = event.payload.get("disturbance")
             if disturbance is not None:
@@ -266,6 +277,7 @@ class EpisodeAnalyzer:
         self.state_update_count = 0
         self.action_result_count = 0
         self.disturbance_count = 0
+        self.custom_event_count = 0
         self.reward_history = {}
         self.termination_history = {}
         self._latest_termination = {}
