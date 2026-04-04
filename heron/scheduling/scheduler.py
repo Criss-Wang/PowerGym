@@ -8,7 +8,7 @@ from heron.scheduling.condition_monitor import ConditionMonitor
 from heron.scheduling.event import Event, EventType
 from heron.utils.typing import AgentID
 from heron.scheduling.schedule_config import ScheduleConfig
-from heron.agents.constants import SYSTEM_AGENT_ID
+from heron.agents.constants import SYSTEM_AGENT_ID, CUSTOM_EVENT_TYPE_KEY, CUSTOM_EVENT_SENDER_KEY
 
 _DEFAULT_SIMULATION_DELAY = 0.0
 
@@ -288,9 +288,10 @@ class EventScheduler:
         Returns:
             The event_id for potential cancellation.
         """
-        full_payload: Dict[str, Any] = {"custom_type": custom_type, "sender": sender_id}
-        if payload:
-            full_payload.update(payload)
+        # User payload goes first; system keys override to prevent collisions
+        full_payload: Dict[str, Any] = dict(payload) if payload else {}
+        full_payload[CUSTOM_EVENT_TYPE_KEY] = custom_type
+        full_payload[CUSTOM_EVENT_SENDER_KEY] = sender_id
         return self.schedule(
             Event(
                 timestamp=self.current_time + (delay or 0.0),
@@ -584,7 +585,7 @@ class EventScheduler:
 
         # Dispatch to handler
         if event.event_type == EventType.CUSTOM:
-            custom_type = event.payload.get("custom_type", "")
+            custom_type = event.payload.get(CUSTOM_EVENT_TYPE_KEY, "")
             handler = self._custom_handlers.get(event.agent_id, {}).get(custom_type)
             if handler is None:
                 raise ValueError(

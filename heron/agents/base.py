@@ -795,6 +795,10 @@ class Agent(ABC):
         """
 
         def __init__(self, custom_type: str):
+            if not custom_type or not isinstance(custom_type, str):
+                raise ValueError(
+                    f"custom_type must be a non-empty string, got {custom_type!r}"
+                )
             self.custom_type = custom_type
 
         def __call__(self, func: Callable):

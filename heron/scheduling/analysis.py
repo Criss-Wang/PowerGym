@@ -13,6 +13,8 @@ from heron.agents.constants import (
     MSG_GET_GLOBAL_STATE_RESPONSE,
     MSG_GET_LOCAL_STATE_RESPONSE,
     MSG_PHYSICS_COMPLETED,
+    CUSTOM_EVENT_TYPE_KEY,
+    CUSTOM_EVENT_SENDER_KEY,
 )
 from heron.scheduling.event import Event, EventType
 
@@ -112,11 +114,11 @@ class EpisodeAnalyzer:
         # Track CUSTOM (domain-specific) events
         if event.event_type == EventType.CUSTOM:
             self.custom_event_count += 1
-            custom_type = event.payload.get("custom_type", "unknown")
+            custom_type = event.payload.get(CUSTOM_EVENT_TYPE_KEY, "unknown")
             message_type = f"custom:{custom_type}"
             data_summary = {
-                "custom_type": custom_type,
-                "sender": event.payload.get("sender"),
+                CUSTOM_EVENT_TYPE_KEY: custom_type,
+                CUSTOM_EVENT_SENDER_KEY: event.payload.get(CUSTOM_EVENT_SENDER_KEY),
             }
 
         # Track ENV_UPDATE (disturbance) events
@@ -324,6 +326,7 @@ class EpisodeAnalyzer:
             "state_updates": self.state_update_count,
             "action_results": self.action_result_count,
             "disturbances": self.disturbance_count,
+            "custom_events": self.custom_event_count,
         }
 
     def get_reward_history(self, agent_id: Optional[str] = None) -> Dict[str, List[tuple]]:
