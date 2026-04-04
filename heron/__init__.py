@@ -52,7 +52,7 @@ from heron.messaging import Message, MessageType, MessageBroker
 from heron.messaging.in_memory_broker import InMemoryBroker
 
 # Registry
-from heron.registry import make, register, list_envs, spec as env_spec
+from heron.registry import EnvSpec, make, register, unregister, list_envs, spec as env_spec
 
 # Scheduling
 from heron.scheduling import (
@@ -98,8 +98,10 @@ __all__ = [
     "MessageBroker",
     "InMemoryBroker",
     # Registry
+    "EnvSpec",
     "make",
     "register",
+    "unregister",
     "list_envs",
     "env_spec",
     # Scheduling

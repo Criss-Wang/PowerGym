@@ -31,14 +31,18 @@ def _thermostat_simulation(
     Returns:
         Updated agent_states dict.
     """
-    for aid, features in agent_states.items():
+    updated = dict(agent_states)
+    for aid, features in updated.items():
         temp_data = features.get("TemperatureFeature")
         if temp_data is None:
             continue
         t = temp_data["temperature"]
         noise = np.random.normal(0, noise_scale)
-        temp_data["temperature"] = t + noise - cooling_rate
-    return agent_states
+        updated[aid] = {
+            **features,
+            "TemperatureFeature": {**temp_data, "temperature": t + noise - cooling_rate},
+        }
+    return updated
 
 
 def build_thermostat_env(
@@ -76,6 +80,7 @@ def build_thermostat_env(
             HeaterAgent,
             features=[TemperatureFeature(temperature=initial_temp)],
             target_temp=target_temp,
+            initial_temp=initial_temp,
         )
         .simulation(sim_func)
         .termination(max_steps=max_steps)

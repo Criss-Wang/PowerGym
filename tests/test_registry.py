@@ -68,6 +68,16 @@ class TestMake:
         with pytest.raises(ValueError, match="module.path:ClassName"):
             make("Bad-v0")
 
+    def test_make_bad_module_raises(self):
+        register("Bad-v1", entry_point="nonexistent.module:Cls")
+        with pytest.raises(ValueError, match="Failed to import module"):
+            make("Bad-v1")
+
+    def test_make_bad_attribute_raises(self):
+        register("Bad-v2", entry_point="tests.test_registry:NonExistentClass")
+        with pytest.raises(ValueError, match="has no attribute"):
+            make("Bad-v2")
+
 
 class TestUnregister:
     def test_unregister(self):

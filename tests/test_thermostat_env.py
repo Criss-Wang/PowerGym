@@ -56,13 +56,12 @@ class TestThermostatEnv:
     def test_reward_is_negative_distance(self, env):
         env.reset()
         _, rewards, _, _, _ = env.step({"heater": np.array([0.0])})
-        # initial=18, target=22, cooling=0.1, no noise -> T=17.9
-        # reward = -|17.9 - 22| = -4.1
+        # Reward should be negative (distance from target=22)
         assert rewards["heater"] < 0
 
     def test_truncation_at_max_steps(self, env):
         env.reset()
-        for i in range(10):
+        for _ in range(10):
             _, _, terminated, truncated, _ = env.step({"heater": np.array([0.0])})
         assert truncated["__all__"] is True
 
@@ -77,6 +76,20 @@ class TestThermostatEnv:
         # Each step: T + 1.0 (heat) - 0.1 (cooling) = +0.9 net
         # After 5 steps: 18 + 5*0.9 = 22.5
         assert temp > 20.0
+
+
+    def test_initial_temp_preserved_across_resets(self, env):
+        env.reset()
+        heater = env.get_agent("heater")
+        temp = heater.state.features["TemperatureFeature"].temperature
+        assert temp == pytest.approx(18.0)
+
+        # Step a few times then reset again
+        for _ in range(3):
+            env.step({"heater": np.array([1.0])})
+        env.reset()
+        temp_after = heater.state.features["TemperatureFeature"].temperature
+        assert temp_after == pytest.approx(18.0)
 
 
 class TestHeaterAgent:
