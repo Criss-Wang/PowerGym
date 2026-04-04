@@ -120,7 +120,6 @@ class TwoRoomEnv(DefaultHeronEnv):
         self._coupling_rate = coupling_rate
         self._enable_vent = enable_vent
         self._vent_cooling_rate = vent_cooling_rate
-        self.disturbance_schedule = disturbance_schedule
 
         def _sim(agent_states: Dict[str, Dict]) -> Dict[str, Dict]:
             return two_room_simulation(
@@ -133,6 +132,8 @@ class TwoRoomEnv(DefaultHeronEnv):
             )
 
         super().__init__(*args, simulation_func=_sim, **kwargs)
+        # Set after super().__init__ to avoid BaseEnv overwriting with None
+        self.disturbance_schedule = disturbance_schedule
 
     def apply_disturbance(self, disturbance: Any) -> None:
         """Handle cold_snap and heat_wave disturbances by modifying ambient temp."""

@@ -56,7 +56,7 @@ def build_v6(
             jitter_type=JitterType.GAUSSIAN, jitter_ratio=0.1, seed=45,
         )
 
-    return build_v4(
+    env = build_v4(
         target_temp=target_temp,
         initial_temp_a=initial_temp_a,
         initial_temp_b=initial_temp_b,
@@ -72,3 +72,5 @@ def build_v6(
         enable_condition_monitor=enable_condition_monitor,
         disturbance_schedule=disturbance_schedule,
     )
+    env.env_id = "two_room_v6"
+    return env

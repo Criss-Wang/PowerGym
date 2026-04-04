@@ -60,7 +60,7 @@ LEVELS = [
     {
         "version": 3,
         "title": "Horizontal protocol",
-        "concept": "Heaters share temperature readings with each other (peer-to-peer)",
+        "concept": "Peer-to-peer state sharing concept; event-driven HorizontalProtocol wire-up planned",
         "entry_point": build_v3,
     },
     {

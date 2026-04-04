@@ -147,10 +147,7 @@ class VentAgent(FieldAgent):
 
     def apply_action(self) -> None:
         is_open = float(self.action.c[0])
-        cooling_power = is_open * 2.0
-        self.state.update_feature(
-            "VentStatusFeature", is_open=is_open, cooling_power=cooling_power
-        )
+        self.state.update_feature("VentStatusFeature", is_open=is_open)
 
     def compute_local_reward(
         self,

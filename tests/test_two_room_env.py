@@ -256,6 +256,13 @@ class TestV3toV7:
 
 
 class TestV4Disturbance:
+    def test_disturbance_schedule_not_none(self):
+        from heron.demo_envs.two_room_heating.levels import build_v4
+
+        env = build_v4(max_steps=10)
+        assert env.disturbance_schedule is not None
+        env.close()
+
     def test_apply_disturbance_cold_snap(self):
         from heron.demo_envs.two_room_heating.levels import build_v4
         from heron.scheduling import Disturbance
@@ -350,7 +357,7 @@ class TestVentAgent:
     def test_compute_local_reward(self):
         agent = VentAgent(agent_id="v1")
         local_state = {
-            "features": {"VentStatusFeature": {"is_open": 1.0, "cooling_power": 2.0}}
+            "features": {"VentStatusFeature": {"is_open": 1.0}}
         }
         reward = agent.compute_local_reward(local_state)
         assert reward == pytest.approx(-0.5)
@@ -358,7 +365,7 @@ class TestVentAgent:
     def test_compute_local_reward_closed(self):
         agent = VentAgent(agent_id="v1")
         local_state = {
-            "features": {"VentStatusFeature": {"is_open": 0.0, "cooling_power": 0.0}}
+            "features": {"VentStatusFeature": {"is_open": 0.0}}
         }
         reward = agent.compute_local_reward(local_state)
         assert reward == pytest.approx(0.0)

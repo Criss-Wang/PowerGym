@@ -26,9 +26,8 @@ class VentStatusFeature(Feature):
 
     Attributes:
         is_open: Vent opening fraction (0.0=closed, 1.0=fully open).
-        cooling_power: Current cooling effect being applied.
+            Physics applies ``vent_cooling_rate * is_open`` cooling per step.
     """
 
     visibility: ClassVar[Sequence[str]] = ("owner", "upper_level")
     is_open: float = 0.0
-    cooling_power: float = 0.0
