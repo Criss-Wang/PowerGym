@@ -3,10 +3,6 @@
 import numpy as np
 import pytest
 
-from heron.demo_envs.two_room_heating.features import (
-    ZoneTemperatureFeature,
-    VentStatusFeature,
-)
 from heron.demo_envs.two_room_heating.agents import HeaterAgent, VentAgent
 from heron.registry import _registry
 
@@ -226,6 +222,94 @@ class TestV2:
         lb, ub = agent.action.range
         assert float(lb[0]) == 0.0
         assert float(ub[0]) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# v3-v7: Higher-level integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestV3toV7:
+    """Verify all higher-level versions instantiate, reset, and step."""
+
+    @pytest.fixture(params=[3, 4, 5, 6, 7])
+    def env_vn(self, request):
+        from heron.demo_envs.two_room_heating import env as env_mod
+
+        builder = getattr(env_mod, f"build_v{request.param}")
+        e = builder(max_steps=10, cooling_rate=0.0, coupling_rate=0.0)
+        yield e
+        e.close()
+
+    def test_step_returns_5_tuple(self, env_vn):
+        env_vn.reset()
+        agents = [a for a in env_vn.registered_agents if not a.startswith("system")]
+        actions = {}
+        for aid in agents:
+            agent = env_vn.get_agent(aid)
+            if agent.action is not None:
+                agent.action.sample()
+                actions[aid] = agent.action
+        if actions:
+            result = env_vn.step(actions)
+            assert len(result) == 5
+
+
+class TestV4Disturbance:
+    def test_apply_disturbance_cold_snap(self):
+        from heron.demo_envs.two_room_heating.env import build_v4
+        from heron.scheduling import Disturbance
+
+        env = build_v4(max_steps=10)
+        env.reset()
+        assert env._ambient_temp == 15.0
+        env.apply_disturbance(Disturbance(0.0, "cold_snap", {"ambient_drop": 5.0}))
+        assert env._ambient_temp == 10.0
+        env.close()
+
+    def test_apply_disturbance_heat_wave(self):
+        from heron.demo_envs.two_room_heating.env import build_v4
+        from heron.scheduling import Disturbance
+
+        env = build_v4(max_steps=10)
+        env.reset()
+        env.apply_disturbance(Disturbance(0.0, "heat_wave", {"ambient_rise": 10.0}))
+        assert env._ambient_temp == 25.0
+        env.close()
+
+    def test_ambient_resets_between_episodes(self):
+        from heron.demo_envs.two_room_heating.env import build_v4
+        from heron.scheduling import Disturbance
+
+        env = build_v4(max_steps=10)
+        env.reset()
+        env.apply_disturbance(Disturbance(0.0, "cold_snap", {"ambient_drop": 10.0}))
+        assert env._ambient_temp == 5.0
+        env.reset()
+        assert env._ambient_temp == 15.0
+        env.close()
+
+
+class TestV7MultiLevel:
+    def test_has_floor_ctrl(self):
+        from heron.demo_envs.two_room_heating.env import build_v7
+
+        env = build_v7(max_steps=10)
+        env.reset()
+        agent = env.get_agent("floor_ctrl")
+        assert agent is not None
+        env.close()
+
+
+class TestReduceHeatReset:
+    """Verify _reduce_heat flag is cleared on reset."""
+
+    def test_reduce_heat_cleared_on_reset(self, env_v0):
+        env_v0.reset()
+        heater = env_v0.get_agent("heater_a")
+        heater._reduce_heat = True
+        env_v0.reset()
+        assert heater._reduce_heat is False
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,6 @@ Two rooms with heaters, each level adding one concept:
 from functools import partial
 from typing import Any, Dict, Optional
 
-from heron.agents.coordinator_agent import CoordinatorAgent
 from heron.demo_envs.two_room_heating.agents import HeaterAgent, VentAgent
 from heron.demo_envs.two_room_heating.features import (
     VentStatusFeature,
@@ -129,6 +128,7 @@ class TwoRoomEnv(DefaultHeronEnv):
         coupling_rate: float = 0.03,
         enable_vent: bool = False,
         vent_cooling_rate: float = 0.5,
+        disturbance_schedule: Optional[DisturbanceSchedule] = None,
         **kwargs: Any,
     ) -> None:
         self._base_ambient_temp = base_ambient_temp
@@ -137,6 +137,7 @@ class TwoRoomEnv(DefaultHeronEnv):
         self._coupling_rate = coupling_rate
         self._enable_vent = enable_vent
         self._vent_cooling_rate = vent_cooling_rate
+        self.disturbance_schedule = disturbance_schedule
 
         # Build simulation closure that reads self._ambient_temp at call time.
         def _sim(agent_states: Dict[str, Dict]) -> Dict[str, Dict]:
@@ -176,6 +177,35 @@ class TwoRoomEnv(DefaultHeronEnv):
 # ---------------------------------------------------------------------------
 #  Build helpers
 # ---------------------------------------------------------------------------
+
+_DEFAULT_DISTURBANCE_SCHEDULE = DisturbanceSchedule([
+    Disturbance(10.0, "cold_snap", {"ambient_drop": 5.0}),
+    Disturbance(30.0, "cold_snap", {"ambient_drop": 8.0}),
+    Disturbance(50.0, "heat_wave", {"ambient_rise": 10.0}),
+])
+
+
+def _register_overheat_monitors(
+    env: DefaultHeronEnv,
+    threshold: float,
+    cooldown: float = 2.0,
+) -> None:
+    """Register ConditionMonitor thresholds for both heater zones."""
+    for zone in ("heater_a", "heater_b"):
+        env.scheduler.register_condition(
+            ConditionMonitor.threshold(
+                monitor_id=f"overheat_{zone[-1]}",
+                agent_id="vent",
+                key_path=[
+                    "agent_states", zone, "features",
+                    "ZoneTemperatureFeature", "temperature",
+                ],
+                threshold=threshold,
+                direction="above",
+                cooldown=cooldown,
+            )
+        )
+
 
 def _default_heater_a_schedule() -> ScheduleConfig:
     return ScheduleConfig.deterministic(tick_interval=1.0)
@@ -385,32 +415,7 @@ def build_v2(
     )
 
     if enable_condition_monitor:
-        env.scheduler.register_condition(
-            ConditionMonitor.threshold(
-                monitor_id="overheat_a",
-                agent_id="vent",
-                key_path=[
-                    "agent_states", "heater_a", "features",
-                    "ZoneTemperatureFeature", "temperature",
-                ],
-                threshold=overheat_threshold,
-                direction="above",
-                cooldown=2.0,
-            )
-        )
-        env.scheduler.register_condition(
-            ConditionMonitor.threshold(
-                monitor_id="overheat_b",
-                agent_id="vent",
-                key_path=[
-                    "agent_states", "heater_b", "features",
-                    "ZoneTemperatureFeature", "temperature",
-                ],
-                threshold=overheat_threshold,
-                direction="above",
-                cooldown=2.0,
-            )
-        )
+        _register_overheat_monitors(env, overheat_threshold)
 
     return env
 
@@ -501,11 +506,8 @@ def build_v4(
     schedule includes cold snaps at t=10, t=30, and a heat wave at t=50.
     """
     if disturbance_schedule is None:
-        disturbance_schedule = DisturbanceSchedule([
-            Disturbance(10.0, "cold_snap", {"ambient_drop": 5.0}),
-            Disturbance(30.0, "cold_snap", {"ambient_drop": 8.0}),
-            Disturbance(50.0, "heat_wave", {"ambient_rise": 10.0}),
-        ])
+        import copy
+        disturbance_schedule = copy.deepcopy(_DEFAULT_DISTURBANCE_SCHEDULE)
 
     env = (
         EnvBuilder("two_room_v4")
@@ -546,41 +548,14 @@ def build_v4(
             cooling_rate=cooling_rate,
             coupling_rate=coupling_rate,
             enable_vent=True,
+            disturbance_schedule=disturbance_schedule,
         )
         .termination(max_steps=max_steps)
         .build()
     )
 
-    # Store disturbance schedule on env for enqueue at reset.
-    env.disturbance_schedule = disturbance_schedule
-
     if enable_condition_monitor:
-        env.scheduler.register_condition(
-            ConditionMonitor.threshold(
-                monitor_id="overheat_a",
-                agent_id="vent",
-                key_path=[
-                    "agent_states", "heater_a", "features",
-                    "ZoneTemperatureFeature", "temperature",
-                ],
-                threshold=overheat_threshold,
-                direction="above",
-                cooldown=2.0,
-            )
-        )
-        env.scheduler.register_condition(
-            ConditionMonitor.threshold(
-                monitor_id="overheat_b",
-                agent_id="vent",
-                key_path=[
-                    "agent_states", "heater_b", "features",
-                    "ZoneTemperatureFeature", "temperature",
-                ],
-                threshold=overheat_threshold,
-                direction="above",
-                cooldown=2.0,
-            )
-        )
+        _register_overheat_monitors(env, overheat_threshold)
 
     return env
 
@@ -762,11 +737,8 @@ def build_v7(
     reactive (ticked by their parent coordinator).
     """
     if disturbance_schedule is None:
-        disturbance_schedule = DisturbanceSchedule([
-            Disturbance(10.0, "cold_snap", {"ambient_drop": 5.0}),
-            Disturbance(30.0, "cold_snap", {"ambient_drop": 8.0}),
-            Disturbance(50.0, "heat_wave", {"ambient_rise": 10.0}),
-        ])
+        import copy
+        disturbance_schedule = copy.deepcopy(_DEFAULT_DISTURBANCE_SCHEDULE)
 
     if floor_ctrl_schedule is None:
         floor_ctrl_schedule = ScheduleConfig.deterministic(tick_interval=10.0)
@@ -818,39 +790,13 @@ def build_v7(
             cooling_rate=cooling_rate,
             coupling_rate=coupling_rate,
             enable_vent=True,
+            disturbance_schedule=disturbance_schedule,
         )
         .termination(max_steps=max_steps)
         .build()
     )
 
-    env.disturbance_schedule = disturbance_schedule
-
     if enable_condition_monitor:
-        env.scheduler.register_condition(
-            ConditionMonitor.threshold(
-                monitor_id="overheat_a",
-                agent_id="vent",
-                key_path=[
-                    "agent_states", "heater_a", "features",
-                    "ZoneTemperatureFeature", "temperature",
-                ],
-                threshold=overheat_threshold,
-                direction="above",
-                cooldown=2.0,
-            )
-        )
-        env.scheduler.register_condition(
-            ConditionMonitor.threshold(
-                monitor_id="overheat_b",
-                agent_id="vent",
-                key_path=[
-                    "agent_states", "heater_b", "features",
-                    "ZoneTemperatureFeature", "temperature",
-                ],
-                threshold=overheat_threshold,
-                direction="above",
-                cooldown=2.0,
-            )
-        )
+        _register_overheat_monitors(env, overheat_threshold)
 
     return env

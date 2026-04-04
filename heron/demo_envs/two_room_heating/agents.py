@@ -66,6 +66,7 @@ class HeaterAgent(FieldAgent):
         self, *, seed: Optional[int] = None, proxy: Optional[Proxy] = None, **kwargs: Any
     ) -> Any:
         """Reset state, restoring temperature to the configured initial value."""
+        self._reduce_heat = False
         result = super().reset(seed=seed, proxy=proxy, **kwargs)
         self.state.update_feature(
             "ZoneTemperatureFeature", temperature=self._initial_temp
@@ -137,12 +138,6 @@ class VentAgent(FieldAgent):
             ),
         )
         return action
-
-    def reset(
-        self, *, seed: Optional[int] = None, proxy: Optional[Proxy] = None, **kwargs: Any
-    ) -> Any:
-        """Reset agent state."""
-        return super().reset(seed=seed, proxy=proxy, **kwargs)
 
     def set_state(self, *args: Any, **kwargs: Any) -> None:
         pass
