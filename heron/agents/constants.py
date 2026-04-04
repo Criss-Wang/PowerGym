@@ -56,6 +56,8 @@ STATE_TYPE_LOCAL = "local"
 MSG_KEY_BODY = "body"
 MSG_KEY_PROTOCOL = "protocol"
 MSG_KEY_ENV_CONTEXT = "env_context"
+CUSTOM_EVENT_TYPE_KEY = "custom_type"
+CUSTOM_EVENT_SENDER_KEY = "sender"
 
 
 # =============================================================================

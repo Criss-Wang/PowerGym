@@ -29,22 +29,27 @@ logger = logging.getLogger(__name__)
 class Agent(ABC):
     # class-level handler function mapping
     _event_handler_funcs: Dict[EventType, Callable[[Event, "EventScheduler"], None]] = {}
+    _custom_event_handler_funcs: Dict[str, Callable[[Event, "EventScheduler"], None]] = {}
 
     def __init_subclass__(cls, **kwargs):
         """Ensure each subclass gets its own copy of the handlers dict and register handlers."""
         super().__init_subclass__(**kwargs)
         # Create a new dict for this subclass, inheriting parent handlers
         cls._event_handler_funcs = cls._event_handler_funcs.copy()
+        cls._custom_event_handler_funcs = cls._custom_event_handler_funcs.copy()
 
-        # Register any handlers marked with _handler_event_type
+        # Register any handlers marked with _handler_event_type or _custom_handler_type
         for name in dir(cls):
             # Skip special attributes (dunder methods)
             if name.startswith('__'):
                 continue
             try:
                 attr = getattr(cls, name)
-                if callable(attr) and hasattr(attr, '_handler_event_type'):
-                    cls._event_handler_funcs[attr._handler_event_type] = attr
+                if callable(attr):
+                    if hasattr(attr, '_handler_event_type'):
+                        cls._event_handler_funcs[attr._handler_event_type] = attr
+                    if hasattr(attr, '_custom_handler_type'):
+                        cls._custom_event_handler_funcs[attr._custom_handler_type] = attr
             except AttributeError:
                 # Skip attributes that can't be accessed
                 pass
@@ -773,8 +778,35 @@ class Agent(ABC):
             func._handler_event_type = self.event_type
             return func
 
+    class custom_handler:
+        """Decorator for registering custom (domain-specific) event handlers.
+
+        Unlike ``@Agent.handler`` which handles standard ``EventType`` events,
+        ``@Agent.custom_handler`` registers a handler for a user-defined event
+        name dispatched via ``scheduler.schedule_custom_event()``.
+
+        Example::
+
+            class VehicleAgent(FieldAgent):
+                @Agent.custom_handler("new_delivery")
+                def on_delivery(self, event, scheduler):
+                    dest = event.payload["destination"]
+                    self.plan_route(dest)
+        """
+
+        def __init__(self, custom_type: str):
+            if not custom_type or not isinstance(custom_type, str):
+                raise ValueError(
+                    f"custom_type must be a non-empty string, got {custom_type!r}"
+                )
+            self.custom_type = custom_type
+
+        def __call__(self, func: Callable):
+            func._custom_handler_type = self.custom_type
+            return func
+
     def get_handlers(self) -> Dict[EventType, Callable[[Event, "EventScheduler"], None]]:
-        """Return handlers bound to this agent instance.
+        """Return standard event handlers bound to this agent instance.
 
         Handlers are stored as unbound methods at the class level, but need to be
         bound to the specific agent instance when retrieved.
@@ -783,6 +815,17 @@ class Agent(ABC):
         for event_type, func in self._event_handler_funcs.items():
             # Bind the unbound method to this agent instance
             bound_handlers[event_type] = lambda e, s, f=func: f(self, e, s)
+        return bound_handlers
+
+    def get_custom_handlers(self) -> Dict[str, Callable[[Event, "EventScheduler"], None]]:
+        """Return custom event handlers bound to this agent instance.
+
+        Returns:
+            Dict mapping custom event type strings to bound handler callables.
+        """
+        bound_handlers = {}
+        for custom_type, func in self._custom_event_handler_funcs.items():
+            bound_handlers[custom_type] = lambda e, s, f=func: f(self, e, s)
         return bound_handlers
     
     # ============================================

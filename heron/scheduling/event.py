@@ -17,8 +17,10 @@ class EventType(Enum):
     ACTION_EFFECT: Delayed action taking effect on environment
     MESSAGE_DELIVERY: Delayed message arriving at recipient
     OBSERVATION_READY: Delayed observation becoming available
-    ENV_UPDATE: Environment state update
+    ENV_UPDATE: Exogenous disturbance (Class 4)
+    SIMULATION: Physics simulation step
     CONDITION_TRIGGER: Condition-triggered agent wakeup (Class 3)
+    CUSTOM: User-defined domain-specific agent-to-agent signal
     """
     AGENT_TICK = "agent_tick"
     ACTION_EFFECT = "action_effect"
@@ -27,6 +29,7 @@ class EventType(Enum):
     ENV_UPDATE = "env_update"
     SIMULATION = "simulation"
     CONDITION_TRIGGER = "condition_trigger"
+    CUSTOM = "custom"
 
 
 @dataclass(order=True)
