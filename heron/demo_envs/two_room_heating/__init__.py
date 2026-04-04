@@ -27,7 +27,7 @@ from heron.demo_envs.two_room_heating.features import (
     VentStatusFeature,
 )
 from heron.demo_envs.two_room_heating.agents import HeaterAgent, VentAgent
-from heron.demo_envs.two_room_heating.env import (
+from heron.demo_envs.two_room_heating.levels import (
     build_v0,
     build_v1,
     build_v2,

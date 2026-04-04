@@ -14,7 +14,7 @@ from heron.registry import _registry
 
 @pytest.fixture
 def env_v0():
-    from heron.demo_envs.two_room_heating.env import build_v0
+    from heron.demo_envs.two_room_heating.levels import build_v0
 
     e = build_v0(
         target_temp=22.0,
@@ -30,7 +30,7 @@ def env_v0():
 
 @pytest.fixture
 def env_v1():
-    from heron.demo_envs.two_room_heating.env import build_v1
+    from heron.demo_envs.two_room_heating.levels import build_v1
 
     e = build_v1(max_steps=10, cooling_rate=0.0, coupling_rate=0.0)
     yield e
@@ -39,7 +39,7 @@ def env_v1():
 
 @pytest.fixture
 def env_v2():
-    from heron.demo_envs.two_room_heating.env import build_v2
+    from heron.demo_envs.two_room_heating.levels import build_v2
 
     e = build_v2(max_steps=10, cooling_rate=0.0, coupling_rate=0.0)
     yield e
@@ -143,7 +143,7 @@ class TestV0:
         assert hb.heat_gain > ha.heat_gain
 
     def test_initial_temp_preserved_across_resets(self):
-        from heron.demo_envs.two_room_heating.env import build_v0
+        from heron.demo_envs.two_room_heating.levels import build_v0
 
         env = build_v0(
             initial_temp_a=15.0,
@@ -166,7 +166,7 @@ class TestV0:
         env.close()
 
     def test_cross_zone_coupling(self):
-        from heron.demo_envs.two_room_heating.env import build_v0
+        from heron.demo_envs.two_room_heating.levels import build_v0
 
         env = build_v0(
             initial_temp_a=10.0,
@@ -234,9 +234,9 @@ class TestV3toV7:
 
     @pytest.fixture(params=[3, 4, 5, 6, 7])
     def env_vn(self, request):
-        from heron.demo_envs.two_room_heating import env as env_mod
+        from heron.demo_envs.two_room_heating import levels as levels_mod
 
-        builder = getattr(env_mod, f"build_v{request.param}")
+        builder = getattr(levels_mod, f"build_v{request.param}")
         e = builder(max_steps=10, cooling_rate=0.0, coupling_rate=0.0)
         yield e
         e.close()
@@ -257,7 +257,7 @@ class TestV3toV7:
 
 class TestV4Disturbance:
     def test_apply_disturbance_cold_snap(self):
-        from heron.demo_envs.two_room_heating.env import build_v4
+        from heron.demo_envs.two_room_heating.levels import build_v4
         from heron.scheduling import Disturbance
 
         env = build_v4(max_steps=10)
@@ -268,7 +268,7 @@ class TestV4Disturbance:
         env.close()
 
     def test_apply_disturbance_heat_wave(self):
-        from heron.demo_envs.two_room_heating.env import build_v4
+        from heron.demo_envs.two_room_heating.levels import build_v4
         from heron.scheduling import Disturbance
 
         env = build_v4(max_steps=10)
@@ -278,7 +278,7 @@ class TestV4Disturbance:
         env.close()
 
     def test_ambient_resets_between_episodes(self):
-        from heron.demo_envs.two_room_heating.env import build_v4
+        from heron.demo_envs.two_room_heating.levels import build_v4
         from heron.scheduling import Disturbance
 
         env = build_v4(max_steps=10)
@@ -292,7 +292,7 @@ class TestV4Disturbance:
 
 class TestV7MultiLevel:
     def test_has_floor_ctrl(self):
-        from heron.demo_envs.two_room_heating.env import build_v7
+        from heron.demo_envs.two_room_heating.levels import build_v7
 
         env = build_v7(max_steps=10)
         env.reset()
