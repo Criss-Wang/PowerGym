@@ -427,33 +427,8 @@ def configure_schedule_configs(env: ChargingEnv, nondeterm_specs: Dict[str, Any]
             env.scheduler._agent_schedule_configs[agent_id] = agent.schedule_config
 
 
-def _validate_env_specs_strict(env_specs: Dict[str, Any]) -> None:
-    """Validate env_specs in strict charger-only mode."""
-    required_keys = {
-        "num_stations",
-        "num_chargers",
-        "charger_p_max_kw",
-        "arrival_rate",
-        "dt",
-        "episode_length",
-    }
-    allowed_keys = set(required_keys) | {
-        "hourly_overhead_cost",
-        "operational_cost_per_kwh",
-        "charging_efficiency",
-    }
-
-    present_keys = set(env_specs.keys())
-    missing = sorted(required_keys - present_keys)
-    unknown = sorted(present_keys - allowed_keys)
-
-    if missing:
-        raise ValueError(f"env_specs missing required keys: {', '.join(missing)}")
-    if unknown:
-        raise ValueError(f"env_specs has unsupported keys in strict charger-only mode: {', '.join(unknown)}")
 
 def create_charging_env(env_specs: Dict[str, Any]) -> ChargingEnv:
-    _validate_env_specs_strict(env_specs)
     num_stations = int(env_specs["num_stations"])
     num_chargers = int(env_specs["num_chargers"])
     charger_p_max_kw = float(env_specs["charger_p_max_kw"])
@@ -480,7 +455,6 @@ def create_charging_env(env_specs: Dict[str, Any]) -> ChargingEnv:
 
 def build_rllib_env_config(env_specs: Dict[str, Any], nondeterminism: Dict[str, Any]) -> Dict[str, Any]:
     """Build the flat env_config expected by RLlibBasedHeronEnv."""
-    _validate_env_specs_strict(env_specs)
     num_stations = int(env_specs["num_stations"])
     num_chargers = int(env_specs["num_chargers"])
     charger_p_max_kw = float(env_specs["charger_p_max_kw"])
@@ -1010,6 +984,6 @@ def main():
             checkpoint_for_event_driven = train_result.get("best_checkpoint")
         run_event_driven_sim(full_config, checkpoint_path=checkpoint_for_event_driven)
 
-# TODO: track each reward event
+# TODO: need to rewrite
 if __name__ == "__main__":
     main()

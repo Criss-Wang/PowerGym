@@ -7,51 +7,37 @@ paths:
 env_specs:
   num_stations: 2
   num_chargers: 3
-  charger_p_max_kw: 150.0
-#  arrival_rate: 100.0
   arrival_rate: 10.0
   dt: 300.0
   episode_length: 172800.0
-#  hourly_overhead_cost: 0.3
-#  operational_cost_per_kwh: 0.03
-#  charging_efficiency: 0.95
-  hourly_overhead_cost: 0.0
-  operational_cost_per_kwh: 0.00
-  charging_efficiency: 0.95
 
 nondeterminism:
-  default_config:
+  station_0:
     tick_interval: 300.0
     obs_delay: 0.0
     act_delay: 0.0
     msg_delay: 0.0
     jitter_type: "GAUSSIAN"
     jitter_ratio: 0.1
-  
-  station_specific:
-    station_0:
-      tick_interval: 300.0
-      obs_delay: 0.0
-      act_delay: 0.0
-      msg_delay: 0.0
-      jitter_type: "GAUSSIAN"
-      jitter_ratio: 0.1
-    station_1:
-      tick_interval: 300.0
-      obs_delay: 0.0
-      act_delay: 0.0
-      msg_delay: 0.0
-      jitter_type: "GAUSSIAN"
-      jitter_ratio: 0.1
-#    station_2:
-#      tick_interval: 900.0
-#      obs_delay: 0.0
-#      act_delay: 0.0
-#      msg_delay: 0.0
-#      jitter_type: "GAUSSIAN"
-#      jitter_ratio: 0.1
+    chargers:
+      default:
+        p_max_kw: 150.0
+      charger_0:
+        p_max_kw: 75.0
+  station_1:
+    tick_interval: 300.0
+    obs_delay: 0.0
+    act_delay: 0.0
+    msg_delay: 0.0
+    jitter_type: "GAUSSIAN"
+    jitter_ratio: 0.1
+    chargers:
+      default:
+        p_max_kw: 150.0
+      charger_0:
+        p_max_kw: 75.0
 
 training:
-  num_iterations: 20
-  checkpoint_freq: 10
+  num_iterations: 50
+  checkpoint_freq: 50
   seed: 42

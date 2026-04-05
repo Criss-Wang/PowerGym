@@ -1,68 +1,46 @@
 """Charging station feature provider."""
-
 import numpy as np
 from dataclasses import dataclass
-from typing import ClassVar, Sequence
-
+from typing import ClassVar, Sequence, List
 from heron.core.feature import Feature
-from case_studies.power.ev_public_charging_case.utils import safe_div, norm01
-
-PRICE_LO = 0.0
-PRICE_HI = 0.8
-POWER_HI = 1500.0  # Max expected station power (kW)
-
+from case_studies.power.ev_public_charging_case.utils import norm01
 
 @dataclass(slots=True)
 class ChargingStationFeature(Feature):
+    """Station-level operating features for the Coordinator."""
     visibility: ClassVar[Sequence[str]] = ['owner', 'upper_level', 'system']
-    open_chargers: int = 5
-    max_chargers: int = 5
-    charging_price: float = 0.25
-    station_power: float = 0.0  # Current power output (kW)
-    station_capacity: float = 0.0  # Total capacity (kW)
+
+    # Normalization boundaries
+    PROFIT_DELTA_HI: ClassVar[float] = 100.0
+    NUM_CHARGERS_HI: ClassVar[float] = 50.0
+    PRICE_LO: ClassVar[float] = 0.0
+    PRICE_HI: ClassVar[float] = 1.0
+
+    occupancy_ratio: float = 0.0  # rho
+    current_price: float = 0.5    # p_curr
+    delta_profit: float = 0.0     # Delta Pi (step profit)
+    num_chargers: float = 0.0     # N_max
 
     def vector(self) -> np.ndarray:
-        return np.array(
-            [
-                safe_div(self.open_chargers, self.max_chargers),
-                norm01(self.charging_price, PRICE_LO, PRICE_HI),
-                safe_div(self.station_power, self.station_capacity) if self.station_capacity > 0 else 0.0,  # utilization
-            ],
-            dtype=np.float32,
-        )
+        """Returns 4D vector: [rho, p_curr, Delta_Pi, N_max]."""
+        return np.array([
+            norm01(self.occupancy_ratio, 0.0, 1.0),
+            norm01(self.current_price, self.PRICE_LO, self.PRICE_HI),
+            norm01(self.delta_profit, -self.PROFIT_DELTA_HI, self.PROFIT_DELTA_HI),
+            norm01(self.num_chargers, 0.0, self.NUM_CHARGERS_HI),
+        ], dtype=np.float32)
 
-    def names(self):
-        return ['open_norm', 'price_norm', 'utilization']
+    def names(self) -> List[str]:
+        return ['occupancy_ratio', 'current_price', 'delta_profit', 'num_chargers']
 
     def to_dict(self):
-        return {
-            'open_chargers': self.open_chargers,
-            'max_chargers': self.max_chargers,
-            'charging_price': self.charging_price,
-            'station_power': self.station_power,
-            'station_capacity': self.station_capacity,
-        }
+        return {k: getattr(self, k) for k in self.__slots__}
 
     @classmethod
     def from_dict(cls, d):
         return cls(**d)
 
     def set_values(self, **kw):
-        allowed = {
-            'open_chargers', 'max_chargers', 'charging_price',
-            'station_power', 'station_capacity',
-        }
         for k, v in kw.items():
-            if k not in allowed:
-                continue
-            if k == 'charging_price':
-                self.charging_price = float(v)
-            elif k == 'open_chargers':
-                self.open_chargers = int(v)
-            elif k == 'max_chargers':
-                self.max_chargers = int(v)
-            elif k == 'station_power':
-                self.station_power = float(v)
-            elif k == 'station_capacity':
-                self.station_capacity = float(v)
-
+            if k in self.__slots__:
+                setattr(self, k, float(v))

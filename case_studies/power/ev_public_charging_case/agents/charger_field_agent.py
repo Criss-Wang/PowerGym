@@ -1,5 +1,9 @@
-from typing import Any, List, Optional
+"""
+Charger Field Agent implementation.
+与最新的 ChargerFeature 字段完全对齐。
+"""
 
+from typing import Any, List, Optional
 import numpy as np
 
 from heron.agents.base import Agent
@@ -16,28 +20,19 @@ from case_studies.power.ev_public_charging_case.features import ChargerFeature
 
 
 class ChargerAgent(FieldAgent):
-    """A single charging port controlled by station pricing.
-
-    Features:
-        ChargerFeature — physical charger state (power, max power, open/closed)
-
-    Action:
-        1D continuous [0, 0.8] — station price broadcast from coordinator ($/kWh).
-        The charger agent stores the latest received price; env decides EV occupancy/charging.
-    """
-
     def __init__(
-        self,
-        agent_id: AgentID,
-        p_max_kw: float = 150.0,
-        upstream_id: Optional[AgentID] = None,
-        env_id: Optional[str] = None,
-        schedule_config: Optional[ScheduleConfig] = None,
-        policy: Optional[Policy] = None,
-        protocol: Optional[Protocol] = None,
+            self,
+            agent_id: AgentID,
+            p_max_kw: float = 150.0,
+            upstream_id: Optional[AgentID] = None,
+            env_id: Optional[str] = None,
+            schedule_config: Optional[ScheduleConfig] = None,
+            protocol: Optional[Protocol] = None,
     ):
         self._p_max_kw = p_max_kw
-        self.current_price = 0.25
+        self._last_occupied: float = 0.0
+
+        self.current_price = 0.5
 
         features: List[Feature] = [ChargerFeature(p_max_kw=p_max_kw)]
 
@@ -47,123 +42,106 @@ class ChargerAgent(FieldAgent):
             upstream_id=upstream_id,
             env_id=env_id,
             schedule_config=schedule_config,
-            policy=policy,
+            policy=None,  # 明确没有自主 Policy
             protocol=protocol,
         )
-
-    def reset(self, *, seed: Optional[int] = None, proxy=None, **kwargs):
-        self.current_price = 0.25
-        return super().reset(seed=seed, proxy=proxy, **kwargs)
 
     def init_action(self, features: Optional[List[Feature]] = None) -> Action:
         action = Action()
         action.set_specs(
             dim_c=1,
-            dim_d=0,
-            range=(np.array([0.0]), np.array([0.8])),  # price range from coordinator
+            range=(np.array([-1.0]), np.array([1.0])),
         )
-        action.set_values(c=np.array([0.25], dtype=np.float32))  # default price
+        action.set_values(c=np.array([0.0], dtype=np.float32))
         return action
+
+    def set_state(self, **kwargs) -> None:
+        self.state.update_feature("ChargerFeature", **kwargs)
 
     def set_action(self, action: Any, *args, **kwargs) -> None:
         if isinstance(action, Action):
             self.action = action
-            return
-        price = float(np.asarray(action, dtype=np.float32).reshape(-1)[0])
-        self.action.set_values(c=np.array([price], dtype=np.float32))
-
-    def set_state(self, **kwargs) -> None:
-        if 'p_kw' in kwargs:
-            self.state.update_feature("ChargerFeature", p_kw=kwargs['p_kw'])
-        if 'occupied_or_not' in kwargs:
-            self.state.update_feature("ChargerFeature", occupied_or_not=kwargs['occupied_or_not'])
-        if 'step_energy_delivered_kwh' in kwargs:
-            self.state.update_feature("ChargerFeature", step_energy_delivered_kwh=kwargs['step_energy_delivered_kwh'])
+        else:
+            val = float(np.asarray(action).flatten()[0])
+            self.action.set_values(c=np.array([val], dtype=np.float32))
 
     def apply_action(self) -> None:
-        """Apply agent action: broadcast pricing decision to environment.
-        
-        The agent's action (price command) is propagated to the environment.
-        The environment uses this price in charging physics decisions.
         """
-        received_price = float(self.action.c[0])
-        self.current_price = received_price
-
-    def compute_power_delivery(self, local_state: dict, ev_soc: float, ev_battery_capacity: float, 
-                              ev_demand_remaining: float, p_max_kw: float) -> float:
-        """AGENT ECONOMICS: Determine charging power based on EV demand/utility.
-        
-        This is an economic decision: should this charger deliver power?
-        At what rate?
-        
-        Args:
-            local_state: Local charger state from environment
-            ev_soc: EV state of charge (fraction)
-            ev_battery_capacity: EV battery capacity (kWh)
-            ev_demand_remaining: EV remaining demand to charge (kWh)
-            p_max_kw: Maximum available power (kW)
-        
-        Returns:
-            Power command in kW
+        处理价格锁定、功率输出控制以及充电时长累加。
         """
-        # If no demand, deliver zero power
-        if ev_demand_remaining <= 1e-6:
-            return 0.0
-        
-        # For now: deliver max power if there's demand
-        # In a more sophisticated agent, this could be optimized based on price/utility
-        return p_max_kw
+        # 1. 价格映射：[-1, 1] -> [0, 1]
+        price_norm = float(self.action.c[0]) if self.action.c.size > 0 else 0.0
+        self.current_price = float(np.clip(0.5 * (price_norm + 1.0), 0.0, 1.0))
 
+        feat = self.state.features.get("ChargerFeature")
+        current_occupied = int(feat.occupied_or_not)
+
+        # 获取步长 dt (从配置中读取，默认为 1.0)
+        dt = getattr(self.schedule_config, "dt", 1.0)
+
+        # 2. 状态机逻辑
+        # CASE A: 新 Session 开始 (0 -> 1)
+        if self._last_occupied == 0 and current_occupied == 1:
+            target_p_kw = float(feat.p_max_kw * feat.charging_efficiency)
+            self.state.update_feature(
+                "ChargerFeature",
+                p_kw=target_p_kw,
+                session_price=self.current_price,  # 锁定挂牌价
+                elapsed_charging_time=0.0
+            )
+
+        # CASE B: Session 持续中 (1 -> 1)
+        elif self._last_occupied == 1 and current_occupied == 1:
+            target_p_kw = float(feat.p_max_kw * feat.charging_efficiency)
+            # 累加时长
+            new_time = feat.elapsed_charging_time + dt
+            self.state.update_feature(
+                "ChargerFeature",
+                p_kw=target_p_kw,
+                elapsed_charging_time=new_time
+            )
+
+        # CASE C: Session 结束 (1 -> 0)
+        elif self._last_occupied == 1 and current_occupied == 0:
+            self.state.update_feature(
+                "ChargerFeature",
+                p_kw=0.0,
+                step_energy_delivered_kwh=0.0,
+                session_price=0.0,
+                elapsed_charging_time=0.0
+            )
+
+        self._last_occupied = current_occupied
+
+    # 必须重写此 handler 以确保 apply_action 修改的状态能立即同步给 Proxy
     @Agent.handler("action_effect")
     def action_effect_handler(self, event: Event, scheduler: EventScheduler) -> None:
         from heron.agents.proxy_agent import PROXY_AGENT_ID, MSG_SET_STATE, STATE_TYPE_LOCAL
-        
+
         self.apply_action()
+
         scheduler.schedule_message_delivery(
             sender_id=self.agent_id,
             recipient_id=PROXY_AGENT_ID,
-            message={MSG_SET_STATE: STATE_TYPE_LOCAL, "body": self.state.to_dict(include_metadata=True)},
+            message={
+                MSG_SET_STATE: STATE_TYPE_LOCAL,
+                "body": self.state.to_dict(include_metadata=True)
+            },
         )
 
     def compute_local_reward(self, local_state: dict) -> float:
-        """Charger agents do not receive economic reward."""
         return 0.0
 
     def get_local_info(self, local_state: dict) -> dict:
         info = super().get_local_info(local_state)
-        charger_vec = local_state.get("ChargerFeature")
-        if isinstance(charger_vec, np.ndarray) and len(charger_vec) >= 4:
-            p_norm, occupied_or_not, p_max_kw, energy_delivered = [float(x) for x in charger_vec[:4]]
-            feature = self.state.features.get("ChargerFeature")
+        feature = self.state.features.get("ChargerFeature")
+        if feature:
             info.update({
-                "open_or_occupied": int(occupied_or_not),
-                "p_kw": p_norm * p_max_kw,
-                "p_max_kw": p_max_kw,
-                "step_energy_delivered_kwh": energy_delivered,
-            })
-        else:
-            feature = self.state.features.get("ChargerFeature")
-            if feature is not None:
-                info.update({
-                    "step_energy_delivered_kwh": float(feature.step_energy_delivered_kwh),
-                    "open_or_occupied": int(feature.occupied_or_not),
-                    "p_kw": float(feature.p_kw),
-                    "p_max_kw": float(feature.p_max_kw),
-                })
-        return info
-
-    def get_info(self, proxy) -> dict:
-        global_state = proxy.get_global_states(self.agent_id, self.protocol, for_simulation=True)
-        state_dict = global_state.get(self.agent_id, {})
-        features = state_dict.get("features", {}) if isinstance(state_dict, dict) else {}
-        feature = features.get("ChargerFeature", {}) if isinstance(features, dict) else {}
-
-        info = self.get_local_info({})
-        if isinstance(feature, dict):
-            info.update({
-                "step_energy_delivered_kwh": float(feature.get("step_energy_delivered_kwh", 0.0)),
-                "p_kw": float(feature.get("p_kw", info.get("p_kw", 0.0))),
-                "p_max_kw": float(feature.get("p_max_kw", info.get("p_max_kw", 150.0))),
-                "open_or_occupied": int(feature.get("occupied_or_not", info.get("open_or_occupied", 0))),
+                "p_kw": float(feature.p_kw),
+                "occupied_or_not": int(feature.occupied_or_not),
+                "step_energy_delivered_kwh": float(feature.step_energy_delivered_kwh),
+                "session_price": float(feature.session_price),
+                "elapsed_charging_time": float(feature.elapsed_charging_time)
             })
         return info
+

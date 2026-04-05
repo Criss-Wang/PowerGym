@@ -17,7 +17,8 @@ class EV:
     Class for EV user
     """
 
-    def __init__(self, time_arrival,
+    def __init__(self,
+                 time_arrival,
                  u_tol=0):
         # some const parameters
         self.battery_capacity = random.choice(BATTERY_CAPACITY_LIST)     # battery capacity, unit: kWh, (E_i)
@@ -254,7 +255,6 @@ if __name__ == "__main__":
             print(f"x = {x} kWh, U = {util:.5f}")
 
         print("")
-        # 求最佳充电量以及对应效用
         x_opt, util_opt = ev.get_optimal_demand(price, parking_fee, charging_power)
         print(f"x_opt = {x_opt} kWh, U_opt = {util_opt:.5f}")
 
